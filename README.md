@@ -3,7 +3,7 @@ An example of how to build G and L FST for K2.
 
 Most scripts of this example are copied from Kaldi.
 
-## Results
+## Run scripts
 ```bash
 $ ./run.sh
 
@@ -22,7 +22,7 @@ L.fst.txt               oov.int                 phones                  words.tx
 L_disambig.fst.txt      oov.txt                 phones.txt
 ```
 
-# Load L fst into K2
+## Load L fst into K2
 ```python
 import k2, _k2
 
