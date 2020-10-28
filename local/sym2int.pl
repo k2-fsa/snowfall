@@ -85,9 +85,6 @@ while (<>) {
             }
           }
           $i = $map_oov;
-        } else {
-          $pos = $n+1;
-          die "sym2int.pl: undefined symbol $a (in position $pos)\n";
         }
       }
       $a = $i;

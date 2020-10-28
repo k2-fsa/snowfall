@@ -68,6 +68,6 @@ for f in 3-gram.pruned.1e-7.arpa.gz librispeech-vocab.txt librispeech-lexicon.tx
 done
 
 cd $dst_dir
-ln -sf 3-gram.pruned.1e-7.arpa.gz lm_tgmed.arpa.gz
+gunzip -c 3-gram.pruned.1e-7.arpa.gz > lm_tgmed.arpa
 
 exit 0
