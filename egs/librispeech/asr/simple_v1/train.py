@@ -27,7 +27,6 @@ from common import save_training_info
 from common import setup_logger
 from wav2letter import Wav2Letter
 
-
 def create_decoding_graph(texts, graph, symbols):
     fsas = []
     for text in texts:
@@ -172,7 +171,7 @@ def main():
     feature_dir = 'exp/data1'
     cuts_train = CutSet.from_json(feature_dir +
                                   '/cuts_train-clean-100.json.gz')
-   
+
     cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
 
     train = K2SpeechRecognitionIterableDataset(cuts_train, shuffle=True)

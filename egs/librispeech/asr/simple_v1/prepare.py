@@ -10,9 +10,11 @@ from lhotse import CutSet, Fbank, Mfcc, LilcomFilesWriter, WavAugmenter
 from lhotse.dataset import SpeechRecognitionDataset
 from lhotse.recipes.librispeech import download_and_untar, prepare_librispeech, dataset_parts_full
 
-print(dataset_parts_full)
+print("All dataset parts: ", dataset_parts_full)
 
 dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
+
+print("Parts we will prepare: ", dataset_parts)
 
 corpus_dir = '/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech'
 output_dir = 'exp/data1'
@@ -55,4 +57,4 @@ cuts_test = SpeechRecognitionDataset(
 sample = cuts_train[0]
 print('Transcript:', sample['text'])
 print('Supervisions mask:', sample['supervisions_mask'])
-print('Feature matrix:')
+print('Feature matrix:', sample.load_features())

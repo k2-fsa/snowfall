@@ -7,7 +7,7 @@
 
 set -e
 
-stage=1
+stage=5
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.magicdatatech.com/resources/11" data/local/lm
@@ -31,4 +31,12 @@ if [ $stage -le 4 ]; then
 
   echo "To load G:"
   echo "    Gfsa = k2.Fsa.from_openfst(<string of data/lang_nosp/G.fsa.txt>, acceptor=True)"
+fi
+
+if [ $stage -le 5 ]; then
+  python3 ./prepare.py
+fi
+
+if [ $stage -le 6 ]; then
+  python3 ./train_fast.py
 fi

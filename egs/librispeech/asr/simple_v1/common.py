@@ -3,6 +3,7 @@
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
 
+import os
 from datetime import datetime
 import logging
 import numpy as np
@@ -13,6 +14,7 @@ def setup_logger(log_filename, log_level='info'):
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
+    os.makedirs(os.path.dirname(log_filename), exist_ok=True)
     formatter = '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
     if log_level == 'debug':
         level = logging.DEBUG
