@@ -162,20 +162,21 @@ def train_one_epoch(dataloader, valid_dataloader, model, device, graph,
 def main():
     # load L, G, symbol_table
     lang_dir = 'data/lang_nosp'
+    print("Loading L.fst.txt")
     with open(lang_dir + '/L.fst.txt') as f:
         L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-
+    print("Loading G.fsa.txt")
     with open(lang_dir + '/G.fsa.txt') as f:
         G = k2.Fsa.from_openfst(f.read(), acceptor=True)
-
     with open(lang_dir + '/words.txt') as f:
         symbol_table = k2.SymbolTable.from_str(f.read())
 
-    print("start")
+    print("Arc-sorting L...")
     L = k2.arc_sort(L.invert_())
     G = k2.arc_sort(G)
     print(k2.is_arc_sorted(k2.get_properties(L)))
     print(k2.is_arc_sorted(k2.get_properties(G)))
+    print("Intersecting L and G")
     graph = k2.intersect(L, G)
     graph = k2.arc_sort(graph)
     print(k2.is_arc_sorted(k2.get_properties(graph)))
@@ -206,8 +207,8 @@ def main():
                                            batch_size=None,
                                            num_workers=1)
 
-    dir = 'exp'
-    setup_logger('{}/log/log-train'.format(dir))
+    exp_dir = 'exp'
+    setup_logger('{}/log/log-train'.format(exp_dir))
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
@@ -223,8 +224,8 @@ def main():
     num_epochs = 10
     best_objf = 100000
     best_epoch = start_epoch
-    best_model_path = os.path.join(dir, 'best_model.pt')
-    best_epoch_info_filename = os.path.join(dir, 'best-epoch-info')
+    best_model_path = os.path.join(exp_dir, 'best_model.pt')
+    best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
     optimizer = optim.Adam(model.parameters(),
                            lr=learning_rate,
@@ -264,13 +265,13 @@ def main():
                                best_epoch=best_epoch)
 
         # we always save the model for every epoch
-        model_path = os.path.join(dir, 'epoch-{}.pt'.format(epoch))
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf)
-        epoch_info_filename = os.path.join(dir, 'epoch-{}-info'.format(epoch))
+        epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
                            current_epoch=epoch,
