@@ -162,24 +162,31 @@ def train_one_epoch(dataloader, valid_dataloader, model, device, graph,
 def main():
     # load L, G, symbol_table
     lang_dir = 'data/lang_nosp'
-    print("Loading L.fst.txt")
-    with open(lang_dir + '/L.fst.txt') as f:
-        L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-    print("Loading G.fsa.txt")
-    with open(lang_dir + '/G.fsa.txt') as f:
-        G = k2.Fsa.from_openfst(f.read(), acceptor=True)
     with open(lang_dir + '/words.txt') as f:
         symbol_table = k2.SymbolTable.from_str(f.read())
 
-    print("Arc-sorting L...")
-    L = k2.arc_sort(L.invert_())
-    G = k2.arc_sort(G)
-    print(k2.is_arc_sorted(k2.get_properties(L)))
-    print(k2.is_arc_sorted(k2.get_properties(G)))
-    print("Intersecting L and G")
-    graph = k2.intersect(L, G)
-    graph = k2.arc_sort(graph)
-    print(k2.is_arc_sorted(k2.get_properties(graph)))
+    if not os.path.exists(lang_dir + '/LG.pt'):
+        print("Loading L.fst.txt")
+        with open(lang_dir + '/L.fst.txt') as f:
+            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
+        print("Loading G.fsa.txt")
+        with open(lang_dir + '/G.fsa.txt') as f:
+            G = k2.Fsa.from_openfst(f.read(), acceptor=True)
+        print("Arc-sorting L...")
+        L = k2.arc_sort(L.invert_())
+        G = k2.arc_sort(G)
+        print(k2.is_arc_sorted(k2.get_properties(L)))
+        print(k2.is_arc_sorted(k2.get_properties(G)))
+        print("Intersecting L and G")
+        graph = k2.intersect(L, G)
+        graph = k2.arc_sort(graph)
+        print(k2.is_arc_sorted(k2.get_properties(graph)))
+        torch.save(graph.as_dict(), lang_dir + '/LG.pt')
+    else:
+        d = torch.load(lang_dir + '/LG.pt')
+        print("Loading pre-prepared LG")
+        graph = k2.Fsa.from_dict(d)
+
 
     # load dataset
     feature_dir = 'exp/data1'
