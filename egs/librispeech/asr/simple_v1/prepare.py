@@ -44,7 +44,7 @@ for partition, manifests in librispeech_manifests.items():
             supervisions=manifests['supervisions']).compute_and_store_features(
                 extractor=Fbank(),
                 storage=storage,
-                augmenter=augmenter if 'train' in partition else None,
+                augment_fn=augmenter if 'train' in partition else None,
                 executor=ex)
     librispeech_manifests[partition]['cuts'] = cut_set
     cut_set.to_json(output_dir + f'/cuts_{partition}.json.gz')
