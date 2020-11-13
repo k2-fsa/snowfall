@@ -1,6 +1,9 @@
 from torch import Tensor
 from torch import nn
 
+# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+# Apache 2.0
+
 
 class Model(nn.Module):
     """
