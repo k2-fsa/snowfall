@@ -3,7 +3,6 @@
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
 # Apache 2.0
 
-import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -41,7 +40,7 @@ else:
 for partition, manifests in librispeech_manifests.items():
     print(partition)
     with LilcomFilesWriter(f'{output_dir}/feats_{partition}') as storage, \
-        ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn")) as ex:
+        ProcessPoolExecutor(num_jobs) as ex:
         cut_set = CutSet.from_manifests(
             recordings=manifests['recordings'],
             supervisions=manifests['supervisions']).compute_and_store_features(
