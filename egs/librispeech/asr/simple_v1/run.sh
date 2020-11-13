@@ -38,5 +38,5 @@ if [ $stage -le 5 ]; then
 fi
 
 if [ $stage -le 6 ]; then
-  python3 ./train_fast.py
+  python3 ./train.py
 fi

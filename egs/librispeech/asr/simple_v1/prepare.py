@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+# Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
+# Apache 2.0
+
 import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -17,7 +20,7 @@ dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
 print("Parts we will prepare: ", dataset_parts)
 
 corpus_dir = '/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech'
-output_dir = 'exp/data1'
+output_dir = 'exp/data'
 librispeech_manifests = prepare_librispeech(corpus_dir, dataset_parts,
                                             output_dir)
 
@@ -34,7 +37,6 @@ else:
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
 
-num_jobs = 1
 for partition, manifests in librispeech_manifests.items():
     print(partition)
     with LilcomFilesWriter(f'{output_dir}/feats_{partition}'
@@ -44,17 +46,7 @@ for partition, manifests in librispeech_manifests.items():
             supervisions=manifests['supervisions']).compute_and_store_features(
                 extractor=Fbank(),
                 storage=storage,
-                augmenter=augmenter if 'train' in partition else None,
+                augment_fn=augmenter if 'train' in partition else None,
                 executor=ex)
     librispeech_manifests[partition]['cuts'] = cut_set
     cut_set.to_json(output_dir + f'/cuts_{partition}.json.gz')
-
-cuts_train = SpeechRecognitionDataset(
-    librispeech_manifests['train-clean-100']['cuts'])
-cuts_test = SpeechRecognitionDataset(
-    librispeech_manifests['test-clean']['cuts'])
-
-sample = cuts_train[0]
-print('Transcript:', sample['text'])
-print('Supervisions mask:', sample['supervisions_mask'])
-print('Feature matrix:', sample.load_features())
