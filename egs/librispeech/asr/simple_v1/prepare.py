@@ -6,13 +6,10 @@
 import multiprocessing
 import os
 from concurrent.futures import ProcessPoolExecutor
-from pathlib import Path
 
 import torch
-
-from lhotse import CutSet, Fbank, Mfcc, LilcomFilesWriter, WavAugmenter
-from lhotse.dataset import SpeechRecognitionDataset
-from lhotse.recipes.librispeech import download_and_untar, prepare_librispeech, dataset_parts_full
+from lhotse import CutSet, Fbank, LilcomFilesWriter, WavAugmenter
+from lhotse.recipes.librispeech import dataset_parts_full, prepare_librispeech
 
 print("All dataset parts: ", dataset_parts_full)
 
@@ -41,13 +38,21 @@ else:
 for partition, manifests in librispeech_manifests.items():
     print(partition)
     with LilcomFilesWriter(f'{output_dir}/feats_{partition}') as storage, \
-        ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn")) as ex:
+            ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn")) as ex:
         cut_set = CutSet.from_manifests(
             recordings=manifests['recordings'],
-            supervisions=manifests['supervisions']).compute_and_store_features(
+            supervisions=manifests['supervisions'])
+        cut_set = cut_set.compute_and_store_features(
+            extractor=Fbank(),
+            storage=storage,
+            executor=ex)
+        if 'train' in partition:
+            # Duplicate the training set with an augmented version
+            augmented_cs = cut_set.compute_and_store_features(
                 extractor=Fbank(),
                 storage=storage,
-                augment_fn=augmenter if 'train' in partition else None,
+                augment_fn=augmenter,
                 executor=ex)
+            cut_set = cut_set + CutSet.from_cuts(c.with_id(c.id + '_aug') for c in augmented_cs)
     librispeech_manifests[partition]['cuts'] = cut_set
     cut_set.to_json(output_dir + f'/cuts_{partition}.json.gz')
