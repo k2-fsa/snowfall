@@ -3,6 +3,7 @@
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
 
+import gc
 import logging
 import os
 import sys
@@ -80,6 +81,7 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     target_graph = k2.intersect_dense_pruned(decoding_graph, dense_fsa_vec,
                                              10000, 10000, 0)
     tot_scores = -k2.get_tot_scores(target_graph, True, False).sum()
+
     if training:
         optimizer.zero_grad()
         tot_scores.backward()
@@ -90,6 +92,7 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     total_objf = objf.item()
     total_frames = nnet_output.shape[0]
 
+    print("CUDA memory allocated is: ", torch.cuda.memory_allocated(0))
     return total_objf, total_frames
 
 
@@ -179,17 +182,20 @@ def main():
     #     print("Loading pre-prepared LG")
     #     graph = k2.Fsa.from_dict(d)
 
-    print("Loading L.fst.txt")
-    with open(lang_dir + '/L.fst.txt') as f:
-        L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-    L = k2.arc_sort(L.invert_())
+    print("Loading L.fst")
+    if os.path.exists(lang_dir + '/Linv.pt'):
+        L = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
+    else:
+        with open(lang_dir + '/L.fst.txt') as f:
+            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
+            L = k2.arc_sort(L.invert_())
+            torch.save(L.as_dict(), lang_dir + '/Linv.pt')
 
     # load dataset
     feature_dir = 'exp/data'
     print("About to get train cuts")
     cuts_train = CutSet.from_json(feature_dir +
                                   '/cuts_train-clean-100.json.gz')
-    #cuts_train = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
     print("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
 
@@ -219,7 +225,7 @@ def main():
     model = Model(num_features=40, num_classes=364)
     model.to(device)
 
-    learning_rate = 0.001
+    learning_rate = 0.0001
     start_epoch = 0
     num_epochs = 10
     best_objf = 100000
@@ -227,11 +233,12 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
-    optimizer = optim.Adam(model.parameters(),
-                           lr=learning_rate,
-                           weight_decay=5e-4)
-    # optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
+    #optimizer = optim.Adam(model.parameters(),
+    #                           lr=learning_rate,
+    #                           weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
 
+    print("start-epoch,num_epochs=", start_epoch, num_epochs)
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
         for param_group in optimizer.param_groups:
@@ -248,7 +255,9 @@ def main():
                                optimizer=optimizer,
                                current_epoch=epoch,
                                num_epochs=num_epochs)
+        print("HERE")
         if objf < best_objf:
+            print("HERE2")
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
@@ -264,6 +273,7 @@ def main():
                                best_objf=best_objf,
                                best_epoch=best_epoch)
 
+        print("HERE3")
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
