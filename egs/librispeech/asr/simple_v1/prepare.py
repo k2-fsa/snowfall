@@ -12,6 +12,15 @@ from lhotse import CutSet, Fbank, LilcomFilesWriter, WavAugmenter, RecordingSet,
 from lhotse.recipes.librispeech import dataset_parts_full, prepare_librispeech
 
 
+# Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
+# slow things down.  Do this outside of main() because it needs to take effect
+# even when we are not invoking the main (notice: "spawn" is the method used
+# in multiprocessing, which is to get around some problems with torchaudio's invocation of
+# sox).
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+
 def main():
   print("All dataset parts: ", dataset_parts_full)
 
@@ -38,6 +47,7 @@ def main():
   augmenter = WavAugmenter.create_predefined(
       'pitch_reverb_tdrop',
       sampling_rate=16000) if use_data_augmentation else None
+
 
   num_jobs = min(15, os.cpu_count())
 
@@ -67,14 +77,6 @@ def main():
       librispeech_manifests[partition]['cuts'] = cut_set
       cut_set.to_json(output_dir + f'/cuts_{partition}.json.gz')
 
-
-# Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
-# slow things down.  Do this outside of main() because it needs to take effect
-# even when we are not invoking the main (notice: "spawn" is the method used
-# in multiprocessing, which is to get around some problems with torchaudio's invocation of
-# sox).
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
 
 if __name__ == '__main__':
     main()
