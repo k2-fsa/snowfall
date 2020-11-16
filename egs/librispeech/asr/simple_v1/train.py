@@ -3,7 +3,6 @@
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
 
-import gc
 import logging
 import os
 import sys
@@ -92,7 +91,6 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     total_objf = objf.item()
     total_frames = nnet_output.shape[0]
 
-    print("CUDA memory allocated is: ", torch.cuda.memory_allocated(0))
     return total_objf, total_frames
 
 
@@ -233,12 +231,14 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
-    #optimizer = optim.Adam(model.parameters(),
-    #                           lr=learning_rate,
-    #                           weight_decay=5e-4)
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(),
+                           lr=learning_rate,
+                           weight_decay=5e-4)
+    #optimizer = optim.SGD(model.parameters(),
+    #                      lr=learning_rate,
+    #                      momentum=0.9,
+    #                      weight_decay=5e-4)
 
-    print("start-epoch,num_epochs=", start_epoch, num_epochs)
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
         for param_group in optimizer.param_groups:
@@ -255,9 +255,7 @@ def main():
                                optimizer=optimizer,
                                current_epoch=epoch,
                                num_epochs=num_epochs)
-        print("HERE")
         if objf < best_objf:
-            print("HERE2")
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
@@ -273,7 +271,6 @@ def main():
                                best_objf=best_objf,
                                best_epoch=best_epoch)
 
-        print("HERE3")
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
