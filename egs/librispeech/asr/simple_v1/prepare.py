@@ -12,6 +12,10 @@ from lhotse import CutSet, Fbank, LilcomFilesWriter, WavAugmenter
 from lhotse.recipes.librispeech import dataset_parts_full, prepare_librispeech
 
 
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
+
 def main():
   print("All dataset parts: ", dataset_parts_full)
 
@@ -34,8 +38,6 @@ def main():
       num_jobs = 1
   else:
       num_jobs = os.cpu_count()
-      torch.set_num_threads(1)
-      torch.set_num_interop_threads(1)
 
   for partition, manifests in librispeech_manifests.items():
       print(partition)
