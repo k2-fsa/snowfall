@@ -120,7 +120,7 @@ def train_one_epoch(dataloader, valid_dataloader, model, device, L, symbols,
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
 
-        if batch_idx % 1 == 0:
+        if batch_idx % 100 == 0:
             logging.info(
                 'processing batch {}, current epoch is {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -219,9 +219,9 @@ def main():
     model = Model(num_features=40, num_classes=364)
     model.to(device)
 
-    learning_rate = 0.001
+    learning_rate = 0.0001
     start_epoch = 0
-    num_epochs = 10
+    num_epochs = 3
     best_objf = 100000
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
