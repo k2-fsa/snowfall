@@ -80,6 +80,7 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     target_graph = k2.intersect_dense_pruned(decoding_graph, dense_fsa_vec,
                                              10000, 10000, 0)
     tot_scores = -k2.get_tot_scores(target_graph, True, False).sum()
+
     if training:
         optimizer.zero_grad()
         tot_scores.backward()
@@ -179,17 +180,20 @@ def main():
     #     print("Loading pre-prepared LG")
     #     graph = k2.Fsa.from_dict(d)
 
-    print("Loading L.fst.txt")
-    with open(lang_dir + '/L.fst.txt') as f:
-        L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-    L = k2.arc_sort(L.invert_())
+    print("Loading L.fst")
+    if os.path.exists(lang_dir + '/Linv.pt'):
+        L = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
+    else:
+        with open(lang_dir + '/L.fst.txt') as f:
+            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
+            L = k2.arc_sort(L.invert_())
+            torch.save(L.as_dict(), lang_dir + '/Linv.pt')
 
     # load dataset
     feature_dir = 'exp/data'
     print("About to get train cuts")
     cuts_train = CutSet.from_json(feature_dir +
                                   '/cuts_train-clean-100.json.gz')
-    #cuts_train = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
     print("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
 
@@ -230,7 +234,10 @@ def main():
     optimizer = optim.Adam(model.parameters(),
                            lr=learning_rate,
                            weight_decay=5e-4)
-    # optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
+    #optimizer = optim.SGD(model.parameters(),
+    #                      lr=learning_rate,
+    #                      momentum=0.9,
+    #                      weight_decay=5e-4)
 
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
