@@ -54,7 +54,7 @@ class Model(nn.Module):
             nn.Conv1d(in_channels=250,
                       out_channels=250,
                       kernel_size=3,
-                      stride=1,
+                      stride=3,   #   <---- stride=3: subsampling!
                       padding=1), nn.ReLU(inplace=True),
             nn.BatchNorm1d(num_features=250, affine=False),
             nn.Conv1d(in_channels=250,

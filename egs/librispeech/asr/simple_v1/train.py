@@ -9,6 +9,7 @@ import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+import math
 
 import numpy as np
 import torch
@@ -44,13 +45,37 @@ def create_decoding_graph(texts, L, symbols):
     decoding_graph = k2.add_epsilon_self_loops(decoding_graph)
     return decoding_graph
 
+def get_tot_objf_and_num_frames(tot_scores, frames_per_seq):
+    ''' Figures out the total score(log-prob) over all successful supervision segments
+    (i.e. those for which the total score wasn't -infinity), and the corresponding
+    number of frames of neural net output
+         Args:
+            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
+                       from forward-backward
+        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
+                       frames for each segment
+        Returns:
+             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
+        where ok_frames is the frames for successful (finite) segments, and
+       all_frames is the frames for all segments (finite or not).
+    '''
+    mask = torch.ne(tot_scores, -math.inf)
+    # finite_indexes is a tensor containing successful segment indexes, e.g.
+    # [ 0 1 3 4 5 ]
+    finite_indexes = torch.nonzero(mask).squeeze(1)
+    #print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
+    ok_frames = frames_per_seq[finite_indexes].sum()
+    all_frames = frames_per_seq.sum()
+    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
-def get_objf(batch, model, device, L, symbols, training, optimizer=None):
+
+def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=None):
     feature = batch['features']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
-        (supervisions['sequence_idx'], supervisions['start_frame'],
-         supervisions['num_frames']), 1).to(torch.int32)
+        (supervisions['sequence_idx'],
+         torch.floor_divide(supervisions['start_frame'], subsampling),
+         torch.floor_divide(supervisions['num_frames'], subsampling)), 1).to(torch.int32)
     texts = supervisions['text']
     assert feature.ndim == 3
     # print(supervision_segments[:, 1] + supervision_segments[:, 2])
@@ -68,8 +93,7 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     # TODO(haowen): create decoding graph (and cache) at the beginning of training
-    decoding_graph = create_decoding_graph(texts, L, symbols)
-    decoding_graph.to_(device)
+    decoding_graph = create_decoding_graph(texts, L, symbols).to(device)
     decoding_graph.scores.requires_grad_(False)
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert decoding_graph.is_cuda()
@@ -78,75 +102,85 @@ def get_objf(batch, model, device, L, symbols, training, optimizer=None):
     # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
     target_graph = k2.intersect_dense_pruned(decoding_graph, dense_fsa_vec,
-                                             10000, 10000, 0)
-    tot_scores = -k2.get_tot_scores(target_graph, True, False).sum()
+                                             2000.0, 1000, 0)
+    tot_scores = k2.get_tot_scores(target_graph, True, False)
+
+    (tot_score, tot_frames, all_frames) = get_tot_objf_and_num_frames(tot_scores,
+                                                          supervision_segments[:, 2])
 
     if training:
         optimizer.zero_grad()
-        tot_scores.backward()
+        (-tot_score).backward()
         clip_grad_value_(model.parameters(), 5.0)
         optimizer.step()
 
-    objf = tot_scores.detach().cpu()
-    total_objf = objf.item()
-    total_frames = nnet_output.shape[0]
-
-    return total_objf, total_frames
+    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
+    return  ans
 
 
-def get_validation_objf(dataloader, model, device, L, symbols):
+def get_validation_objf(dataloader, model, subsampling, device, L, symbols):
     total_objf = 0.
     total_frames = 0.  # for display only
+    total_all_frames = 0.  # all frames including those seqs that failed.
 
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames = get_objf(batch, model, device, L, symbols, False)
+        objf, frames, all_frames = get_objf(batch, model, subsampling,
+                                            device, L, symbols, False)
         total_objf += objf
         total_frames += frames
+        total_all_frames += all_frames
 
-    return total_objf, total_frames
+    return total_objf, total_frames, total_all_frames
 
 
-def train_one_epoch(dataloader, valid_dataloader, model, device, L, symbols,
+def train_one_epoch(dataloader, valid_dataloader, model,
+                    subsampling, device, L, symbols,
                     optimizer, current_epoch, num_epochs):
-    total_objf = 0.
-    total_frames = 0.
+    total_objf, total_frames, total_all_frames = 0., 0., 0.
 
     model.train()
     for batch_idx, batch in enumerate(dataloader):
-        curr_batch_objf, curr_batch_frames = get_objf(batch, model, device, L,
-                                                      symbols, True, optimizer)
+        curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
+          get_objf(batch, model, subsampling, device, L, symbols, True, optimizer)
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
+        total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 100 == 0:
+        if batch_idx % 50 == 0:
             logging.info(
                 'processing batch {}, current epoch is {}/{} '
                 'global average objf: {:.6f} over {} '
-                'frames, current batch average objf: {:.6f} over {} frames'.
+                'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept)'.
                 format(
                     batch_idx,
                     current_epoch,
                     num_epochs,
                     total_objf / total_frames,
                     total_frames,
+                    100.0 * total_frames / total_all_frames,
                     curr_batch_objf / curr_batch_frames,
                     curr_batch_frames,
-                ))
+                    100.0 * curr_batch_frames / curr_batch_all_frames))
+            if batch_idx >= 100:
+                print("Exiting early to get profile info")
+                sys.exit(0)
 
         if batch_idx > 0 and batch_idx % 1000 == 0:
-            total_valid_objf, total_valid_frames = get_validation_objf(
+            total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                subsampling=subsampling,
                 device=device,
                 L=L,
                 symbols=symbols)
             model.train()
             logging.info(
-                'Validation average objf: {:.6f} over {} frames'.format(
-                    total_valid_objf / total_valid_frames, total_valid_frames))
+                'Validation average objf: {:.6f} over {} frames ({.1f}% kept)'.format(
+                    total_valid_objf / total_valid_frames, total_valid_frames,
+                    100.0 * total_valid_frames / total_valid_all_frames))
     return total_objf
 
 
@@ -198,9 +232,9 @@ def main():
     cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
 
     print("About to create train dataset")
-    train = K2SpeechRecognitionIterableDataset(cuts_train, shuffle=True)
+    train = K2SpeechRecognitionIterableDataset(cuts_train, max_frames=100000, shuffle=True)
     print("About to create dev dataset")
-    validate = K2SpeechRecognitionIterableDataset(cuts_dev, shuffle=False)
+    validate = K2SpeechRecognitionIterableDataset(cuts_dev, max_frames=100000, shuffle=False)
     print("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
@@ -223,7 +257,7 @@ def main():
     model = Model(num_features=40, num_classes=364)
     model.to(device)
 
-    learning_rate = 0.0001
+    learning_rate = 0.00005
     start_epoch = 0
     num_epochs = 3
     best_objf = 100000
@@ -231,13 +265,14 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
-    optimizer = optim.Adam(model.parameters(),
-                           lr=learning_rate,
-                           weight_decay=5e-4)
-    #optimizer = optim.SGD(model.parameters(),
-    #                      lr=learning_rate,
-    #                      momentum=0.9,
-    #                      weight_decay=5e-4)
+    #optimizer = optim.Adam(model.parameters(),
+    #                       lr=learning_rate,
+    #                       weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(),
+                          lr=learning_rate,
+                          momentum=0.9,
+                          weight_decay=5e-4)
+    subsampling = 3 # must be kept in sync with model.
 
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
@@ -249,6 +284,7 @@ def main():
         objf = train_one_epoch(dataloader=train_dl,
                                valid_dataloader=valid_dl,
                                model=model,
+                               subsampling=subsampling,
                                device=device,
                                L=L,
                                symbols=symbol_table,
@@ -290,6 +326,8 @@ def main():
 
     logging.warning('Done')
 
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 
 if __name__ == '__main__':
     main()
