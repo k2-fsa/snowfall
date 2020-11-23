@@ -149,7 +149,7 @@ def train_one_epoch(dataloader, valid_dataloader, model,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0:
+        if batch_idx % 50 == 0:
             logging.info(
                 'processing batch {}, current epoch is {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -164,7 +164,7 @@ def train_one_epoch(dataloader, valid_dataloader, model,
                     curr_batch_objf / curr_batch_frames,
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames))
-            if batch_idx >= 30:
+            if batch_idx >= 100:
                 print("Exiting early to get profile info")
                 sys.exit(0)
 
@@ -272,7 +272,7 @@ def main():
                           lr=learning_rate,
                           momentum=0.9,
                           weight_decay=5e-4)
-    subsampling=3 # must be kept in sync with model.
+    subsampling = 3 # must be kept in sync with model.
 
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
