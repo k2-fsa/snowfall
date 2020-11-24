@@ -63,6 +63,12 @@ def get_tot_objf_and_num_frames(tot_scores, frames_per_seq):
     # finite_indexes is a tensor containing successful segment indexes, e.g.
     # [ 0 1 3 4 5 ]
     finite_indexes = torch.nonzero(mask).squeeze(1)
+    if False:
+        bad_indexes =  torch.nonzero(~mask).squeeze(1)
+        if bad_indexes.shape[0] > 0:
+            print("Bad indexes: ", bad_indexes, ", bad lengths: ", frames_per_seq[bad_indexes],
+                  " vs. max length ", torch.max(frames_per_seq), ", avg ",
+                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
     #print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
     all_frames = frames_per_seq.sum()
@@ -103,7 +109,7 @@ def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=
     # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
     target_graph = k2.intersect_dense_pruned(decoding_graph, dense_fsa_vec,
-                                             2000.0, 1000, 30)
+                                             2000.0, 20.0, 30, 300)
     tot_scores = k2.get_tot_scores(target_graph, True, False)
 
     (tot_score, tot_frames, all_frames) = get_tot_objf_and_num_frames(tot_scores,
@@ -150,7 +156,7 @@ def train_one_epoch(dataloader, valid_dataloader, model,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 50 == 0:
+        if batch_idx % 10 == 0:
             logging.info(
                 'processing batch {}, current epoch is {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -165,9 +171,9 @@ def train_one_epoch(dataloader, valid_dataloader, model,
                     curr_batch_objf / (curr_batch_frames+0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames))
-            if batch_idx >= 200:
-                print("Exiting early to get profile info")
-                sys.exit(0)
+            #if batch_idx >= 200:
+            #    print("Exiting early to get profile info")
+            #    sys.exit(0)
 
         if batch_idx > 0 and batch_idx % 200 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
@@ -239,11 +245,11 @@ def main():
     print("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
-                                           num_workers=0)
+                                           num_workers=1)
     print("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,
-                                           num_workers=0)
+                                           num_workers=1)
 
     exp_dir = 'exp'
     setup_logger('{}/log/log-train'.format(exp_dir))
@@ -258,13 +264,19 @@ def main():
     model = Model(num_features=40, num_classes=364)
     model.to(device)
 
-    learning_rate = 0.00005
+    learning_rate = 0.00001
     start_epoch = 0
     num_epochs = 10
     best_objf = 100000
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
+
+
+    if False:
+        filename = 'exp/epoch-0.pt'
+        (_, _, objf) = load_checkpoint(filename,
+                                       model)
 
     #optimizer = optim.Adam(model.parameters(),
     #                       lr=learning_rate,
@@ -274,6 +286,7 @@ def main():
                           momentum=0.9,
                           weight_decay=5e-4)
     subsampling = 3 # must be kept in sync with model.
+
 
     for epoch in range(start_epoch, num_epochs):
         curr_learning_rate = learning_rate * pow(0.4, epoch)
