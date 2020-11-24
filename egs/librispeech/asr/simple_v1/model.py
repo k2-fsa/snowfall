@@ -79,7 +79,7 @@ class Model(nn.Module):
                       out_channels=num_classes,
                       kernel_size=1,
                       stride=1,
-                      padding=0), nn.ReLU(inplace=True))
+                      padding=0))
 
     def forward(self, x: Tensor) -> Tensor:
         r"""
