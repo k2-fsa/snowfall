@@ -40,3 +40,7 @@ fi
 if [ $stage -le 6 ]; then
   python3 ./train.py
 fi
+
+if [ $stage -le 7 ]; then
+  python3 ./decode.py
+fi
