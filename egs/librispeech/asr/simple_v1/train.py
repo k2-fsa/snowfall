@@ -83,6 +83,9 @@ def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=
         (supervisions['sequence_idx'],
          torch.floor_divide(supervisions['start_frame'], subsampling),
          torch.floor_divide(supervisions['num_frames'], subsampling)), 1).to(torch.int32)
+    _,indices = torch.sort(-supervision_segments[:,2])
+    supervision_segments = supervision_segments[indices,:]
+
     texts = supervisions['text']
     assert feature.ndim == 3
     # print(supervision_segments[:, 1] + supervision_segments[:, 2])
@@ -99,17 +102,23 @@ def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
+
     # TODO(haowen): create decoding graph (and cache) at the beginning of training
     decoding_graph = create_decoding_graph(texts, L, symbols).to(device)
     decoding_graph.scores.requires_grad_(False)
+
+    #nnet_output2 = nnet_output.clone()
+    #blank_bias = -7.0
+    #nnet_output2[:,:,0] += blank_bias
+
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert decoding_graph.is_cuda()
     assert decoding_graph.device == device
     assert nnet_output.device == device
     # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-    target_graph = k2.intersect_dense_pruned(decoding_graph, dense_fsa_vec,
-                                             2000.0, 20.0, 30, 300)
+    target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
+
     tot_scores = k2.get_tot_scores(target_graph, True, False)
 
     (tot_score, tot_frames, all_frames) = get_tot_objf_and_num_frames(tot_scores,
@@ -171,7 +180,7 @@ def train_one_epoch(dataloader, valid_dataloader, model,
                     curr_batch_objf / (curr_batch_frames+0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames))
-            #if batch_idx >= 200:
+            #if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
