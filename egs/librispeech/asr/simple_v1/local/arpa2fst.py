@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-# Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang)
+# Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang, Haowen Qiu)
 # Apache 2.0
-
 """
 arpa2fst.py:
 Similar to Kaldi's `lmbin/arpa2fst.cc`, rewritten in Python.
@@ -31,12 +30,26 @@ from typing import List, NamedTuple
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="""This script is similar to Kaldi's `lmbin/arpa2fst.cc`,
+    parser = argparse.ArgumentParser(
+        description="""This script is similar to Kaldi's `lmbin/arpa2fst.cc`,
                 but was rewritten in Python. The output goes to the stdout.""")
     parser.add_argument('arpa', type=str, help="""The arpa file.""")
-    parser.add_argument('--bos', type=str, default='<s>', help="""The begin symbol.""")
-    parser.add_argument('--eos', type=str, default='</s>', help="""The ending symbol.""")
-    parser.add_argument('--to-natural-log', type=bool, default=True, help="""Convert to natural log.""")
+    parser.add_argument('--bos',
+                        type=str,
+                        default='<s>',
+                        help="""The begin symbol.""")
+    parser.add_argument('--eos',
+                        type=str,
+                        default='</s>',
+                        help="""The ending symbol.""")
+    parser.add_argument('--disambig_symbol',
+                        type=str,
+                        default='#0',
+                        help="""The disambig symbol.""")
+    parser.add_argument('--to-natural-log',
+                        type=bool,
+                        default=True,
+                        help="""Convert to natural log.""")
     args = parser.parse_args()
     return args
 
@@ -51,10 +64,11 @@ class Ngram(NamedTuple):
 def parse_arpa_file(filename, to_natural_log=True):
     ngrams = []
     with open(filename) as f:
-        stage = 0   # stage 0 for header, 1 for unigram, 2 for bigram, ...
+        stage = 0  # stage 0 for header, 1 for unigram, 2 for bigram, ...
         for line in f:
             line = re.sub(r'\s+$', '', line)
-            if re.match(r'^\s*$', line) or re.match(r'\\(data|end)\\', line) or re.match(r'ngram \d+=', line):
+            if re.match(r'^\s*$', line) or re.match(
+                    r'\\(data|end)\\', line) or re.match(r'ngram \d+=', line):
                 continue
             elif re.match(r'\\\d+-grams:', line):
                 stage = int(re.match(r'\\(\d+)-grams:', line).group(1))
@@ -62,11 +76,16 @@ def parse_arpa_file(filename, to_natural_log=True):
                 assert len(ngrams) == stage
             else:
                 items = re.split(r'\s+', line)
-                assert stage + 1 <= len(items) <= stage + 2, f'Invalid arpa line: {line}'
+                assert stage + 1 <= len(
+                    items) <= stage + 2, f'Invalid arpa line: {line}'
 
-                logprob = float(items[0]) if not to_natural_log else float(items[0]) * 2.30258509299404568402
-                words = items[1:stage+1]
-                backoff = float(items[stage+1]) if len(items) == stage + 2 else None
+                logprob = float(items[0]) if not to_natural_log else float(
+                    items[0]) * 2.30258509299404568402
+                words = items[1:stage + 1]
+                backoff = float(items[stage +
+                                      1]) if len(items) == stage + 2 else 0.0
+                if to_natural_log:
+                    backoff = backoff * 2.30258509299404568402
 
                 if stage == 1:
                     prev_words = []
@@ -76,56 +95,73 @@ def parse_arpa_file(filename, to_natural_log=True):
                     prev_words = words[0:-1]
                     cur_word = words[-1]
 
-                ngrams[stage-1].append(Ngram(logprob=logprob, prev_words=prev_words, cur_word=cur_word, backoff=backoff))
+                ngrams[stage - 1].append(
+                    Ngram(logprob=logprob,
+                          prev_words=prev_words,
+                          cur_word=cur_word,
+                          backoff=backoff))
 
     return ngrams
 
 
-def print_fst_from_ngrams(ngram_lm, bos='<s>', eos='</s>'):
+def create_backoff(key, state, state_id, weight, sub_eps):
+    while key not in state_id:
+        key = ' '.join((key.split(' '))[1:])
+    dest = state_id[key]
+    print(f'{state} {dest} {sub_eps} {weight}')
+
+
+# TODO(haowen): refactor the code (and support case where sub_eps is empty?)
+def print_fst_from_ngrams(ngram_lm, bos='<s>', eos='</s>', sub_eps='#0'):
+    # for now this version only support case that disambig sybmol is not zero
+    assert sub_eps != ''
     highest_order = len(ngram_lm)
-    state_id = {'<root>': 0, eos: 1, bos: 2}
+    state_id = {bos: 0, '': 1, eos: 2}
     state_count = len(state_id)
     for order, ngrams in enumerate(ngram_lm, start=1):
         for logprob, prev_words, cur_word, backoff in ngrams:
             assert len(prev_words) + 1 == order
             prev_words_str = ' '.join(prev_words)
             whole_words_str = ' '.join(prev_words + [cur_word])
-            backoff_words_str = ' '.join((prev_words + [cur_word])[1:]) if order > 1 else '<root>'
-
-            if cur_word == bos and order == 1:
-                print(f'{state_id[bos]} {state_id["<root>"]} <eps> {backoff}')
-            else:
-                start_state_name = prev_words_str if order > 1 else '<root>'
-
-                if cur_word == eos:
-                    end_state_name = eos
-                elif order == highest_order:
-                    end_state_name = backoff_words_str
+            if prev_words_str not in state_id:
+                continue  # no parent (n-1) gram
+            source = state_id[prev_words_str]
+            weight = -logprob
+            assert cur_word != sub_eps
+            if cur_word == eos:
+                if sub_eps == '':
+                    dest = state_id[eos]
                 else:
-                    end_state_name = whole_words_str
-
-                if start_state_name not in state_id:
-                    state_id[start_state_name] = state_count
+                    # treat </s> as if it was epsilon; mark source final
+                    print(f'{source} {weight}')
+                    continue
+            else:
+                key = whole_words_str if order != highest_order else ' '.join(
+                    (prev_words + [cur_word])[1:])
+                if key not in state_id:
+                    state_id[key] = state_count
+                    dest = state_count
                     state_count += 1
-                if end_state_name not in state_id:
-                    state_id[end_state_name] = state_count
-                    state_count += 1
+                    tails = ' '.join((key.split(' '))[1:])
+                    create_backoff(tails, dest, state_id, -backoff, sub_eps)
+                else:
+                    dest = state_id[key]
 
-                print(f'{state_id[start_state_name]} {state_id[end_state_name]} {cur_word} {logprob}')
+            if cur_word == bos:
+                weight = 0
+                if sub_eps != '':
+                    continue
 
-                if backoff is not None:
-                    backoff_state_name = backoff_words_str
-                    if backoff_state_name not in state_id:
-                        state_id[backoff_state_name] = state_count
-                        state_count += 1
-                    print(f'{state_id[end_state_name]} {state_id[backoff_state_name]} <eps> {backoff}')
-    if eos in state_id:
-        print(state_id[eos])
+            print(f'{source} {dest} {cur_word} {weight}')
+
+    if sub_eps == '':
+        print(f'{state_id[eos]} 0')
 
 
 def main():
     args = get_args()
-    print_fst_from_ngrams(parse_arpa_file(args.arpa, args.to_natural_log), args.bos, args.eos)
+    print_fst_from_ngrams(parse_arpa_file(args.arpa, args.to_natural_log),
+                          args.bos, args.eos, args.disambig_symbol)
 
 
 if __name__ == '__main__':
