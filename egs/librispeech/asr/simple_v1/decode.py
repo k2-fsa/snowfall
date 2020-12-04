@@ -78,6 +78,9 @@ def decode(dataloader, model, subsampling, device, LG, symbols):
 
 
 def main():
+    # Caution(haowen): this script can not be run now, there are something
+    # wrong in determinize, we are still debugging the code
+    return
     # load L, G, symbol_table
     lang_dir = 'data/lang_nosp'
     symbol_table = k2.SymbolTable.from_file(lang_dir + '/words.txt')
@@ -100,9 +103,9 @@ def main():
         print("Determinize L*G")
         LG = k2.determinize(LG)
         print(LG.shape)
-        # print("Connect L*G")
-        # LG = k2.connect(LG)
-        # print(LG.shape)
+        print("Connect L*G")
+        LG = k2.connect(LG)
+        print(LG.shape)
         print("Remove disambiguation symbols on L*G")
         LG.labels[LG.labels >= 347] = 0
         LG.aux_labels[LG.aux_labels >= 200004] = 0
