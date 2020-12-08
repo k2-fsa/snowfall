@@ -166,7 +166,7 @@ def train_one_epoch(
 
         if batch_idx % 10 == 0:
             logging.info(
-                'processing batch {}, current epoch is {}/{} '
+                'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
                 'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
                 'avg time waiting for batch {:.3f}s'.
@@ -198,7 +198,7 @@ def train_one_epoch(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'.format(
                     total_valid_objf / total_valid_frames, total_valid_frames,
                     100.0 * total_valid_frames / total_valid_all_frames))
-        prev_timestamp = timestamp
+        prev_timestamp = datetime.now()
     return total_objf
 
 

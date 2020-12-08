@@ -6,38 +6,38 @@
 import logging
 import os
 import sys
-import warnings
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-import math
+from typing import Union
 
-import editdistance
-import numpy as np
-import torch
-import torchaudio
-import torchaudio.models
 import k2
-
-from lhotse import CutSet, Fbank, LilcomFilesWriter, WavAugmenter
-from lhotse.dataset import SpeechRecognitionDataset
-from lhotse.dataset.speech_recognition import K2DataLoader, K2SpeechRecognitionDataset, \
-    K2SpeechRecognitionIterableDataset, concat_cuts
-from lhotse.recipes.librispeech import download_and_untar, prepare_librispeech, dataset_parts_full
+import torch
+from k2 import Fsa, SymbolTable
+from kaldialign import edit_distance
+from lhotse import CutSet
+from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.decoding.graph import compile_LG
+from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 
 
-def decode(dataloader, model, subsampling, device, LG, symbols):
+def decode(
+        dataloader: torch.utils.data.DataLoader,
+        model: AcousticModel,
+        device: Union[str, torch.device],
+        LG: Fsa,
+        symbols: SymbolTable
+):
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
         feature = batch['features']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],
-             torch.floor_divide(supervisions['start_frame'], subsampling),
-             torch.floor_divide(supervisions['num_frames'], subsampling)),
+             torch.floor_divide(supervisions['start_frame'], model.subsampling_factor),
+             torch.floor_divide(supervisions['num_frames'], model.subsampling_factor)),
             1).to(torch.int32)
         texts = supervisions['text']
         assert feature.ndim == 3
@@ -53,13 +53,13 @@ def decode(dataloader, model, subsampling, device, LG, symbols):
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
         assert LG.is_cuda()
-        assert LG.device == device
-        assert nnet_output.device == device
+        assert LG.device == nnet_output.device, \
+            f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 2000.0, 20.0,
                                              30, 300)
-        best_paths = k2.shortest_path(lattices)
+        best_paths = k2.shortest_path(lattices, use_float_scores=True)
         best_paths = best_paths.to('cpu')
         assert best_paths.shape[0] == len(texts)
 
@@ -74,56 +74,35 @@ def decode(dataloader, model, subsampling, device, LG, symbols):
                 batch_idx, len(dataloader),
                 float(batch_idx) / len(dataloader) * 100))
 
-    return result
+    return results
 
 
 def main():
-    # Caution(haowen): this script can not be run now, there are something
-    # wrong in determinize, we are still debugging the code
-    return
-    # load L, G, symbol_table
-    lang_dir = 'data/lang_nosp'
-    symbol_table = k2.SymbolTable.from_file(lang_dir + '/words.txt')
+    exp_dir = Path('exp')
+    setup_logger('{}/log/log-decode'.format(exp_dir))
 
-    if not os.path.exists(lang_dir + '/LG.pt'):
+    # load L, G, symbol_table
+    lang_dir = Path('data/lang_nosp')
+    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
+
+    if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
-        with open(lang_dir + '/L_disambig.fst.txt') as f:
+        with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
         print("Loading G.fsa.txt")
-        with open(lang_dir + '/G.fsa.txt') as f:
+        with open(lang_dir / 'G.fsa.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=True)
-        L = k2.arc_sort(L.invert_())
-        G = k2.arc_sort(G)
-        print("Intersecting L and G")
-        LG = k2.intersect(L, G)
-        print(LG.shape)
-        print("Connect L*G")
-        LG = k2.connect(LG.invert_())
-        print(LG.shape)
-        print("Determinize L*G")
-        LG = k2.determinize(LG)
-        print(LG.shape)
-        print("Connect L*G")
-        LG = k2.connect(LG)
-        print(LG.shape)
-        print("Remove disambiguation symbols on L*G")
-        LG.labels[LG.labels >= 347] = 0
-        LG.aux_labels[LG.aux_labels >= 200004] = 0
-        LG = k2.add_epsilon_self_loops(LG)
-        LG = k2.arc_sort(LG)
-        print((LG.properties & k2.fsa_properties.ARC_SORTED) != 0)
-        torch.save(LG.as_dict(), lang_dir + '/LG.pt')
-        # print(LG)
+        LG = compile_LG(L=L, G=G, labels_disambig_id_start=347, aux_labels_disambig_id_start=200004)
+        torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
-        d = torch.load(lang_dir + '/LG.pt')
-        print("Loading pre-prepared LG")
+        print("Loading pre-compiled LG")
+        d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
 
-    return
     # load dataset
-    feature_dir = 'exp/data'
+    feature_dir = exp_dir / 'data'
     print("About to get test cuts")
-    cuts_test = CutSet.from_json(feature_dir + '/cuts_test-clean.json.gz')
+    cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
@@ -132,16 +111,13 @@ def main():
     print("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
 
-    exp_dir = 'exp'
-    setup_logger('{}/log/log-decode'.format(exp_dir))
-
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
         sys.exit(-1)
 
     print("About to load model")
-    device_id = 1
-    device = torch.device('cuda', device_id)
+    # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
+    device = torch.device('cuda')
     model = Tdnn1a(num_features=40, num_classes=364)
     checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
     load_checkpoint(checkpoint, model)
@@ -149,23 +125,25 @@ def main():
     model.eval()
 
     LG = LG.to(device)
-    LG.scores.requires_grad_(False)
-    subsampling = 3  # must be kept in sync with model.
+    LG.requires_grad_(False)
     results = decode(dataloader=test_dl,
                      model=model,
-                     subsampling=subsampling,
                      device=device,
                      LG=LG,
                      symbols=symbol_table)
     for ref, hyp in results:
         print('ref=', ref, ', hyp=', hyp)
     # compute WER
-    dist = sum(editdistance.eval(ref, hyp) for ref, hyp in results)
+    dists = [edit_distance(r, h) for r, h in results]
+    errors = {
+        key: sum(dist[key] for dist in dists)
+        for key in ['sub', 'ins', 'del', 'total']
+    }
     total_words = sum(len(ref) for ref, _ in results)
-    print('WER on {} sentences is {:.2f}%'.format(
-        len(results),
-        float(dist) / total_words * 100))
-    logging.warning('Done')
+    # Print Kaldi-like message:
+    # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
+    print(f'%WER {errors["total"] / total_words:.2%} '
+          f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]')
 
 
 torch.set_num_threads(1)

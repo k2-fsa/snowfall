@@ -15,7 +15,8 @@ setup(
         'k2',
         'lhotse',
         'torch',
-        'torchaudio'
+        'torchaudio',
+        'kaldialign'
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",

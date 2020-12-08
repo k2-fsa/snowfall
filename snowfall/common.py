@@ -46,8 +46,9 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, floa
 
     keys = ['state_dict', 'epoch', 'learning_rate', 'objf',
             'num_features', 'num_classes', 'subsampling_factor']
-    for k in keys:
-        assert k in checkpoint
+    missing_keys = set(keys) - set(checkpoint.keys())
+    if missing_keys:
+        raise ValueError(f"Missing keys in checkpoint: {missing_keys}")
 
     if not list(model.state_dict().keys())[0].startswith('module.') \
             and list(checkpoint['state_dict'])[0].startswith('module.'):
