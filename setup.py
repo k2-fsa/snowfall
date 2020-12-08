@@ -19,7 +19,6 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Intended Audience :: Science/Research",
         "Operating System :: POSIX :: Linux",
-        "Operating System :: MacOS :: MacOS X",
         "License :: OSI Approved :: Apache Software License",
         "Topic :: Multimedia :: Sound/Audio :: Speech",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
