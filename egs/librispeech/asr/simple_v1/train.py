@@ -10,10 +10,12 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import math
+from typing import Dict, Optional
 
 import numpy as np
 import torch
 import torch.optim as optim
+from torch import nn
 from torch.nn.utils import clip_grad_value_
 import torchaudio
 import torchaudio.models
@@ -25,25 +27,13 @@ from lhotse.dataset.speech_recognition import K2DataLoader, K2SpeechRecognitionD
     K2SpeechRecognitionIterableDataset, concat_cuts
 from lhotse.recipes.librispeech import download_and_untar, prepare_librispeech, dataset_parts_full
 
-from common import load_checkpoint
-from common import save_checkpoint
-from common import save_training_info
-from common import setup_logger
-from model import Model
+from snowfall.common import load_checkpoint
+from snowfall.common import save_checkpoint
+from snowfall.common import save_training_info
+from snowfall.common import setup_logger
+from snowfall.models.tdnn import Tdnn1a
+from snowfall.training.graph import TrainingGraphCompiler
 
-
-def create_decoding_graph(texts, L, symbols):
-    word_ids_list = []
-    for text in texts:
-        filter_text = [
-            i if i in symbols._sym2id else '<UNK>' for i in text.split(' ')
-        ]
-        word_ids = [symbols.get(i) for i in filter_text]
-        word_ids_list.append(word_ids)
-    fsa = k2.linear_fsa(word_ids_list)
-    decoding_graph = k2.intersect(fsa, L).invert_()
-    decoding_graph = k2.add_epsilon_self_loops(decoding_graph)
-    return decoding_graph
 
 def get_tot_objf_and_num_frames(tot_scores, frames_per_seq):
     ''' Figures out the total score(log-prob) over all successful supervision segments
@@ -75,8 +65,15 @@ def get_tot_objf_and_num_frames(tot_scores, frames_per_seq):
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
-
-def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=None):
+def get_objf(
+        batch: Dict,
+        model: nn.Module,
+        subsampling: int,
+        device: str,
+        graph_compiler: TrainingGraphCompiler,
+        training: bool,
+        optimizer: Optional[torch.optim.Optimizer] = None
+):
     feature = batch['features']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
@@ -102,10 +99,7 @@ def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-
-    # TODO(haowen): create decoding graph (and cache) at the beginning of training
-    decoding_graph = create_decoding_graph(texts, L, symbols).to(device)
-    decoding_graph.scores.requires_grad_(False)
+    decoding_graph = graph_compiler.compile(texts).to(device)
 
     #nnet_output2 = nnet_output.clone()
     #blank_bias = -7.0
@@ -134,7 +128,7 @@ def get_objf(batch, model, subsampling, device, L, symbols, training, optimizer=
     return  ans
 
 
-def get_validation_objf(dataloader, model, subsampling, device, L, symbols):
+def get_validation_objf(dataloader, model, subsampling, device, graph_compiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -143,7 +137,7 @@ def get_validation_objf(dataloader, model, subsampling, device, L, symbols):
 
     for batch_idx, batch in enumerate(dataloader):
         objf, frames, all_frames = get_objf(batch, model, subsampling,
-                                            device, L, symbols, False)
+                                            device, graph_compiler, False)
         total_objf += objf
         total_frames += frames
         total_all_frames += all_frames
@@ -152,14 +146,14 @@ def get_validation_objf(dataloader, model, subsampling, device, L, symbols):
 
 
 def train_one_epoch(dataloader, valid_dataloader, model,
-                    subsampling, device, L, symbols,
+                    subsampling, device, graph_compiler,
                     optimizer, current_epoch, num_epochs):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
 
     model.train()
     for batch_idx, batch in enumerate(dataloader):
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-          get_objf(batch, model, subsampling, device, L, symbols, True, optimizer)
+          get_objf(batch, model, subsampling, device, graph_compiler, True, optimizer)
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
@@ -190,8 +184,7 @@ def train_one_epoch(dataloader, valid_dataloader, model,
                 model=model,
                 subsampling=subsampling,
                 device=device,
-                L=L,
-                symbols=symbols)
+                graph_compiler=graph_compiler)
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'.format(
@@ -239,6 +232,11 @@ def main():
             L = k2.arc_sort(L.invert_())
             torch.save(L.as_dict(), lang_dir + '/Linv.pt')
 
+    graph_compiler = TrainingGraphCompiler(
+        L=L,
+        vocab=symbol_table,
+    )
+
     # load dataset
     feature_dir = 'exp/data'
     print("About to get train cuts")
@@ -270,7 +268,7 @@ def main():
     print("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = Model(num_features=40, num_classes=364)
+    model = Tdnn1a(num_features=40, num_classes=364)
     model.to(device)
 
     learning_rate = 0.00001
@@ -309,8 +307,7 @@ def main():
                                model=model,
                                subsampling=subsampling,
                                device=device,
-                               L=L,
-                               symbols=symbol_table,
+                               graph_compiler=graph_compiler,
                                optimizer=optimizer,
                                current_epoch=epoch,
                                num_epochs=num_epochs)

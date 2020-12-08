@@ -24,9 +24,9 @@ from lhotse.dataset.speech_recognition import K2DataLoader, K2SpeechRecognitionD
     K2SpeechRecognitionIterableDataset, concat_cuts
 from lhotse.recipes.librispeech import download_and_untar, prepare_librispeech, dataset_parts_full
 
-from common import load_checkpoint
-from common import setup_logger
-from model import Model
+from snowfall.common import load_checkpoint
+from snowfall.common import setup_logger
+from snowfall.models.tdnn import Tdnn1a
 
 
 def decode(dataloader, model, subsampling, device, LG, symbols):
@@ -142,7 +142,7 @@ def main():
     print("About to load model")
     device_id = 1
     device = torch.device('cuda', device_id)
-    model = Model(num_features=40, num_classes=364)
+    model = Tdnn1a(num_features=40, num_classes=364)
     checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)

@@ -4,13 +4,17 @@
 # Apache 2.0
 
 import os
-from datetime import datetime
 import logging
+from datetime import datetime
+from os import PathLike
+from typing import Tuple
+
 import numpy as np
 import torch
+from torch import nn
 
 
-def setup_logger(log_filename, log_level='info'):
+def setup_logger(log_filename: PathLike, log_level: str = 'info') -> None:
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
@@ -32,7 +36,7 @@ def setup_logger(log_filename, log_level='info'):
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename, model):
+def load_checkpoint(filename: PathLike, model: nn.Module) -> Tuple[int, float, float]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
@@ -62,16 +66,22 @@ def load_checkpoint(filename, model):
     return epoch, learning_rate, objf
 
 
-def save_checkpoint(filename, model, epoch, learning_rate, objf, local_rank=0):
-    if local_rank != None and local_rank != 0:
+def save_checkpoint(
+        filename: PathLike,
+        model: nn.Module,
+        epoch: int,
+        learning_rate: float,
+        objf: float,
+        local_rank: int = 0
+) -> None:
+    if local_rank is not None and local_rank != 0:
         return
-
     logging.info('Save checkpoint to {filename}: epoch={epoch}, '
                  'learning_rate={learning_rate}, objf={objf}'.format(
-                     filename=filename,
-                     epoch=epoch,
-                     learning_rate=learning_rate,
-                     objf=objf))
+        filename=filename,
+        epoch=epoch,
+        learning_rate=learning_rate,
+        objf=objf))
     checkpoint = {
         'state_dict': model.state_dict(),
         'epoch': epoch,
@@ -81,15 +91,17 @@ def save_checkpoint(filename, model, epoch, learning_rate, objf, local_rank=0):
     torch.save(checkpoint, filename)
 
 
-def save_training_info(filename,
-                       model_path,
-                       current_epoch,
-                       learning_rate,
-                       objf,
-                       best_objf,
-                       best_epoch,
-                       local_rank=0):
-    if local_rank != None and local_rank != 0:
+def save_training_info(
+        filename: PathLike,
+        model_path: PathLike,
+        current_epoch: int,
+        learning_rate: float,
+        objf: float,
+        best_objf: float,
+        best_epoch: int,
+        local_rank: int = 0
+):
+    if local_rank is not None and local_rank != 0:
         return
 
     with open(filename, 'w') as f:

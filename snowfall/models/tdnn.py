@@ -5,15 +5,17 @@ from torch import nn
 # Apache 2.0
 
 
-class Model(nn.Module):
+class Tdnn1a(nn.Module):
     """
     Args:
-        num_features (int, optional): Number of input features (Default: ``40``).
-        num_classes (int, optional): Number of output classes (Default: ``364``)
+        num_features (int): Number of input features
+        num_classes (int): Number of output classes
     """
 
-    def __init__(self, num_features: int = 40, num_classes: int = 364) -> None:
-        super(Model, self).__init__()
+    def __init__(self, num_features: int, num_classes: int) -> None:
+        super(Tdnn1a, self).__init__()
+        self.num_features = num_features
+        self.num_classes = num_classes
         self.acoustic_model = nn.Sequential(
             nn.Conv1d(in_channels=num_features,
                       out_channels=500,
