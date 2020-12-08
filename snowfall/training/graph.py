@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Iterable, Dict, Optional
+from typing import Dict, Iterable, Optional
 
 import k2
 from k2 import Fsa, SymbolTable
@@ -10,10 +10,9 @@ class TrainingGraphCompiler:
         self.L = L
         self.vocab = vocab
         self.oov = oov
-        self.cache: Dict[str, Fsa] = {}
 
     def compile(self, texts: Iterable[str]) -> Fsa:
-        decoding_graphs = k2.union(k2.create_fsa_vec([self.compile_one_and_cache(text) for text in texts]))
+        decoding_graphs = k2.create_fsa_vec([self.compile_one_and_cache(text) for text in texts])
         decoding_graphs.scores.requires_grad_(False)
         return decoding_graphs
 
