@@ -25,21 +25,3 @@ class TrainingGraphCompiler:
         decoding_graph = k2.intersect(fsa, self.L).invert_()
         decoding_graph = k2.add_epsilon_self_loops(decoding_graph)
         return decoding_graph
-
-
-def create_decoding_graph(
-        texts: Iterable[str],
-        L: Fsa,
-        symbols: SymbolTable,
-        oov: str = '<UNK>'
-) -> Fsa:
-    word_ids_list = []
-    for text in texts:
-        filter_text = [token if token in symbols._sym2id else oov for token in text.split(' ')]
-        word_ids = [symbols.get(i) for i in filter_text]
-        word_ids_list.append(word_ids)
-    fsa = k2.linear_fsa(word_ids_list)
-    decoding_graph = k2.intersect(fsa, L).invert_()
-    decoding_graph = k2.add_epsilon_self_loops(decoding_graph)
-    return decoding_graph
-
