@@ -3,19 +3,21 @@ from torch import nn
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
+from snowfall.models import AcousticModel
 
 
-class Tdnn1a(nn.Module):
+class Tdnn1a(AcousticModel):
     """
     Args:
         num_features (int): Number of input features
         num_classes (int): Number of output classes
     """
 
-    def __init__(self, num_features: int, num_classes: int) -> None:
+    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3) -> None:
         super(Tdnn1a, self).__init__()
         self.num_features = num_features
         self.num_classes = num_classes
+        self.subsampling_factor = subsampling_factor
         self.acoustic_model = nn.Sequential(
             nn.Conv1d(in_channels=num_features,
                       out_channels=500,
@@ -56,7 +58,7 @@ class Tdnn1a(nn.Module):
             nn.Conv1d(in_channels=500,
                       out_channels=500,
                       kernel_size=3,
-                      stride=3,   #   <---- stride=3: subsampling!
+                      stride=self.subsampling_factor,  # <---- stride=3: subsampling_factor!
                       padding=1), nn.ReLU(inplace=True),
             nn.BatchNorm1d(num_features=500, affine=False),
             nn.Conv1d(in_channels=500,

@@ -1,6 +1,4 @@
 # coding=utf-8
-import os
-from pathlib import Path
 
 from setuptools import find_packages, setup
 
@@ -8,10 +6,17 @@ setup(
     name='snowfall',
     version='0.1',
     python_requires='>=3.6.0',
-    description='Speech processing recipes using Lhotse and K2',
+    description='Speech processing recipes using K2 and Lhotse.',
     author='The K2 and Lhotse Development Team',
     license='Apache-2.0 License',
     packages=find_packages(),
+    install_requires=[
+        # Not imposing any particular versions for now
+        'k2',
+        'lhotse',
+        'torch',
+        'torchaudio'
+    ],
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3.6",

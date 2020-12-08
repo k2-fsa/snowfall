@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Dict, Iterable, Optional
+from typing import Iterable
 
 import k2
 from k2 import Fsa, SymbolTable

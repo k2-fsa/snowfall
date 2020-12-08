@@ -3,18 +3,19 @@
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
 
-import os
 import logging
+import os
 from datetime import datetime
-from os import PathLike
-from typing import Tuple
+from pathlib import Path
+from typing import Tuple, Union
 
-import numpy as np
 import torch
 from torch import nn
 
+Pathlike = Union[str, Path]
 
-def setup_logger(log_filename: PathLike, log_level: str = 'info') -> None:
+
+def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
@@ -36,7 +37,7 @@ def setup_logger(log_filename: PathLike, log_level: str = 'info') -> None:
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: PathLike, model: nn.Module) -> Tuple[int, float, float]:
+def load_checkpoint(filename: Pathlike, model: nn.Module) -> Tuple[int, float, float]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
@@ -67,7 +68,7 @@ def load_checkpoint(filename: PathLike, model: nn.Module) -> Tuple[int, float, f
 
 
 def save_checkpoint(
-        filename: PathLike,
+        filename: Pathlike,
         model: nn.Module,
         epoch: int,
         learning_rate: float,
@@ -92,8 +93,8 @@ def save_checkpoint(
 
 
 def save_training_info(
-        filename: PathLike,
-        model_path: PathLike,
+        filename: Pathlike,
+        model_path: Pathlike,
         current_epoch: int,
         learning_rate: float,
         objf: float,
