@@ -69,8 +69,8 @@ def get_objf(
         (supervisions['sequence_idx'],
          torch.floor_divide(supervisions['start_frame'], model.subsampling_factor),
          torch.floor_divide(supervisions['num_frames'], model.subsampling_factor)), 1).to(torch.int32)
-    _, indices = torch.sort(-supervision_segments[:, 2])
-    supervision_segments = supervision_segments[indices, :]
+    indices = torch.argsort(supervision_segments[:, 2], descending=True)
+    supervision_segments = supervision_segments[indices]
 
     texts = supervisions['text']
     assert feature.ndim == 3
@@ -209,15 +209,15 @@ def main():
 
     print("Loading L.fst")
     if os.path.exists(lang_dir + '/Linv.pt'):
-        L = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
+        L_inv = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
     else:
         with open(lang_dir + '/L.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L = k2.arc_sort(L.invert_())
-            torch.save(L.as_dict(), lang_dir + '/Linv.pt')
+            L_inv = k2.arc_sort(L.invert_())
+            torch.save(L_inv.as_dict(), lang_dir + '/Linv.pt')
 
     graph_compiler = TrainingGraphCompiler(
-        L=L,
+        L_inv=L_inv,
         vocab=symbol_table,
     )
 

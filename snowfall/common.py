@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Tuple, Union
 
 import torch
-from torch import nn
+
+from snowfall.models import AcousticModel
 
 Pathlike = Union[str, Path]
 
@@ -21,6 +22,7 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     log_filename = '{}-{}'.format(log_filename, date_time)
     os.makedirs(os.path.dirname(log_filename), exist_ok=True)
     formatter = '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
+    level = logging.ERROR
     if log_level == 'debug':
         level = logging.DEBUG
     elif log_level == 'info':
@@ -37,12 +39,13 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike, model: nn.Module) -> Tuple[int, float, float]:
+def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, float, float]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
 
-    keys = ['state_dict', 'epoch', 'learning_rate', 'objf']
+    keys = ['state_dict', 'epoch', 'learning_rate', 'objf',
+            'num_features', 'num_classes', 'subsampling_factor']
     for k in keys:
         assert k in checkpoint
 
@@ -60,6 +63,10 @@ def load_checkpoint(filename: Pathlike, model: nn.Module) -> Tuple[int, float, f
     else:
         model.load_state_dict(checkpoint['state_dict'])
 
+    model.num_features = checkpoint['num_features']
+    model.num_classes = checkpoint['num_classes']
+    model.subsampling_factor = checkpoint['subsampling_factor']
+
     epoch = checkpoint['epoch']
     learning_rate = checkpoint['learning_rate']
     objf = checkpoint['objf']
@@ -69,7 +76,7 @@ def load_checkpoint(filename: Pathlike, model: nn.Module) -> Tuple[int, float, f
 
 def save_checkpoint(
         filename: Pathlike,
-        model: nn.Module,
+        model: AcousticModel,
         epoch: int,
         learning_rate: float,
         objf: float,
@@ -85,6 +92,9 @@ def save_checkpoint(
         objf=objf))
     checkpoint = {
         'state_dict': model.state_dict(),
+        'num_features': model.num_features,
+        'num_classes': model.num_classes,
+        'subsampling_factor': model.subsampling_factor,
         'epoch': epoch,
         'learning_rate': learning_rate,
         'objf': objf
