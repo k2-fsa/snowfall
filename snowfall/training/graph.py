@@ -13,8 +13,8 @@ class TrainingGraphCompiler:
 
     Args:
         L_inv:
-            An ``Fsa`` that represents the inverted lexicon (L), i.e. has phones as ``symbols``
-            and words as ``aux_symbols``.
+            An ``Fsa`` that represents the inverted lexicon (L), i.e. has words as ``symbols``
+            and phones as ``aux_symbols``.
         vocab:
             The ``SymbolTable`` that corresponds to ``L_inv``.
         oov:

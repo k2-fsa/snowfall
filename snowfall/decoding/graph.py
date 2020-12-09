@@ -10,17 +10,30 @@ def compile_LG(
         labels_disambig_id_start: int,
         aux_labels_disambig_id_start: int
 ) -> Fsa:
-    # if not os.path.exists(lang_dir + '/LG.pt'):
-    #     print("Loading L_disambig.fst.txt")
-    #     with open(lang_dir + '/L_disambig.fst.txt') as f:
-    #         L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-    #     print("Loading G.fsa.txt")
-    #     with open(lang_dir + '/G.fsa.txt') as f:
-    #         G = k2.Fsa.from_openfst(f.read(), acceptor=True)
-    L = k2.arc_sort(L.invert_())
+    """
+    Creates a decoding graph using a lexicon fst ``L`` and language model fsa ``G``.
+    Involves arc sorting, intersection, determinization, removal of disambiguation symbols
+    and adding epsilon self-loops.
+
+    Args:
+        L:
+            An ``Fsa`` that represents the lexicon (L), i.e. has phones as ``symbols``
+                and words as ``aux_symbols``.
+        G:
+            An ``Fsa`` that represents the language model (G), i.e. it's an acceptor
+            with words as ``symbols``.
+        labels_disambig_id_start:
+            An integer ID corresponding to the first disambiguation symbol in the
+            phonetic alphabet.
+        aux_labels_disambig_id_start:
+            An integer ID corresponding to the first disambiguation symbol in the
+            words vocabulary.
+    :return:
+    """
+    L_inv = k2.arc_sort(L.invert_())
     G = k2.arc_sort(G)
     logging.debug("Intersecting L and G")
-    LG = k2.intersect(L, G)
+    LG = k2.intersect(L_inv, G)
     logging.debug(f'LG shape = {LG.shape}')
     logging.debug("Connecting L*G")
     LG = k2.connect(LG).invert_()
@@ -38,9 +51,3 @@ def compile_LG(
     LG = k2.arc_sort(LG)
     logging.debug(f'LG is arc sorted: {(LG.properties & k2.fsa_properties.ARC_SORTED) != 0}')
     return LG
-    # torch.save(LG.as_dict(), lang_dir + '/LG.pt')
-    #     # print(LG)
-    # else:
-    #     d = torch.load(lang_dir + '/LG.pt')
-    #     print("Loading pre-prepared LG")
-    #     LG = k2.Fsa.from_dict(d)
