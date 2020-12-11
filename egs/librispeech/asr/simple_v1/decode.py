@@ -23,22 +23,18 @@ from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 
 
-def decode(
-        dataloader: torch.utils.data.DataLoader,
-        model: AcousticModel,
-        device: Union[str, torch.device],
-        LG: Fsa,
-        symbols: SymbolTable
-):
+def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
+           device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable):
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
         feature = batch['features']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],
-             torch.floor_divide(supervisions['start_frame'], model.subsampling_factor),
-             torch.floor_divide(supervisions['num_frames'], model.subsampling_factor)),
-            1).to(torch.int32)
+             torch.floor_divide(supervisions['start_frame'],
+                                model.subsampling_factor),
+             torch.floor_divide(supervisions['num_frames'],
+                                model.subsampling_factor)), 1).to(torch.int32)
         texts = supervisions['text']
         assert feature.ndim == 3
 
@@ -78,6 +74,7 @@ def decode(
 
 
 def main():
+    assert False, 'We are still working on this script as it has some issues, so please do NOT try to run it for now.'
     exp_dir = Path('exp')
     setup_logger('{}/log/log-decode'.format(exp_dir))
 
@@ -92,7 +89,10 @@ def main():
         print("Loading G.fsa.txt")
         with open(lang_dir / 'G.fsa.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=True)
-        LG = compile_LG(L=L, G=G, labels_disambig_id_start=347, aux_labels_disambig_id_start=200004)
+        LG = compile_LG(L=L,
+                        G=G,
+                        labels_disambig_id_start=347,
+                        aux_labels_disambig_id_start=200004)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
         print("Loading pre-compiled LG")
@@ -142,8 +142,10 @@ def main():
     total_words = sum(len(ref) for ref, _ in results)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-    print(f'%WER {errors["total"] / total_words:.2%} '
-          f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]')
+    print(
+        f'%WER {errors["total"] / total_words:.2%} '
+        f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
+    )
 
 
 torch.set_num_threads(1)
