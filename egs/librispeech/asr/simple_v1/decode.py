@@ -27,6 +27,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable):
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
+        print(batch_idx)
         feature = batch['features']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
@@ -35,9 +36,12 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                 model.subsampling_factor),
              torch.floor_divide(supervisions['num_frames'],
                                 model.subsampling_factor)), 1).to(torch.int32)
+        indices = torch.argsort(supervision_segments[:, 2], descending=True)
+        supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
         assert feature.ndim == 3
 
+        print('feature convert')
         feature = feature.to(device)
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
@@ -47,22 +51,36 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
+        print('about convert to dense')
+        print(LG.shape)
+        print(LG.labels.shape)
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-        assert LG.is_cuda()
+        # assert LG.is_cuda()
         assert LG.device == nnet_output.device, \
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 2000.0, 20.0,
-                                             30, 300)
+        print('about to intersect')
+        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 20.0, 30,
+                                             300000)
+        print(LG.shape)
+        print(dense_fsa_vec.dim0())
+        # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
+        print('about to get shortest path')
         best_paths = k2.shortest_path(lattices, use_float_scores=True)
+        print('about to get shortest path to cpu')
         best_paths = best_paths.to('cpu')
         assert best_paths.shape[0] == len(texts)
 
+        print('about to output')
         for i in range(len(texts)):
-            hyp_words = [
-                symbols.get(x) for x in best_paths[i].aux_labels if x > 0
-            ]
+            if isinstance(best_paths[i].aux_labels, torch.Tensor):
+                aux_labels = best_paths[i].aux_labels
+            else:
+                # it's a ragged tensor
+                aux_labels = best_paths[i].aux_labels.values()
+            hyp_words = [symbols.get(x) for x in aux_labels if x > 0]
+            print(hyp_words)
             results.append((texts[i].split(' '), hyp_words))
 
         if batch_idx % 10 == 0:
@@ -74,7 +92,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
 
 def main():
-    assert False, 'We are still working on this script as it has some issues, so please do NOT try to run it for now.'
     exp_dir = Path('exp')
     setup_logger('{}/log/log-decode'.format(exp_dir))
 
@@ -95,6 +112,7 @@ def main():
                         aux_labels_disambig_id_start=200004)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
+        # TODO(haowen): support save raggedInt
         print("Loading pre-compiled LG")
         d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
@@ -111,21 +129,24 @@ def main():
     print("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
+    #  if not torch.cuda.is_available():
+    #  logging.error('No GPU detected!')
+    #  sys.exit(-1)
 
     print("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
-    device = torch.device('cuda')
+    # device = torch.device('cuda', 1)
+    device = torch.device('cpu')
     model = Tdnn1a(num_features=40, num_classes=364)
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-2.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
 
+    print("convert LG to device")
     LG = LG.to(device)
     LG.requires_grad_(False)
+    print("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
                      device=device,
