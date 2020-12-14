@@ -51,7 +51,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
-        blank_bias = -3.0
+        blank_bias = -2.0
         nnet_output[:,:,0] += blank_bias
 
         print('about convert to dense')
@@ -64,8 +64,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         print('about to intersect')
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 15.0, 15.0, 30,
-                                             100000)
+        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
+                                             50000)
         print(LG.shape)
         print(dense_fsa_vec.dim0())
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
