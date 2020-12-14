@@ -51,6 +51,9 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
+        blank_bias = -2.0
+        nnet_output[:,:,0] += blank_bias
+
         print('about convert to dense')
         print(LG.shape)
         print(LG.labels.shape)
@@ -61,8 +64,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         print('about to intersect')
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 20.0, 30,
-                                             300000)
+        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
+                                             50000)
         print(LG.shape)
         print(dense_fsa_vec.dim0())
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
@@ -79,7 +82,9 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             else:
                 # it's a ragged tensor
                 aux_labels = best_paths[i].aux_labels.values()
-            hyp_words = [symbols.get(x) for x in aux_labels if x > 0]
+            aux_labels = aux_labels[aux_labels > 0]
+            aux_labels = aux_labels.tolist()
+            hyp_words = [symbols.get(x) for x in aux_labels]
             print(hyp_words)
             results.append((texts[i].split(' '), hyp_words))
 
@@ -124,7 +129,7 @@ def main():
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=100000,
+                                              max_frames=50000,
                                               shuffle=False)
     print("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
@@ -136,7 +141,7 @@ def main():
     print("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
-    device = torch.device('cpu')
+    device = torch.device('cuda', 0)
     model = Tdnn1a(num_features=40, num_classes=364)
     checkpoint = os.path.join(exp_dir, 'epoch-2.pt')
     load_checkpoint(checkpoint, model)
