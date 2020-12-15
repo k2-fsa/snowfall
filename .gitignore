@@ -6,3 +6,4 @@ exp/
 .vscode/
 .idea/
 __pycache__/
+snowfall.egg-info/

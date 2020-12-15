@@ -25,9 +25,10 @@ from snowfall.models.tdnn import Tdnn1a
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable):
+    tot_num_cuts = len(dataloader.dataset.cuts)
+    num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
-        print(batch_idx)
         feature = batch['features']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
@@ -41,7 +42,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         texts = supervisions['text']
         assert feature.ndim == 3
 
-        print('feature convert')
         feature = feature.to(device)
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
@@ -52,30 +52,21 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                           1)  # now nnet_output is [N, T, C]
 
         blank_bias = -2.0
-        nnet_output[:,:,0] += blank_bias
+        nnet_output[:, :, 0] += blank_bias
 
-        print('about convert to dense')
-        print(LG.shape)
-        print(LG.labels.shape)
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
         # assert LG.is_cuda()
         assert LG.device == nnet_output.device, \
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        print('about to intersect')
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
                                              50000)
-        print(LG.shape)
-        print(dense_fsa_vec.dim0())
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
-        print('about to get shortest path')
         best_paths = k2.shortest_path(lattices, use_float_scores=True)
-        print('about to get shortest path to cpu')
         best_paths = best_paths.to('cpu')
         assert best_paths.shape[0] == len(texts)
 
-        print('about to output')
         for i in range(len(texts)):
             if isinstance(best_paths[i].aux_labels, torch.Tensor):
                 aux_labels = best_paths[i].aux_labels
@@ -85,13 +76,15 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             aux_labels = aux_labels[aux_labels > 0]
             aux_labels = aux_labels.tolist()
             hyp_words = [symbols.get(x) for x in aux_labels]
-            print(hyp_words)
             results.append((texts[i].split(' '), hyp_words))
 
         if batch_idx % 10 == 0:
-            logging.info('Processed batch {}/{} ({:.6f}%)'.format(
-                batch_idx, len(dataloader),
-                float(batch_idx) / len(dataloader) * 100))
+            logging.info(
+                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
+                    batch_idx, num_cuts, tot_num_cuts,
+                    float(num_cuts) / tot_num_cuts * 100))
+
+        num_cuts += len(texts)
 
     return results
 
@@ -158,7 +151,8 @@ def main():
                      LG=LG,
                      symbols=symbol_table)
     for ref, hyp in results:
-        print('ref=', ref, ', hyp=', hyp)
+        print('ref=', ref)
+        print('hyp=', hyp)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
     errors = {
