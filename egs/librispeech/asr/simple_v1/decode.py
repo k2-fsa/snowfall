@@ -51,7 +51,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
-        blank_bias = -2.0
+        blank_bias = -3.0
         nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
@@ -63,7 +63,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
                                              50000)
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
-        best_paths = k2.shortest_path(lattices, use_float_scores=True)
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
         best_paths = best_paths.to('cpu')
         assert best_paths.shape[0] == len(texts)
 
