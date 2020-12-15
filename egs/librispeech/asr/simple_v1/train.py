@@ -25,7 +25,9 @@ from snowfall.models.tdnn import Tdnn1a
 from snowfall.training.graph import TrainingGraphCompiler
 
 
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor, frames_per_seq: torch.Tensor) -> Tuple[float, int, int]:
+def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
+                                frames_per_seq: torch.Tensor
+                                ) -> Tuple[float, int, int]:
     ''' Figures out the total score(log-prob) over all successful supervision segments
     (i.e. those for which the total score wasn't -infinity), and the corresponding
     number of frames of neural net output
@@ -46,8 +48,9 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor, frames_per_seq: torch.
     if False:
         bad_indexes = torch.nonzero(~mask).squeeze(1)
         if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ", frames_per_seq[bad_indexes],
-                  " vs. max length ", torch.max(frames_per_seq), ", avg ",
+            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
+                  frames_per_seq[bad_indexes], " vs. max length ",
+                  torch.max(frames_per_seq), ", avg ",
                   (torch.sum(frames_per_seq) / frames_per_seq.numel()))
     # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
@@ -55,20 +58,20 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor, frames_per_seq: torch.
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
-def get_objf(
-        batch: Dict,
-        model: AcousticModel,
-        device: torch.device,
-        graph_compiler: TrainingGraphCompiler,
-        training: bool,
-        optimizer: Optional[torch.optim.Optimizer] = None
-):
+def get_objf(batch: Dict,
+             model: AcousticModel,
+             device: torch.device,
+             graph_compiler: TrainingGraphCompiler,
+             training: bool,
+             optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
-         torch.floor_divide(supervisions['start_frame'], model.subsampling_factor),
-         torch.floor_divide(supervisions['num_frames'], model.subsampling_factor)), 1).to(torch.int32)
+         torch.floor_divide(supervisions['start_frame'],
+                            model.subsampling_factor),
+         torch.floor_divide(supervisions['num_frames'],
+                            model.subsampling_factor)), 1).to(torch.int32)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -102,10 +105,13 @@ def get_objf(
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
-    tot_scores = k2.get_tot_scores(target_graph, log_semiring=True, use_float_scores=False)
+    tot_scores = k2.get_tot_scores(target_graph,
+                                   log_semiring=True,
+                                   use_double_scores=True)
 
-    (tot_score, tot_frames, all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                                                      supervision_segments[:, 2])
+    (tot_score, tot_frames,
+     all_frames) = get_tot_objf_and_num_frames(tot_scores,
+                                               supervision_segments[:, 2])
 
     if training:
         optimizer.zero_grad()
@@ -113,16 +119,14 @@ def get_objf(
         clip_grad_value_(model.parameters(), 5.0)
         optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
+    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
+    ), all_frames.cpu().item()
     return ans
 
 
-def get_validation_objf(
-        dataloader: torch.utils.data.DataLoader,
-        model: AcousticModel,
-        device: torch.device,
-        graph_compiler: TrainingGraphCompiler
-):
+def get_validation_objf(dataloader: torch.utils.data.DataLoader,
+                        model: AcousticModel, device: torch.device,
+                        graph_compiler: TrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -130,8 +134,8 @@ def get_validation_objf(
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model,
-                                            device, graph_compiler, False)
+        objf, frames, all_frames = get_objf(batch, model, device,
+                                            graph_compiler, False)
         total_objf += objf
         total_frames += frames
         total_all_frames += all_frames
@@ -139,16 +143,12 @@ def get_validation_objf(
     return total_objf, total_frames, total_all_frames
 
 
-def train_one_epoch(
-        dataloader: torch.utils.data.DataLoader,
-        valid_dataloader: torch.utils.data.DataLoader,
-        model: AcousticModel,
-        device: torch.device,
-        graph_compiler: TrainingGraphCompiler,
-        optimizer: torch.optim.Optimizer,
-        current_epoch: int,
-        num_epochs: int
-):
+def train_one_epoch(dataloader: torch.utils.data.DataLoader,
+                    valid_dataloader: torch.utils.data.DataLoader,
+                    model: AcousticModel, device: torch.device,
+                    graph_compiler: TrainingGraphCompiler,
+                    optimizer: torch.optim.Optimizer, current_epoch: int,
+                    num_epochs: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
@@ -169,19 +169,14 @@ def train_one_epoch(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
                 'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
-                'avg time waiting for batch {:.3f}s'.
-                    format(
-                    batch_idx,
-                    current_epoch,
-                    num_epochs,
-                    total_objf / total_frames,
-                    total_frames,
+                'avg time waiting for batch {:.3f}s'.format(
+                    batch_idx, current_epoch, num_epochs,
+                    total_objf / total_frames, total_frames,
                     100.0 * total_frames / total_all_frames,
                     curr_batch_objf / (curr_batch_frames + 0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
-                    time_waiting_for_batch / max(1, batch_idx)
-                ))
+                    time_waiting_for_batch / max(1, batch_idx)))
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
@@ -191,13 +186,13 @@ def train_one_epoch(
                 dataloader=valid_dataloader,
                 model=model,
                 device=device,
-                graph_compiler=graph_compiler
-            )
+                graph_compiler=graph_compiler)
             model.train()
             logging.info(
-                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'.format(
-                    total_valid_objf / total_valid_frames, total_valid_frames,
-                    100.0 * total_valid_frames / total_valid_all_frames))
+                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
+                .format(total_valid_objf / total_valid_frames,
+                        total_valid_frames,
+                        100.0 * total_valid_frames / total_valid_all_frames))
         prev_timestamp = datetime.now()
     return total_objf
 
@@ -230,9 +225,13 @@ def main():
     cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
 
     print("About to create train dataset")
-    train = K2SpeechRecognitionIterableDataset(cuts_train, max_frames=100000, shuffle=True)
+    train = K2SpeechRecognitionIterableDataset(cuts_train,
+                                               max_frames=100000,
+                                               shuffle=True)
     print("About to create dev dataset")
-    validate = K2SpeechRecognitionIterableDataset(cuts_dev, max_frames=100000, shuffle=False)
+    validate = K2SpeechRecognitionIterableDataset(cuts_dev,
+                                                  max_frames=100000,
+                                                  shuffle=False)
     print("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
