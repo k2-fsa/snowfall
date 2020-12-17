@@ -31,8 +31,8 @@ fi
 
 if [ $stage -le 4 ]; then
   # Build G
-  local/arpa2fst.py data/local/lm/lm_tgmed.arpa | \
-      local/sym2int.pl -f 3 data/lang_nosp/words.txt > data/lang_nosp/G.fsa.txt
+  local/arpa2fst.py data/local/lm/lm_tgmed.arpa |
+    local/sym2int.pl -f 3 data/lang_nosp/words.txt >data/lang_nosp/G.fsa.txt
 
   echo "To load G:"
   echo "    Gfsa = k2.Fsa.from_openfst(<string of data/lang_nosp/G.fsa.txt>, acceptor=True)"
