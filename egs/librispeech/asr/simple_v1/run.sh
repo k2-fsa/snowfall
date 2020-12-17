@@ -5,9 +5,9 @@
 
 # Example of how to build L and G FST for K2. Most scripts of this example are copied from Kaldi.
 
-set -e
+set -eou pipefail
 
-stage=5
+stage=1
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.magicdatatech.com/resources/11" data/local/lm
@@ -18,7 +18,12 @@ if [ $stage -le 2 ]; then
 fi
 
 if [ $stage -le 3 ]; then
-  local/prepare_lang.sh data/local/dict_nosp "<UNK>" data/local/lang_tmp_nosp data/lang_nosp
+  local/prepare_lang.sh \
+    --position-dependent-phones false \
+    data/local/dict_nosp \
+    "<UNK>" \
+    data/local/lang_tmp_nosp \
+    data/lang_nosp
 
   echo "To load L:"
   echo "    Lfst = k2.Fsa.from_openfst(<string of data/lang_nosp/L.fst.txt>, acceptor=False)"

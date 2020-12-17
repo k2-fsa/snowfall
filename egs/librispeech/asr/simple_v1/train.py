@@ -8,6 +8,7 @@ import math
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import k2
@@ -15,6 +16,7 @@ import torch
 import torch.optim as optim
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
+from lhotse.utils import fix_random_seed
 from torch.nn.utils import clip_grad_value_
 
 from snowfall.common import save_checkpoint
@@ -198,18 +200,21 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
 
 def main():
+    fix_random_seed(42)
     # load L, G, symbol_table
-    lang_dir = 'data/lang_nosp'
-    symbol_table = k2.SymbolTable.from_file(lang_dir + '/words.txt')
+    lang_dir = Path('data/lang_nosp')
+    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
     print("Loading L.fst")
-    if os.path.exists(lang_dir + '/Linv.pt'):
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
+    if os.path.exists(lang_dir / 'Linv.pt'):
+        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
-        with open(lang_dir + '/L.fst.txt') as f:
+        with open(lang_dir / 'L.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
             L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir + '/Linv.pt')
+            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
 
     graph_compiler = TrainingGraphCompiler(
         L_inv=L_inv,
@@ -217,21 +222,22 @@ def main():
     )
 
     # load dataset
-    feature_dir = 'exp/data'
+    feature_dir = Path('exp/data')
     print("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir +
-                                  '/cuts_train-clean-100.json.gz')
+    cuts_train = CutSet.from_json(feature_dir /
+                                  'cuts_train-clean-100.json.gz')
     print("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
+    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
 
     print("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=100000,
+                                               max_frames=70000,
                                                shuffle=True)
     print("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=100000,
-                                                  shuffle=False)
+                                                  max_frames=70000,
+                                                  shuffle=False,
+                                                  concat_cuts=False)
     print("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
@@ -251,7 +257,7 @@ def main():
     print("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = Tdnn1a(num_features=40, num_classes=364, subsampling_factor=3)
+    model = Tdnn1a(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
     model.to(device)
 
     learning_rate = 0.00001
