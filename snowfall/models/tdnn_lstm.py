@@ -131,7 +131,15 @@ class TdnnLstm1b(AcousticModel):
                       padding=1), nn.ReLU(inplace=True),
             nn.BatchNorm1d(num_features=500, affine=False),
         )
-        self.lstm = nn.LSTM(input_size=500, hidden_size=500, num_layers=5, dropout=0.2)
+        self.lstms = nn.ModuleList([
+            nn.LSTM(input_size=500, hidden_size=500, num_layers=1)
+            for _ in range(5)
+        ])
+        self.lstm_bnorms = nn.ModuleList([
+            nn.BatchNorm1d(num_features=500, affine=False)
+            for _ in range(5)
+        ])
+        self.dropout = nn.Dropout(0.2)
         self.linear = nn.Linear(in_features=500, out_features=self.num_classes)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -143,8 +151,13 @@ class TdnnLstm1b(AcousticModel):
             Tensor: Predictor tensor of dimension (batch_size, number_of_classes, input_length).
         """
         x = self.tdnn(x)
-        x, _ = self.lstm(x.permute(2, 0, 1))  # (B, F, T) -> (T, B, F)
-        x = x.transpose(1, 0)  # (T, B, F) -> (B, T, F)  [linear expects "features" in the last dim]
+        x = x.permute(2, 0, 1)  # (B, F, T) -> (T, B, F) -> how LSTM expects it
+        for lstm, bnorm in zip(self.lstms, self.lstm_bnorms):
+            x_new, _ = lstm(x)
+            x_new = bnorm(x_new.permute(1, 2, 0)).permute(2, 0, 1)  # (T, B, F) -> (B, F, T) -> (T, B, F)
+            x_new = self.dropout(x_new)
+            x = x_new + x  # skip connections
+        x = x.transpose(1, 0)  # (T, B, F) -> (B, T, F) -> linear expects "features" in the last dim
         x = self.linear(x)
         x = x.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
         x = nn.functional.log_softmax(x, dim=1)
