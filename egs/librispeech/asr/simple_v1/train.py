@@ -262,7 +262,7 @@ def main():
                                            batch_size=None,
                                            num_workers=1)
 
-    exp_dir = 'exp-lstm'
+    exp_dir = 'exp-lstm-adam'
     setup_logger('{}/log/log-train'.format(exp_dir))
 
     if not torch.cuda.is_available():
@@ -284,15 +284,19 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
-    optimizer = optim.SGD(model.parameters(),
-                          lr=learning_rate,
-                          momentum=0.9,
-                          weight_decay=5e-4)
+    # optimizer = optim.SGD(model.parameters(),
+    #                       lr=learning_rate,
+    #                       momentum=0.9,
+    #                       weight_decay=5e-4)
+    optimizer = optim.AdamW(model.parameters(),
+                            # lr=learning_rate,
+                            weight_decay=5e-4)
 
     for epoch in range(start_epoch, num_epochs):
-        curr_learning_rate = learning_rate * pow(0.4, epoch)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = curr_learning_rate
+        curr_learning_rate = 1e-3
+        # curr_learning_rate = learning_rate * pow(0.4, epoch)
+        # for param_group in optimizer.param_groups:
+        #     param_group['lr'] = curr_learning_rate
 
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))

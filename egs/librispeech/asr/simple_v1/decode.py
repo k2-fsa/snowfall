@@ -20,6 +20,7 @@ from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
+from snowfall.models.tdnn_lstm import TdnnLstm1b
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -93,7 +94,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def main():
-    exp_dir = Path('exp')
+    exp_dir = Path('exp-lstm-adam')
     setup_logger('{}/log/log-decode'.format(exp_dir))
 
     # load L, G, symbol_table
@@ -122,7 +123,7 @@ def main():
         LG = k2.Fsa.from_dict(d)
 
     # load dataset
-    feature_dir = exp_dir / 'data'
+    feature_dir = Path('exp/data')
     print("About to get test cuts")
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
@@ -142,8 +143,8 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = Tdnn1a(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-0.pt')
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()

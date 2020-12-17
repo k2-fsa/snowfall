@@ -92,7 +92,11 @@ def main():
             )
             if 'train' in partition:
                 # Duplicate the training set with an augmented version
-                for speed in [0.9, 1.1]:
+                # TODO(pzelasko): normally we would have used [0.9, 1.1] as in Kaldi,
+                #   but I found out that we are cutting out too much speech in Lhotse
+                #   if we slow down the audio. Change this once we fix it.
+                #   (issue: https://github.com/lhotse-speech/lhotse/issues/166)
+                for speed in [1.05, 1.1]:
                     cut_sets.append(
                         cut_set.modify_ids(
                             lambda cut_id: f'{cut_id}_sp{speed}'
