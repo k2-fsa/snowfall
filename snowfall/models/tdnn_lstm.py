@@ -127,7 +127,7 @@ class TdnnLstm1b(AcousticModel):
             nn.Conv1d(in_channels=500,
                       out_channels=500,
                       kernel_size=3,
-                      stride=self.subsampling_factor,
+                      stride=self.subsampling_factor,  # <---- stride: subsampling_factor!
                       padding=1), nn.ReLU(inplace=True),
             nn.BatchNorm1d(num_features=500, affine=False),
         )

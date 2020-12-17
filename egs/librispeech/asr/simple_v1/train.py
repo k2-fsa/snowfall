@@ -17,13 +17,14 @@ import torch.optim as optim
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 from lhotse.utils import fix_random_seed
+from torch import nn
 from torch.nn.utils import clip_grad_value_
 
 from snowfall.common import save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.tdnn import Tdnn1a
+from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.graph import TrainingGraphCompiler
 
 
@@ -192,11 +193,25 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                .format(total_valid_objf / total_valid_frames,
-                        total_valid_frames,
-                        100.0 * total_valid_frames / total_valid_all_frames))
+                    .format(total_valid_objf / total_valid_frames,
+                            total_valid_frames,
+                            100.0 * total_valid_frames / total_valid_all_frames))
         prev_timestamp = datetime.now()
     return total_objf
+
+
+def describe(model: nn.Module):
+    print('=' * 80)
+    print('Model parameters summary:')
+    print('=' * 80)
+    total = 0
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total += num_params
+        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    print('=' * 80)
+    print('Total:', total)
+    print('=' * 80)
 
 
 def main():
@@ -231,11 +246,11 @@ def main():
 
     print("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=70000,
+                                               max_frames=90000,
                                                shuffle=True)
     print("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=70000,
+                                                  max_frames=90000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     print("About to create train dataloader")
@@ -247,7 +262,7 @@ def main():
                                            batch_size=None,
                                            num_workers=1)
 
-    exp_dir = 'exp'
+    exp_dir = 'exp-lstm'
     setup_logger('{}/log/log-train'.format(exp_dir))
 
     if not torch.cuda.is_available():
@@ -257,8 +272,9 @@ def main():
     print("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = Tdnn1a(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
     model.to(device)
+    describe(model)
 
     learning_rate = 0.00001
     start_epoch = 0
