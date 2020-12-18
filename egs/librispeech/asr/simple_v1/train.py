@@ -8,6 +8,7 @@ import math
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import k2
@@ -15,13 +16,15 @@ import torch
 import torch.optim as optim
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
+from lhotse.utils import fix_random_seed
+from torch import nn
 from torch.nn.utils import clip_grad_value_
 
 from snowfall.common import save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.tdnn import Tdnn1a
+from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.graph import TrainingGraphCompiler
 
 
@@ -190,26 +193,43 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                .format(total_valid_objf / total_valid_frames,
-                        total_valid_frames,
-                        100.0 * total_valid_frames / total_valid_all_frames))
+                    .format(total_valid_objf / total_valid_frames,
+                            total_valid_frames,
+                            100.0 * total_valid_frames / total_valid_all_frames))
         prev_timestamp = datetime.now()
     return total_objf
 
 
+def describe(model: nn.Module):
+    print('=' * 80)
+    print('Model parameters summary:')
+    print('=' * 80)
+    total = 0
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total += num_params
+        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    print('=' * 80)
+    print('Total:', total)
+    print('=' * 80)
+
+
 def main():
+    fix_random_seed(42)
     # load L, G, symbol_table
-    lang_dir = 'data/lang_nosp'
-    symbol_table = k2.SymbolTable.from_file(lang_dir + '/words.txt')
+    lang_dir = Path('data/lang_nosp')
+    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
     print("Loading L.fst")
-    if os.path.exists(lang_dir + '/Linv.pt'):
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir + '/Linv.pt'))
+    if os.path.exists(lang_dir / 'Linv.pt'):
+        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
-        with open(lang_dir + '/L.fst.txt') as f:
+        with open(lang_dir / 'L.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
             L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir + '/Linv.pt')
+            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
 
     graph_compiler = TrainingGraphCompiler(
         L_inv=L_inv,
@@ -217,21 +237,22 @@ def main():
     )
 
     # load dataset
-    feature_dir = 'exp/data'
+    feature_dir = Path('exp/data')
     print("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir +
-                                  '/cuts_train-clean-100.json.gz')
+    cuts_train = CutSet.from_json(feature_dir /
+                                  'cuts_train-clean-100.json.gz')
     print("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir + '/cuts_dev-clean.json.gz')
+    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
 
     print("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=100000,
+                                               max_frames=90000,
                                                shuffle=True)
     print("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=100000,
-                                                  shuffle=False)
+                                                  max_frames=90000,
+                                                  shuffle=False,
+                                                  concat_cuts=False)
     print("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
@@ -241,7 +262,7 @@ def main():
                                            batch_size=None,
                                            num_workers=1)
 
-    exp_dir = 'exp'
+    exp_dir = 'exp-lstm-adam'
     setup_logger('{}/log/log-train'.format(exp_dir))
 
     if not torch.cuda.is_available():
@@ -251,8 +272,9 @@ def main():
     print("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = Tdnn1a(num_features=40, num_classes=364, subsampling_factor=3)
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
     model.to(device)
+    describe(model)
 
     learning_rate = 0.00001
     start_epoch = 0
@@ -262,15 +284,19 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
 
-    optimizer = optim.SGD(model.parameters(),
-                          lr=learning_rate,
-                          momentum=0.9,
-                          weight_decay=5e-4)
+    # optimizer = optim.SGD(model.parameters(),
+    #                       lr=learning_rate,
+    #                       momentum=0.9,
+    #                       weight_decay=5e-4)
+    optimizer = optim.AdamW(model.parameters(),
+                            # lr=learning_rate,
+                            weight_decay=5e-4)
 
     for epoch in range(start_epoch, num_epochs):
-        curr_learning_rate = learning_rate * pow(0.4, epoch)
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = curr_learning_rate
+        curr_learning_rate = 1e-3
+        # curr_learning_rate = learning_rate * pow(0.4, epoch)
+        # for param_group in optimizer.param_groups:
+        #     param_group['lr'] = curr_learning_rate
 
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))

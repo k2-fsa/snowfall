@@ -5,7 +5,6 @@
 
 import logging
 import os
-import sys
 from pathlib import Path
 from typing import Union
 
@@ -21,6 +20,7 @@ from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
+from snowfall.models.tdnn_lstm import TdnnLstm1b
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -89,13 +89,18 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     return results
 
 
+def find_first_disambig_symbol(symbols: SymbolTable) -> int:
+    return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
+
+
 def main():
-    exp_dir = Path('exp')
+    exp_dir = Path('exp-lstm-adam')
     setup_logger('{}/log/log-decode'.format(exp_dir))
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -104,10 +109,12 @@ def main():
         print("Loading G.fsa.txt")
         with open(lang_dir / 'G.fsa.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=True)
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        labels_disambig_id_start=347,
-                        aux_labels_disambig_id_start=200004)
+                        labels_disambig_id_start=first_phone_disambig_id,
+                        aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
         # TODO(haowen): support save raggedInt
@@ -116,14 +123,15 @@ def main():
         LG = k2.Fsa.from_dict(d)
 
     # load dataset
-    feature_dir = exp_dir / 'data'
+    feature_dir = Path('exp/data')
     print("About to get test cuts")
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
                                               max_frames=50000,
-                                              shuffle=False)
+                                              shuffle=False,
+                                              concat_cuts=False)
     print("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
 
@@ -134,9 +142,9 @@ def main():
     print("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
-    device = torch.device('cuda', 0)
-    model = Tdnn1a(num_features=40, num_classes=364)
-    checkpoint = os.path.join(exp_dir, 'epoch-2.pt')
+    device = torch.device('cuda')
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()

@@ -13,7 +13,7 @@ setup(
     install_requires=[
         # Not imposing any particular versions for now
         'k2',
-        'lhotse',
+        'git+https://github.com/lhotse-speech/lhotse',
         'torch',
         'torchaudio',
         'kaldialign'

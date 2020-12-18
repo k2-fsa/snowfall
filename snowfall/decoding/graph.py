@@ -1,7 +1,7 @@
 import logging
 
-import torch
 import k2
+import torch
 from k2 import Fsa
 
 
@@ -46,8 +46,7 @@ def compile_LG(L: Fsa, G: Fsa, labels_disambig_id_start: int,
     if isinstance(LG.aux_labels, torch.Tensor):
         LG.aux_labels[LG.aux_labels >= aux_labels_disambig_id_start] = 0
     else:
-        LG.aux_labels.values()[
-            LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
+        LG.aux_labels.values()[LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
     logging.debug("Removing epsilons")
     LG = k2.remove_epsilons_iterative_tropical(LG)
     logging.debug(f'LG shape = {LG.shape}')
