@@ -76,6 +76,7 @@ def get_objf(batch: Dict,
     supervision_segments = supervision_segments[indices]
 
     texts = supervisions['text']
+    texts = [texts[idx] for idx in indices]
     assert feature.ndim == 3
     # print(supervision_segments[:, 1] + supervision_segments[:, 2])
 
