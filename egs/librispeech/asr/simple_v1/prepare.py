@@ -57,8 +57,17 @@ def main():
     dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
     print("Parts we will prepare: ", dataset_parts)
 
-    corpus_dir = Path('/export/corpora5/LibriSpeech')
-    # corpus_dir = Path('/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech')
+    corpus_dirs = [Path('/export/corpora5/LibriSpeech'),
+                   Path('/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech')]
+    corpus_dir = None
+    for d in corpus_dirs:
+        if os.path.exists(d):
+            corpus_dir = d
+    if corpus_dir is None:
+        print("Please create a place on your system to put the downloaded Librispeech data "
+              "and add it to `corpus_dirs`")
+        sys.exit(1)
+
     output_dir = Path('exp/data')
     print('Manifest preparation:')
     librispeech_manifests = prepare_librispeech(

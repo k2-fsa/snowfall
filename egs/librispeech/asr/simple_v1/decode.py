@@ -3,6 +3,7 @@
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
 
+import faulthandler
 import logging
 import os
 from pathlib import Path
@@ -61,8 +62,10 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
-                                             50000)
+        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
+                                             10000)
+        print("tot_scores = ",
+              k2.get_tot_scores(lattices, log_semiring=False, use_double_scores=False))
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
         best_paths = best_paths.to('cpu')
@@ -96,7 +99,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 def main():
     exp_dir = Path('exp-lstm-adam')
-    setup_logger('{}/log/log-decode'.format(exp_dir))
+    setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -118,7 +121,6 @@ def main():
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
-        # TODO(haowen): support save raggedInt
         print("Loading pre-compiled LG")
         d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
@@ -145,7 +147,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-4.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -181,4 +183,5 @@ torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
 if __name__ == '__main__':
+    faulthandler.enable()
     main()
