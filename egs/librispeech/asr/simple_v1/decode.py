@@ -40,6 +40,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
+        texts = [texts[idx] for idx in indices]
         assert feature.ndim == 3
 
         feature = feature.to(device)
