@@ -48,6 +48,12 @@ def compile_LG(L: Fsa, G: Fsa, labels_disambig_id_start: int,
     else:
         LG.aux_labels.values()[
             LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
+    logging.debug("Removing epsilons")
+    LG = k2.remove_epsilons_iterative_tropical(LG)
+    logging.debug(f'LG shape = {LG.shape}')
+    logging.debug("Connecting rm-eps(det(L*G))")
+    LG = k2.connect(LG)
+    logging.debug(f'LG shape = {LG.shape}')
     LG = k2.add_epsilon_self_loops(LG)
     LG = k2.arc_sort(LG)
     logging.debug(
