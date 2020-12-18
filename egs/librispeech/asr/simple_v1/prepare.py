@@ -75,42 +75,17 @@ def main():
                 print(f'{partition} already exists - skipping.')
                 continue
             print('Processing', partition)
-
             cut_set = CutSet.from_manifests(
                 recordings=manifests['recordings'],
                 supervisions=manifests['supervisions']
             )
-
-            cut_sets = []
-            storage = LilcomFilesWriter(f'{output_dir}/feats_{partition}')
-            cut_sets.append(
-                cut_set.compute_and_store_features(
-                    extractor=Fbank(),
-                    executor=ex,
-                    storage=storage
-                )
-            )
             if 'train' in partition:
-                # Duplicate the training set with an augmented version
-                # TODO(pzelasko): normally we would have used [0.9, 1.1] as in Kaldi,
-                #   but I found out that we are cutting out too much speech in Lhotse
-                #   if we slow down the audio. Change this once we fix it.
-                #   (issue: https://github.com/lhotse-speech/lhotse/issues/166)
-                for speed in [1.05, 1.1]:
-                    cut_sets.append(
-                        cut_set.modify_ids(
-                            lambda cut_id: f'{cut_id}_sp{speed}'
-                        ).compute_and_store_features(
-                            extractor=Fbank(),
-                            storage=storage,
-                            executor=ex,
-                            augment_fn=SoxEffectTransform([
-                                ['speed', speed],
-                                ['rate', 16000]
-                            ])
-                        )
-                    )
-            cut_set = combine(cut_sets)
+                cut_set = cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
+            cut_set = cut_set.compute_and_store_features(
+                extractor=Fbank(),
+                executor=ex,
+                storage=LilcomFilesWriter(f'{output_dir}/feats_{partition}')
+            )
             librispeech_manifests[partition]['cuts'] = cut_set
             cut_set.to_json(output_dir / f'cuts_{partition}.json.gz')
 
