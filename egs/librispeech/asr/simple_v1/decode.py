@@ -61,8 +61,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 10.0, 10.0, 30,
-                                             50000)
+        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
+                                             10000)
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
         best_paths = best_paths.to('cpu')
