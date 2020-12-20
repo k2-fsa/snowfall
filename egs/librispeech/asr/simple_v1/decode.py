@@ -178,7 +178,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
