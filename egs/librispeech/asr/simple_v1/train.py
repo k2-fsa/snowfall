@@ -20,7 +20,7 @@ from lhotse.utils import fix_random_seed
 from torch import nn
 from torch.nn.utils import clip_grad_value_
 
-from snowfall.common import save_checkpoint
+from snowfall.common import save_checkpoint, load_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
@@ -274,8 +274,6 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
-    model.to(device)
-    describe(model)
 
     learning_rate = 0.00001
     start_epoch = 0
@@ -284,6 +282,14 @@ def main():
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
+
+    if start_epoch > 0:
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
+        (epoch, learning_rate, objf) = load_checkpoint(filename=model_path, model=model)
+        print("epoch = {}, objf = {}".format(epoch, objf))
+
+    model.to(device)
+    describe(model)
 
     # optimizer = optim.SGD(model.parameters(),
     #                       lr=learning_rate,
