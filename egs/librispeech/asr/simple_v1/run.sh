@@ -7,7 +7,7 @@
 
 set -eou pipefail
 
-stage=1
+stage=5
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.magicdatatech.com/resources/11" data/local/lm

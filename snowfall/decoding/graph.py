@@ -53,6 +53,8 @@ def compile_LG(L: Fsa, G: Fsa, labels_disambig_id_start: int,
     logging.debug("Connecting rm-eps(det(L*G))")
     LG = k2.connect(LG)
     logging.debug(f'LG shape = {LG.shape}')
+    LG.aux_labels = k2.ragged.remove_labels_eq(LG.aux_labels, 0)
+
     LG = k2.add_epsilon_self_loops(LG)
     LG = k2.arc_sort(LG)
     logging.debug(
