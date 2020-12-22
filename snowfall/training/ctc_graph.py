@@ -23,11 +23,11 @@ def build_ctc_topo(phones: List[int]) -> k2.Fsa:
     Returns:
       Returns an FSA that converts repeated symbols to a single symbol.
     '''
-    num_state = len(phones)
-    final_state = num_state
+    num_states = len(phones)
+    final_state = num_states
     rules = ''
-    for i in range(num_state):
-        for j in range(num_state):
+    for i in range(num_states):
+        for j in range(num_states):
             if i == j:
                 rules += f'{i} {i} {phones[i]} 0 0.0\n'
             else:
