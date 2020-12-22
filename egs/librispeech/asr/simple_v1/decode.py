@@ -178,7 +178,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -193,9 +193,11 @@ def main():
                      device=device,
                      LG=LG,
                      symbols=symbol_table)
+    s = ''
     for ref, hyp in results:
-        print('ref=', ref)
-        print('hyp=', hyp)
+        s += f'ref={ref}\n'
+        s += f'hyp={hyp}\n'
+    logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
     errors = {
@@ -205,7 +207,7 @@ def main():
     total_words = sum(len(ref) for ref, _ in results)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-    print(
+    logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
     )

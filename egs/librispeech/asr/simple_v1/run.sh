@@ -25,8 +25,6 @@ if [ $stage -le 3 ]; then
     data/local/lang_tmp_nosp \
     data/lang_nosp
 
-  cp data/local/dict_nosp/lexicon.txt data/lang_nosp/
-
   echo "To load L:"
   echo "    Lfst = k2.Fsa.from_openfst(<string of data/lang_nosp/L.fst.txt>, acceptor=False)"
 fi
