@@ -12,13 +12,17 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import k2
+import numpy as np
 import torch
 import torch.optim as optim
+
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 from lhotse.utils import fix_random_seed
+
 from torch import nn
 from torch.nn.utils import clip_grad_value_
+from torch.utils.tensorboard import SummaryWriter
 
 from snowfall.common import save_checkpoint, load_checkpoint
 from snowfall.common import save_training_info
@@ -151,14 +155,19 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel, device: torch.device,
                     graph_compiler: TrainingGraphCompiler,
-                    optimizer: torch.optim.Optimizer, current_epoch: int,
-                    num_epochs: int):
+                    optimizer: torch.optim.Optimizer,
+                    current_epoch: int,
+                    tb_writer: SummaryWriter,
+                    num_epochs: int,
+                    global_batch_idx_train: int,
+                    global_batch_idx_valid: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
 
     model.train()
     for batch_idx, batch in enumerate(dataloader):
+        global_batch_idx_train += 1
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
@@ -181,6 +190,13 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
+
+            tb_writer.add_scalar('train/global_average_objf',
+                                 total_objf / total_frames, global_batch_idx_train)
+
+            tb_writer.add_scalar('train/current_batch_average_objf',
+                                 curr_batch_objf / (curr_batch_frames + 0.001),
+                                 global_batch_idx_train)
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
@@ -191,14 +207,19 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 model=model,
                 device=device,
                 graph_compiler=graph_compiler)
+            global_batch_idx_valid += 1
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
                     .format(total_valid_objf / total_valid_frames,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
+
+            tb_writer.add_scalar('train/global_valid_average_objf',
+                             total_valid_objf / total_valid_frames,
+                             global_batch_idx_valid)
         prev_timestamp = datetime.now()
-    return total_objf
+    return total_objf / total_frames
 
 
 def describe(model: nn.Module):
@@ -217,13 +238,18 @@ def describe(model: nn.Module):
 
 def main():
     fix_random_seed(42)
+
+    exp_dir = 'exp-lstm-adam'
+    setup_logger('{}/log/log-train'.format(exp_dir))
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
-    print("Loading L.fst")
-    if os.path.exists(lang_dir / 'Linv.pt'):
+    logging.info("Loading L.fst")
+    if (lang_dir / 'Linv.pt').exists():
         L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
         with open(lang_dir / 'L.fst.txt') as f:
@@ -239,38 +265,35 @@ def main():
 
     # load dataset
     feature_dir = Path('exp/data')
-    print("About to get train cuts")
+    logging.info("About to get train cuts")
     cuts_train = CutSet.from_json(feature_dir /
                                   'cuts_train-clean-100.json.gz')
-    print("About to get dev cuts")
+    logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
 
-    print("About to create train dataset")
+    logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
                                                max_frames=90000,
                                                shuffle=True)
-    print("About to create dev dataset")
+    logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
                                                   max_frames=90000,
                                                   shuffle=False,
                                                   concat_cuts=False)
-    print("About to create train dataloader")
+    logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
                                            num_workers=4)
-    print("About to create dev dataloader")
+    logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,
                                            num_workers=1)
-
-    exp_dir = 'exp-lstm-adam'
-    setup_logger('{}/log/log-train'.format(exp_dir))
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
         sys.exit(-1)
 
-    print("About to create model")
+    logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
@@ -278,15 +301,18 @@ def main():
     learning_rate = 0.00001
     start_epoch = 0
     num_epochs = 8
-    best_objf = 100000
+    best_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
+    global_batch_idx_train = 0 # for logging only
+    global_batch_idx_valid = 0 # for logging only
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
         (epoch, learning_rate, objf) = load_checkpoint(filename=model_path, model=model)
-        print("epoch = {}, objf = {}".format(epoch, objf))
+        best_objf = objf
+        logging.info("epoch = {}, objf = {}".format(epoch, objf))
 
     model.to(device)
     describe(model)
@@ -305,6 +331,8 @@ def main():
         # for param_group in optimizer.param_groups:
         #     param_group['lr'] = curr_learning_rate
 
+        tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
+
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))
         objf = train_one_epoch(dataloader=train_dl,
@@ -314,7 +342,11 @@ def main():
                                graph_compiler=graph_compiler,
                                optimizer=optimizer,
                                current_epoch=epoch,
-                               num_epochs=num_epochs)
+                               tb_writer=tb_writer,
+                               num_epochs=num_epochs,
+                               global_batch_idx_train=global_batch_idx_train,
+                               global_batch_idx_valid=global_batch_idx_valid)
+        # the lower, the better
         if objf < best_objf:
             best_objf = objf
             best_epoch = epoch

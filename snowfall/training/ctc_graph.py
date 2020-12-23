@@ -11,27 +11,27 @@ import k2
 import _k2
 
 
-def build_ctc_topo(phones: List[int]) -> k2.Fsa:
+def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.
 
     The resulting topology converts repeated input
     symbols to a single output symbol.
 
     Args:
-      phones:
-        A list of phones
+      tokens:
+        A list of tokens, e.g., phones, characters, etc.
     Returns:
-      Returns an FSA that converts repeated symbols to a single symbol.
+      Returns an FSA that converts repeated tokens to a single token.
     '''
-    num_states = len(phones)
+    num_states = len(tokens)
     final_state = num_states
     rules = ''
     for i in range(num_states):
         for j in range(num_states):
             if i == j:
-                rules += f'{i} {i} {phones[i]} 0 0.0\n'
+                rules += f'{i} {i} {tokens[i]} 0 0.0\n'
             else:
-                rules += f'{i} {j} {phones[j]} {phones[j]} 0.0\n'
+                rules += f'{i} {j} {tokens[j]} {tokens[j]} 0.0\n'
         rules += f'{i} {final_state} -1 -1 0.0\n'
     rules += f'{final_state}'
     ans = k2.Fsa.from_str(rules)
@@ -48,7 +48,8 @@ def compose(a_fsa: k2.Fsa, b_fsa: k2.Fsa) -> k2.Fsa:
         The FSA on the right hand side.
 
     Returns:
-      The composition result. It will have:
+      The composition result. Its `labels` is selected from `a_fsa.labels`
+      and the `aux_labels` is selected from `b_fsa.aux_labels`.
     '''
     if not hasattr(a_fsa, 'aux_labels'):
         return k2.intersect(a_fsa, b_fsa)
