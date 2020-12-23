@@ -23,6 +23,7 @@ from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.training.ctc_graph import build_ctc_topo
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -136,6 +137,8 @@ def main():
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
+    ctc_topo = k2.arc_sort(ctc_topo)
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -148,6 +151,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
@@ -163,7 +167,7 @@ def main():
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=200000,
+                                              max_frames=30000,
                                               shuffle=False,
                                               concat_cuts=False)
     print("About to create test dataloader")
@@ -178,7 +182,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -193,9 +197,11 @@ def main():
                      device=device,
                      LG=LG,
                      symbols=symbol_table)
+    s = ''
     for ref, hyp in results:
-        print('ref=', ref)
-        print('hyp=', hyp)
+        s += f'ref={ref}\n'
+        s += f'hyp={hyp}\n'
+    logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
     errors = {
@@ -205,7 +211,7 @@ def main():
     total_words = sum(len(ref) for ref, _ in results)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-    print(
+    logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
     )

@@ -1,6 +1,10 @@
-# coding=utf-8
+#!/usr/bin/env python3
 
 from setuptools import find_packages, setup
+from pathlib import Path
+
+snowfall_dir = Path(__file__).parent
+install_requires = (snowfall_dir / 'requirements.txt').read_text().splitlines()
 
 setup(
     name='snowfall',
@@ -10,14 +14,7 @@ setup(
     author='The K2 and Lhotse Development Team',
     license='Apache-2.0 License',
     packages=find_packages(),
-    install_requires=[
-        # Not imposing any particular versions for now
-        'k2',
-        'lhotse@git+https://github.com/lhotse-speech/lhotse',
-        'torch',
-        'torchaudio',
-        'kaldialign'
-    ],
+    install_requires=install_requires,
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3.6",
