@@ -37,7 +37,7 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     return ans
 
 
-class CtcTrainingGraphCompiler:
+class CtcTrainingGraphCompiler(object):
 
     def __init__(self,
                  L_inv: k2.Fsa,

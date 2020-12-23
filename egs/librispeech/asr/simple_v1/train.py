@@ -29,7 +29,7 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.ctc_graph import CtcTrainingGraphCompiler as TrainingGraphCompiler
+from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -68,7 +68,7 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
 def get_objf(batch: Dict,
              model: AcousticModel,
              device: torch.device,
-             graph_compiler: TrainingGraphCompiler,
+             graph_compiler: CtcTrainingGraphCompiler,
              training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
@@ -134,7 +134,7 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel, device: torch.device,
-                        graph_compiler: TrainingGraphCompiler):
+                        graph_compiler: CtcTrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -154,7 +154,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel, device: torch.device,
-                    graph_compiler: TrainingGraphCompiler,
+                    graph_compiler: CtcTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
@@ -257,7 +257,7 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
-    graph_compiler = TrainingGraphCompiler(
+    graph_compiler = CtcTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
         words=word_symbol_table
