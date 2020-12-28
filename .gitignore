@@ -1,6 +1,6 @@
 
-data/
-exp/
+data*/
+exp*/
 
 .DS_Store
 .vscode/
