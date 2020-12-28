@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+
+# Copyright (c)  2020  JD AI Lab (authors: Lu Fan)
+# Apache 2.0
+
 """
 About the Aishell corpus
 Aishell is an open-source Chinese Mandarin speech corpus published by Beijing Shell Shell Technology Co.,Ltd.
@@ -6,7 +11,6 @@ publicly availble on https://www.openslr.org/33
 
 from collections import defaultdict
 
-import glob
 import json
 import logging
 import shutil
