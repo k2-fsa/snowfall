@@ -5,7 +5,7 @@ import torch
 from k2 import Fsa
 
 
-def compile_LG(L: Fsa, G: Fsa, labels_disambig_id_start: int,
+def compile_LG(L: Fsa, G: Fsa, ctc_topo:Fsa, labels_disambig_id_start: int,
                aux_labels_disambig_id_start: int) -> Fsa:
     """
     Creates a decoding graph using a lexicon fst ``L`` and language model fsa ``G``.
@@ -53,7 +53,18 @@ def compile_LG(L: Fsa, G: Fsa, labels_disambig_id_start: int,
     logging.debug("Connecting rm-eps(det(L*G))")
     LG = k2.connect(LG)
     logging.debug(f'LG shape = {LG.shape}')
-    LG = k2.add_epsilon_self_loops(LG)
+    LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
+
+    logging.debug("Arc sorting")
+    LG = k2.arc_sort(LG)
+
+    logging.debug("Composing")
+    LG = k2.compose(ctc_topo, LG)
+
+    logging.debug("Connecting")
+    LG = k2.connect(LG)
+
+    logging.debug("Arc sorting")
     LG = k2.arc_sort(LG)
     logging.debug(
         f'LG is arc sorted: {(LG.properties & k2.fsa_properties.ARC_SORTED) != 0}'

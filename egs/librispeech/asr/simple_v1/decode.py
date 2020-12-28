@@ -6,6 +6,8 @@
 import logging
 import os
 from pathlib import Path
+from typing import List
+from typing import Optional
 from typing import Union
 
 import k2
@@ -21,6 +23,7 @@ from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.training.ctc_graph import build_ctc_topo
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -40,7 +43,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
-        texts = [texts[idx] for idx in indices]
         assert feature.ndim == 3
 
         feature = feature.to(device)
@@ -63,21 +65,17 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
+
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        best_paths = best_paths.to('cpu')
         assert best_paths.shape[0] == len(texts)
+        hyps = get_texts(best_paths, indices)
+        assert len(hyps) == len(texts)
 
         for i in range(len(texts)):
-            if isinstance(best_paths[i].aux_labels, torch.Tensor):
-                aux_labels = best_paths[i].aux_labels
-            else:
-                # it's a ragged tensor
-                aux_labels = best_paths[i].aux_labels.values()
-            aux_labels = aux_labels[aux_labels > 0]
-            aux_labels = aux_labels.tolist()
-            hyp_words = [symbols.get(x) for x in aux_labels]
-            results.append((texts[i].split(' '), hyp_words))
+            hyp_words = [symbols.get(x) for x in hyps[i]]
+            ref_words = texts[i].split(' ')
+            results.append((ref_words, hyp_words))
 
         if batch_idx % 10 == 0:
             logging.info(
@@ -90,18 +88,57 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     return results
 
 
+def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> List[List[int]]:
+    '''Extract the texts from the best-path FSAs, in the original order (before
+       the permutation given by `indices`).
+       Args:
+           best_paths:  a k2.Fsa with best_paths.arcs.num_axes() == 3, i.e.
+                    containing multiple FSAs, which is expected to be the result
+                    of k2.shortest_path (otherwise the returned values won't
+                    be meaningful).  Must have the 'aux_labels' attribute, as
+                  a ragged tensor.
+           indices: possibly a torch.Tensor giving the permutation that we used
+                    on the supervisions of this minibatch to put them in decreasing
+                    order of num-frames.  We'll apply the inverse permutation.
+                    Doesn't have to be on the same device as `best_paths`
+      Return:
+          Returns a list of lists of int, containing the label sequences we
+          decoded.
+    '''
+    # remove any 0's or -1's (there should be no 0's left but may be -1's.)
+    aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
+    aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
+                                                aux_labels.shape())
+    # remove the states and arcs axes.
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
+    assert(aux_labels.num_axes() == 2)
+    aux_labels, _ = k2.ragged.index(aux_labels,
+                                    invert_permutation(indices).to(dtype=torch.int32,
+                                                                   device=best_paths.device))
+    return k2.ragged.to_list(aux_labels)
+
+
+def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
+    ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
+    ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
+    return ans
+
 def find_first_disambig_symbol(symbols: SymbolTable) -> int:
     return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
 
 
 def main():
     exp_dir = Path('exp-lstm-adam')
-    setup_logger('{}/log/log-decode'.format(exp_dir))
+    setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
+    ctc_topo = k2.arc_sort(ctc_topo)
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -114,11 +151,11 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
-        # TODO(haowen): support save raggedInt
         print("Loading pre-compiled LG")
         d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
@@ -130,7 +167,7 @@ def main():
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=50000,
+                                              max_frames=30000,
                                               shuffle=False,
                                               concat_cuts=False)
     print("About to create test dataloader")
@@ -145,13 +182,14 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-8.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
 
     print("convert LG to device")
     LG = LG.to(device)
+    LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
     LG.requires_grad_(False)
     print("About to decode")
     results = decode(dataloader=test_dl,
@@ -159,9 +197,11 @@ def main():
                      device=device,
                      LG=LG,
                      symbols=symbol_table)
+    s = ''
     for ref, hyp in results:
-        print('ref=', ref)
-        print('hyp=', hyp)
+        s += f'ref={ref}\n'
+        s += f'hyp={hyp}\n'
+    logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
     errors = {
@@ -171,7 +211,7 @@ def main():
     total_words = sum(len(ref) for ref, _ in results)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-    print(
+    logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
     )
