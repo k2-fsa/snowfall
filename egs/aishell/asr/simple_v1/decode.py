@@ -167,7 +167,7 @@ def main():
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=30000,
+                                              max_frames=100000,
                                               shuffle=False,
                                               concat_cuts=False)
     print("About to create test dataloader")
