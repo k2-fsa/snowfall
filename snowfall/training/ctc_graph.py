@@ -8,28 +8,6 @@ import torch
 import k2
 
 
-def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
-    '''Create a bigram phone LM.
-    The resulting FSA (P) has a start-state and a state for
-    each phone 0, 1, ....; and each of the above-mentioned states
-    has a transition to the state for each phone and also to the final-state.
-
-    Caution:
-      blank is not a phone.
-    '''
-    final_state = len(phones) + 1
-    rules = ''
-    for i in range(1, final_state):
-        rules += f'0 {i} {phones[i-1]} 0.0\n'
-
-    for i in range(1, final_state):
-        for j in range(1, final_state):
-            rules += f'{i} {j} {phones[j-1]} 0.0\n'
-        rules += f'{i} {final_state} -1 0.0\n'
-    rules += f'{final_state}'
-    return k2.Fsa.from_str(rules)
-
-
 def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.
 
