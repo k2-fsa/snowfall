@@ -5,7 +5,8 @@ import torch
 from k2 import Fsa
 
 
-def compile_LG(L: Fsa, G: Fsa, ctc_topo:Fsa, labels_disambig_id_start: int,
+def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv: Fsa,
+               labels_disambig_id_start: int,
                aux_labels_disambig_id_start: int) -> Fsa:
     """
     Creates a decoding graph using a lexicon fst ``L`` and language model fsa ``G``.
@@ -46,7 +47,8 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo:Fsa, labels_disambig_id_start: int,
     if isinstance(LG.aux_labels, torch.Tensor):
         LG.aux_labels[LG.aux_labels >= aux_labels_disambig_id_start] = 0
     else:
-        LG.aux_labels.values()[LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
+        LG.aux_labels.values()[
+            LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
     logging.debug("Removing epsilons")
     LG = k2.remove_epsilons_iterative_tropical(LG)
     logging.debug(f'LG shape = {LG.shape}')
@@ -59,7 +61,7 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo:Fsa, labels_disambig_id_start: int,
     LG = k2.arc_sort(LG)
 
     logging.debug("Composing")
-    LG = k2.compose(ctc_topo, LG)
+    LG = k2.compose(ctc_topo_inv, LG)
 
     logging.debug("Connecting")
     LG = k2.connect(LG)
