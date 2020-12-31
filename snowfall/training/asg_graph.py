@@ -108,7 +108,7 @@ class AsgTrainingGraphCompiler(object):
 
         decoding_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
-        assert P.requires_grad is False
+        assert decoding_graphs.requires_grad is False
 
         num = k2.compose(den, decoding_graphs)
         num = k2.connect(num)
