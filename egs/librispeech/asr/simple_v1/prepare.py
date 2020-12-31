@@ -5,13 +5,13 @@
 import multiprocessing
 import os
 import subprocess
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
 import torch
 from lhotse import CutSet, Fbank, LilcomFilesWriter, combine
-from lhotse.augmentation import SoxEffectTransform
 from lhotse.recipes.librispeech import prepare_librispeech
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
@@ -54,7 +54,7 @@ def get_executor():
 
 
 def main():
-    dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
+    dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100', 'train-clean-360', 'train-other-500')
     print("Parts we will prepare: ", dataset_parts)
 
     corpus_dirs = [Path('/export/corpora5/LibriSpeech'),
@@ -76,6 +76,10 @@ def main():
         output_dir=output_dir,
         num_jobs=num_jobs
     )
+
+    for k in ['recordings', 'supervisions']:
+        librispeech_manifests['train-clean-100'][k] = combine(
+            librispeech_manifests[p][k] for p in ['train-clean-100', 'train-clean-360', 'train-other-500'])
 
     print('Feature extraction:')
     with get_executor() as ex:  # Initialize the executor only once.
