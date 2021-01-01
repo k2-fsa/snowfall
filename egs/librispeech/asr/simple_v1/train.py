@@ -29,7 +29,9 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
+from snowfall.training.asg_graph import get_phone_symbols
+from snowfall.training.asg_graph import create_bigram_phone_lm
+from snowfall.training.asg_graph import AsgTrainingGraphCompiler
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -67,9 +69,10 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
 
 def get_objf(batch: Dict,
              model: AcousticModel,
+             P: k2.Fsa,
              device: torch.device,
-             graph_compiler: CtcTrainingGraphCompiler,
-             training: bool,
+             graph_compiler: AsgTrainingGraphCompiler,
+             is_training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
@@ -90,7 +93,7 @@ def get_objf(batch: Dict,
     feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if training:
+    if is_training:
         nnet_output = model(feature)
     else:
         with torch.no_grad():
@@ -99,29 +102,42 @@ def get_objf(batch: Dict,
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-    decoding_graph = graph_compiler.compile(texts).to(device)
+    if is_training:
+        num, den = graph_compiler.compile(texts, P)
+    else:
+        with torch.no_grad():
+            num, den = graph_compiler.compile(texts, P)
+
+    assert num.requires_grad == is_training
+    assert den.requires_grad is False
+    num = num.to(device)
+    den = den.to(device)
+
 
     # nnet_output2 = nnet_output.clone()
     # blank_bias = -7.0
     # nnet_output2[:,:,0] += blank_bias
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert decoding_graph.is_cuda()
-    assert decoding_graph.device == device
     assert nnet_output.device == device
     # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-    target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
+    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
+    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 
-    tot_scores = k2.get_tot_scores(target_graph,
-                                   log_semiring=True,
-                                   use_double_scores=True)
+    num_tot_scores = k2.get_tot_scores(num,
+                                       log_semiring=True,
+                                       use_double_scores=True)
+    den_tot_scores = k2.get_tot_scores(den,
+                                       log_semiring=True,
+                                       use_double_scores=True)
+    tot_scores = num_tot_scores - den_tot_scores
 
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
-    if training:
+    if is_training:
         optimizer.zero_grad()
         (-tot_score).backward()
         clip_grad_value_(model.parameters(), 5.0)
@@ -133,8 +149,10 @@ def get_objf(batch: Dict,
 
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
-                        model: AcousticModel, device: torch.device,
-                        graph_compiler: CtcTrainingGraphCompiler):
+                        model: AcousticModel,
+                        P: k2.Fsa,
+                        device: torch.device,
+                        graph_compiler: AsgTrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -142,7 +160,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, device,
+        objf, frames, all_frames = get_objf(batch, model, P, device,
                                             graph_compiler, False)
         total_objf += objf
         total_frames += frames
@@ -153,8 +171,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, device: torch.device,
-                    graph_compiler: CtcTrainingGraphCompiler,
+                    model: AcousticModel, P: k2.Fsa,
+                    device: torch.device,
+                    graph_compiler: AsgTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
@@ -166,12 +185,22 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
     prev_timestamp = datetime.now()
 
     model.train()
+    ragged_shape = P.arcs.shape().to(device)
     for batch_idx, batch in enumerate(dataloader):
         global_batch_idx_train += 1
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
+
+        P_scores = model.P_scores
+        ragged_P_scores = k2.ragged.RaggedFloat(ragged_shape, P_scores)
+        normalized_ragged_P_scores = k2.ragged.normalize_scores(ragged_P_scores)
+
+        # P is on CPU since `k2.intersect` supports only CPU
+        P.scores = normalized_ragged_P_scores.scores.cpu()
+        assert P.requires_grad is True
+
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-            get_objf(batch, model, device, graph_compiler, True, optimizer)
+            get_objf(batch, model, P, device, graph_compiler, True, optimizer)
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
@@ -205,6 +234,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                P=P,
                 device=device,
                 graph_compiler=graph_compiler)
             global_batch_idx_valid += 1
@@ -257,11 +287,14 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
-    graph_compiler = CtcTrainingGraphCompiler(
+    graph_compiler = AsgTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
         words=word_symbol_table
     )
+    phone_ids = get_phone_symbols(phone_symbol_table)
+    P = create_bigram_phone_lm(phone_ids)
+    P.set_scores_stochastic_()
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -297,6 +330,8 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
+    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
+
 
     learning_rate = 0.00001
     start_epoch = 0
@@ -338,6 +373,7 @@ def main():
         objf = train_one_epoch(dataloader=train_dl,
                                valid_dataloader=valid_dl,
                                model=model,
+                               P=P,
                                device=device,
                                graph_compiler=graph_compiler,
                                optimizer=optimizer,

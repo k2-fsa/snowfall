@@ -24,6 +24,8 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     Returns:
       Returns an FST that converts repeated tokens to a single token.
     '''
+    assert 0 in tokens, 'We assume 0 is ID of the blank symbol'
+
     num_states = len(tokens)
     final_state = num_states
     rules = ''

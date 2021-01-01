@@ -3,6 +3,7 @@
 from functools import lru_cache
 from typing import Iterable
 from typing import List
+from typing import Tuple
 
 import re
 
@@ -12,13 +13,12 @@ import torch
 from .ctc_graph import build_ctc_topo
 
 
-def filter_disambig_symbols(symbol_table: k2.SymbolTable,
-                            pattern: str = '#') -> List[int]:
+def get_phone_symbols(symbol_table: k2.SymbolTable,
+                      pattern: str = r'^#\d+$') -> List[int]:
     '''Return a list of phone IDs containing no disambiguation symbols.
 
     Caution:
-      You may need to remove the ID with value 0 if the return value
-      is used to create a phone LM.
+      0 is not a phone ID so it is excluded from the return value.
 
     Args:
       symbol_table:
@@ -32,20 +32,30 @@ def filter_disambig_symbols(symbol_table: k2.SymbolTable,
     symbols = symbol_table.symbols
     ans = []
     for s in symbols:
-        if not regex.search(s):
+        if not regex.match(s):
             ans.append(symbol_table[s])
+    if 0 in ans:
+        ans.remove(0)
+    ans.sort()
     return ans
 
 
 def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
     '''Create a bigram phone LM.
     The resulting FSA (P) has a start-state and a state for
-    each phone 0, 1, ....; and each of the above-mentioned states
+    each phone 1, 2, ....; and each of the above-mentioned states
     has a transition to the state for each phone and also to the final-state.
 
     Caution:
       blank is not a phone.
+
+    Args:
+      A list of phone IDs.
+
+    Returns:
+      An FSA representing the bigram phone LM.
     '''
+    assert 0 not in phones
     final_state = len(phones) + 1
     rules = ''
     for i in range(1, final_state):
@@ -56,7 +66,6 @@ def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
             rules += f'{i} {j} {phones[j-1]} 0.0\n'
         rules += f'{i} {final_state} -1 0.0\n'
     rules += f'{final_state}'
-    print(len(rules.split('\n')))
     return k2.Fsa.from_str(rules)
 
 
@@ -91,34 +100,61 @@ class AsgTrainingGraphCompiler(object):
         self.words = words
         self.oov = oov
 
-        # note that `non_disambig_ids` contains 0, which represents
-        # blank in the context of CTC.
-        non_disambig_ids = filter_disambig_symbols(phones)
+        phone_symbols = get_phone_symbols(phones)
+        phone_symbols_with_blank = [0] + phone_symbols
 
-        ctc_topo = build_ctc_topo(non_disambig_ids)
+        ctc_topo = build_ctc_topo(phone_symbols_with_blank)
         assert ctc_topo.requires_grad is False
 
         self.ctc_topo = ctc_topo
 
-    def compile(self, texts: Iterable[str], P: k2.Fsa) -> k2.Fsa:
-        assert P.requires_grad is True
+    def compile(self, texts: Iterable[str],
+                P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
+        '''Create numerator and denominator graphs from transcripts
+        and the bigram phone LM.
+
+        Args:
+          texts:
+            A list of transcripts. Within a transcript, words are
+            separated by spaces.
+          P:
+            The bigram phone LM created by :func:`create_bigram_phone_lm`.
+        Returns:
+          A tuple (num_graph, den_graph), where
+
+            - `num_graph` is the numerator graph. It is an FsaVec with
+              shape `(len(texts), None, None)`.
+
+            - `den_graph` is the denominator grap. It is an FsaVec with the same
+              shape of the `num_graph`.
+        '''
+        assert P.is_cpu()
 
         den = k2.intersect(self.ctc_topo, P).invert_()
         den = k2.connect(den)
 
         decoding_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
-        assert decoding_graphs.requires_grad is False
 
         num = k2.compose(den, decoding_graphs)
         num = k2.connect(num)
         num = k2.arc_sort(num)
-        assert num.requires_grad is True
 
-        return num, den.detach()
+        den = k2.create_fsa_vec([den.detach()] * len(texts))
+
+        return num, den
 
     @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:
+        '''Convert transcript to an Fsa.
+
+        Args:
+          text:
+            The transcript containing words separated by spaces.
+
+        Returns:
+          Return an FSA corresponding to the transcript.
+        '''
         tokens = (token if token in self.words else self.oov
                   for token in text.split(' '))
         word_ids = [self.words[token] for token in tokens]
