@@ -5,7 +5,8 @@ import torch
 from k2 import Fsa
 
 
-def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv: Fsa,
+def compile_LG(L: Fsa, G: Fsa, ctc_topo: Fsa,
+               P: k2.Fsa,
                labels_disambig_id_start: int,
                aux_labels_disambig_id_start: int) -> Fsa:
     """
@@ -20,6 +21,10 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv: Fsa,
         G:
             An ``Fsa`` that represents the language model (G), i.e. it's an acceptor
             with words as ``symbols``.
+        ctc_topo:
+            The epsilons are on the left side, i.e., as ilabels.
+        P:
+            A bigram phone LM.
         labels_disambig_id_start:
             An integer ID corresponding to the first disambiguation symbol in the
             phonetic alphabet.
@@ -28,6 +33,13 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv: Fsa,
             words vocabulary.
     :return:
     """
+    logging.debug("Building the denominator graph")
+    den = k2.intersect(ctc_topo, P).invert_()
+
+    logging.debug("Connecting the denominator graph")
+    den = k2.connect(den)
+    den = k2.arc_sort(den)
+
     L_inv = k2.arc_sort(L.invert_())
     G = k2.arc_sort(G)
     logging.debug("Intersecting L and G")
@@ -61,7 +73,7 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv: Fsa,
     LG = k2.arc_sort(LG)
 
     logging.debug("Composing")
-    LG = k2.compose(ctc_topo_inv, LG)
+    LG = k2.compose(den, LG)
 
     logging.debug("Connecting")
     LG = k2.connect(LG)

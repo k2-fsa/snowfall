@@ -24,6 +24,8 @@ from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
+from snowfall.training.asg_graph import get_phone_symbols
+from snowfall.training.asg_graph import create_bigram_phone_lm
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -137,8 +139,27 @@ def main():
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
-    ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
+
+    phone_ids = get_phone_symbols(phone_symbol_table)
+    P = create_bigram_phone_lm(phone_ids)
+
+    phone_ids_with_blank = [0] + phone_ids
+    ctc_topo = build_ctc_topo(phone_ids_with_blank)
+
+    print("About to load model")
+    # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
+    # device = torch.device('cuda', 1)
+    device = torch.device('cuda')
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
+
+    checkpoint = os.path.join(exp_dir, 'epoch-6.pt')
+    load_checkpoint(checkpoint, model)
+    model.to(device)
+    model.eval()
+
+    P.scores = model.P_scores.cpu()
+    assert P.requires_grad is False
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -151,7 +172,8 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo_inv=ctc_topo_inv,
+                        ctc_topo=ctc_topo,
+                        P=P,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
@@ -177,15 +199,6 @@ def main():
     #  logging.error('No GPU detected!')
     #  sys.exit(-1)
 
-    print("About to load model")
-    # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
-    # device = torch.device('cuda', 1)
-    device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
-    load_checkpoint(checkpoint, model)
-    model.to(device)
-    model.eval()
 
     print("convert LG to device")
     LG = LG.to(device)
