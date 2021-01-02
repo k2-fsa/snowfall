@@ -329,13 +329,15 @@ def main():
     logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
+    model = TdnnLstm1b(num_features=40,
+                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
 
-    learning_rate = 0.00001
+    learning_rate = 1e-3
     start_epoch = 0
-    num_epochs = 8
+    num_epochs = 10
     best_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
@@ -352,7 +354,7 @@ def main():
     model.to(device)
     describe(model)
 
-    # optimizer = optim.SGD(model.parameters(),
+    #  optimizer = optim.SGD(model.parameters(),
     #                       lr=learning_rate,
     #                       momentum=0.9,
     #                       weight_decay=5e-4)
@@ -360,11 +362,13 @@ def main():
                             # lr=learning_rate,
                             weight_decay=5e-4)
 
+    curr_learning_rate = learning_rate
     for epoch in range(start_epoch, num_epochs):
-        curr_learning_rate = 1e-3
         # curr_learning_rate = learning_rate * pow(0.4, epoch)
-        # for param_group in optimizer.param_groups:
-        #     param_group['lr'] = curr_learning_rate
+        if epoch > 6:
+            curr_learning_rate *= 0.8
+        for param_group in optimizer.param_groups:
+           param_group['lr'] = curr_learning_rate
 
         tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
 

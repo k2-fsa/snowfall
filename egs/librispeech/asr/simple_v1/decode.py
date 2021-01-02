@@ -146,14 +146,16 @@ def main():
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = build_ctc_topo(phone_ids_with_blank)
 
-    print("About to load model")
+    logging.debug("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    model = TdnnLstm1b(num_features=40,
+                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
-    checkpoint = os.path.join(exp_dir, 'epoch-6.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -162,37 +164,54 @@ def main():
     assert P.requires_grad is False
 
     if not os.path.exists(lang_dir / 'LG.pt'):
-        print("Loading L_disambig.fst.txt")
+        logging.debug("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        print("Loading G.fsa.txt")
+        logging.debug("Loading G.fsa.txt")
         with open(lang_dir / 'G.fsa.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=True)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo=ctc_topo,
-                        P=P,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
     else:
-        print("Loading pre-compiled LG")
+        logging.debug("Loading pre-compiled LG")
         d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
 
+    # the following graph operations are put outside of `compile_LG`
+    # since `P` contains parameters depending on models. P is changed
+    # whenever decode.py uses a model from a different epoch.
+    logging.debug("Building the denominator graph")
+    den = k2.intersect(ctc_topo, P).invert_()
+
+    logging.debug("Connecting the denominator graph")
+    den = k2.connect(den)
+    den = k2.arc_sort(den)
+
+    logging.debug("Composing")
+    LG = k2.compose(den, LG)
+
+    logging.debug("Connecting")
+    LG = k2.connect(LG)
+
+    logging.debug("Arc sorting")
+    LG = k2.arc_sort(LG)
+
     # load dataset
     feature_dir = Path('exp/data')
-    print("About to get test cuts")
+    logging.debug("About to get test cuts")
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
-    print("About to create test dataset")
+    logging.debug("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
                                               max_frames=100000,
                                               shuffle=False,
                                               concat_cuts=False)
-    print("About to create test dataloader")
+    logging.debug("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
 
     #  if not torch.cuda.is_available():
@@ -200,11 +219,11 @@ def main():
     #  sys.exit(-1)
 
 
-    print("convert LG to device")
+    logging.debug("convert LG to device")
     LG = LG.to(device)
     LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
     LG.requires_grad_(False)
-    print("About to decode")
+    logging.debug("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
                      device=device,
