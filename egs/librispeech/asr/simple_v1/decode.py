@@ -56,8 +56,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
-        blank_bias = -3.0
-        nnet_output[:, :, 0] += blank_bias
+        #  blank_bias = -3.0
+        #  nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
         # assert LG.is_cuda()
@@ -182,18 +182,23 @@ def main():
         d = torch.load(lang_dir / 'LG.pt')
         LG = k2.Fsa.from_dict(d)
 
-    # the following graph operations are put outside of `compile_LG`
-    # since `P` contains parameters depending on models. P is changed
-    # whenever decode.py uses a model from a different epoch.
-    logging.debug("Building the denominator graph")
-    den = k2.intersect(ctc_topo, P).invert_()
+    if True:
+        ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
+        logging.debug("Composing")
+        LG = k2.compose(ctc_topo_inv, LG)
+    else:
+        # the following graph operations are put outside of `compile_LG`
+        # since `P` contains parameters depending on models. P is changed
+        # whenever decode.py uses a model from a different epoch.
+        logging.debug("Building the denominator graph")
+        den = k2.intersect(ctc_topo, P).invert_()
 
-    logging.debug("Connecting the denominator graph")
-    den = k2.connect(den)
-    den = k2.arc_sort(den)
+        logging.debug("Connecting the denominator graph")
+        den = k2.connect(den)
+        den = k2.arc_sort(den)
 
-    logging.debug("Composing")
-    LG = k2.compose(den, LG)
+        logging.debug("Composing")
+        LG = k2.compose(den, LG)
 
     logging.debug("Connecting")
     LG = k2.connect(LG)
