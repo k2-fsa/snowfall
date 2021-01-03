@@ -1,6 +1,7 @@
 k2
 kaldialign
 lhotse@git+https://github.com/lhotse-speech/lhotse
+prettytable
 tensorboard
 torch>=1.6.0
 torchaudio

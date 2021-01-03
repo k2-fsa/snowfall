@@ -11,6 +11,7 @@ from typing import Optional
 from typing import Union
 
 import k2
+import numpy as np
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
@@ -131,6 +132,58 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
     return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
 
 
+def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
+                                   phone_ids: List[int]):
+    '''Print the transition probabilities of a phone LM.
+
+    Args:
+      P:
+        A bigram phone LM.
+      phone_symbol_table:
+        The phone symbol table.
+      phone_ids:
+        A list of phone ids
+    '''
+    num_phones = len(phone_ids)
+    #  table = [[None] * (num_phones + 1)] * (num_phones + 1)
+    table = np.empty((num_phones + 1, num_phones + 1))
+    table[:, 0] = 0
+    assert P.arcs.dim0() == num_phones + 2
+    arcs = P.arcs.values()[:, :3]
+    probability = P.scores.exp().tolist()
+    assert arcs.shape[0] - num_phones == num_phones * (num_phones + 1)
+    for i, arc in enumerate(arcs.tolist()):
+        src_state, dest_state, label = arc[0], arc[1], arc[2]
+        if label != -1:
+            prob = probability[i]
+            assert label == dest_state
+            table[src_state][dest_state] = prob
+
+    from prettytable import PrettyTable
+    x = PrettyTable()
+
+    field_names = ['source']
+    field_names.append('sum')
+    for i in phone_ids:
+        field_names.append(phone_symbol_table[i])
+
+    x.field_names = field_names
+
+    for row in range(num_phones + 1):
+        this_row = []
+        if row == 0:
+            this_row.append('start')
+        else:
+            this_row.append(phone_symbol_table[row])
+        this_row.append('{:.6f}'.format(table[row, 1:].sum()))
+        for col in range(1, num_phones + 1):
+            this_row.append('{:.6f}'.format(table[row, col]))
+        x.add_row(this_row)
+    with open('P.txt', 'w') as f:
+        f.write(str(x))
+
+
+
 def main():
     exp_dir = Path('exp-lstm-adam')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
@@ -162,6 +215,7 @@ def main():
 
     P.scores = model.P_scores.cpu()
     assert P.requires_grad is False
+    print_transition_probabilities(P, phone_symbol_table, phone_ids)
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
