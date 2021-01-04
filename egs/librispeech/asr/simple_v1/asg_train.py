@@ -120,8 +120,7 @@ def get_objf(batch: Dict,
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
-    # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
-    # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
+
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
     den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 

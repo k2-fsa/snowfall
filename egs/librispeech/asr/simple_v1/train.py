@@ -109,8 +109,7 @@ def get_objf(batch: Dict,
     assert decoding_graph.is_cuda()
     assert decoding_graph.device == device
     assert nnet_output.device == device
-    # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
-    # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
+
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
     tot_scores = k2.get_tot_scores(target_graph,
