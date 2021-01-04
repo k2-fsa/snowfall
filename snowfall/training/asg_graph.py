@@ -130,17 +130,17 @@ class AsgTrainingGraphCompiler(object):
         '''
         assert P.is_cpu()
 
-        den = k2.intersect(self.ctc_topo, P).invert_()
-        den = k2.connect(den)
+        ctc_topo_P = k2.intersect(self.ctc_topo, P).invert_()
+        ctc_topo_P = k2.connect(ctc_topo_P)
 
         num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        num = k2.compose(den, num_graphs)
+        num = k2.compose(ctc_topo_P, num_graphs)
         num = k2.connect(num)
         num = k2.arc_sort(num)
 
-        den = k2.create_fsa_vec([den.detach()] * len(texts))
+        den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
 
         return num, den
 
