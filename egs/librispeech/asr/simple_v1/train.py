@@ -191,12 +191,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        P_scores = model.P_scores
-        ragged_P_scores = k2.ragged.RaggedFloat(ragged_shape, P_scores)
-        normalized_ragged_P_scores = k2.ragged.normalize_scores(ragged_P_scores)
-
-        # P is on CPU since `k2.intersect` supports only CPU
-        P.scores = normalized_ragged_P_scores.scores.cpu()
+        P.set_scores_stochastic_(model.P_scores)
+        assert P.is_cpu
         assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
@@ -269,7 +265,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam'
+    exp_dir = 'exp-lstm-adam2'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -294,7 +290,6 @@ def main():
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
-    P.set_scores_stochastic_()
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -337,7 +332,7 @@ def main():
 
     learning_rate = 1e-3
     start_epoch = 0
-    num_epochs = 10
+    num_epochs = 5
     best_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')

@@ -133,7 +133,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
-                                   phone_ids: List[int]):
+                                   phone_ids: List[int], filename: str):
     '''Print the transition probabilities of a phone LM.
 
     Args:
@@ -143,29 +143,40 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
         The phone symbol table.
       phone_ids:
         A list of phone ids
+      filename:
+        Filename to save the printed result.
     '''
     num_phones = len(phone_ids)
-    #  table = [[None] * (num_phones + 1)] * (num_phones + 1)
-    table = np.empty((num_phones + 1, num_phones + 1))
+    table = np.zeros((num_phones + 1, num_phones + 2))
     table[:, 0] = 0
+    table[0, -1] = 0 # the start state has no arcs to the final state
     assert P.arcs.dim0() == num_phones + 2
     arcs = P.arcs.values()[:, :3]
     probability = P.scores.exp().tolist()
+
     assert arcs.shape[0] - num_phones == num_phones * (num_phones + 1)
     for i, arc in enumerate(arcs.tolist()):
         src_state, dest_state, label = arc[0], arc[1], arc[2]
+        prob = probability[i]
         if label != -1:
-            prob = probability[i]
             assert label == dest_state
-            table[src_state][dest_state] = prob
+        else:
+            assert dest_state == num_phones + 1
+        table[src_state][dest_state] = prob
 
-    from prettytable import PrettyTable
+    try:
+        from prettytable import PrettyTable
+    except ImportError:
+        print('Please run `pip install prettytable`. Skip printing')
+        return
+
     x = PrettyTable()
 
     field_names = ['source']
     field_names.append('sum')
     for i in phone_ids:
         field_names.append(phone_symbol_table[i])
+    field_names.append('final')
 
     x.field_names = field_names
 
@@ -176,12 +187,11 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
         else:
             this_row.append(phone_symbol_table[row])
         this_row.append('{:.6f}'.format(table[row, 1:].sum()))
-        for col in range(1, num_phones + 1):
+        for col in range(1, num_phones + 2):
             this_row.append('{:.6f}'.format(table[row, col]))
         x.add_row(this_row)
-    with open('P.txt', 'w') as f:
+    with open(filename, 'w') as f:
         f.write(str(x))
-
 
 
 def main():
@@ -208,14 +218,17 @@ def main():
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-5.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
 
-    P.scores = model.P_scores.cpu()
     assert P.requires_grad is False
-    print_transition_probabilities(P, phone_symbol_table, phone_ids)
+    P.scores = model.P_scores.cpu()
+    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='model_P_scores.txt')
+
+    P.set_scores_stochastic_(model.P_scores)
+    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         logging.debug("Loading L_disambig.fst.txt")

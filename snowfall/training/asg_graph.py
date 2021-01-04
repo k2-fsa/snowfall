@@ -125,7 +125,7 @@ class AsgTrainingGraphCompiler(object):
             - `num_graph` is the numerator graph. It is an FsaVec with
               shape `(len(texts), None, None)`.
 
-            - `den_graph` is the denominator grap. It is an FsaVec with the same
+            - `den_graph` is the denominator graph. It is an FsaVec with the same
               shape of the `num_graph`.
         '''
         assert P.is_cpu()
@@ -133,10 +133,10 @@ class AsgTrainingGraphCompiler(object):
         den = k2.intersect(self.ctc_topo, P).invert_()
         den = k2.connect(den)
 
-        decoding_graphs = k2.create_fsa_vec(
+        num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        num = k2.compose(den, decoding_graphs)
+        num = k2.compose(den, num_graphs)
         num = k2.connect(num)
         num = k2.arc_sort(num)
 
@@ -146,19 +146,21 @@ class AsgTrainingGraphCompiler(object):
 
     @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:
-        '''Convert transcript to an Fsa.
+        '''Convert transcript to an Fsa with the help of lexicon
+        and word symbol table.
 
         Args:
           text:
             The transcript containing words separated by spaces.
 
         Returns:
-          Return an FSA corresponding to the transcript.
+          Return an FST corresponding to the transcript. Its `labels` are
+          phone IDs and `aux_labels` are word IDs.
         '''
         tokens = (token if token in self.words else self.oov
                   for token in text.split(' '))
         word_ids = [self.words[token] for token in tokens]
         fsa = k2.linear_fsa(word_ids)
-        decoding_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
-        decoding_graph = k2.arc_sort(decoding_graph)
-        return decoding_graph
+        num_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
+        num_graph = k2.arc_sort(num_graph)
+        return num_graph
