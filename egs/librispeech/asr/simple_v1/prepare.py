@@ -2,26 +2,23 @@
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
 # Apache 2.0
-import multiprocessing
 import os
 import subprocess
 import sys
-from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from lhotse import CutSet, Fbank, LilcomFilesWriter, combine
+from lhotse import CutSet, Fbank, LilcomHdf5Writer
 from lhotse.recipes.librispeech import prepare_librispeech
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
-# slow things down.  Do this outside of main() because it needs to take effect
-# even when we are not invoking the main (notice: "spawn" is the method used
-# in multiprocessing, which is to get around some problems with torchaudio's invocation of
-# sox).
+# slow things down.  Do this outside of main() in case it needs to take effect
+# even when we are not invoking the main (e.g. when spawning subprocesses).
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 num_jobs = min(15, os.cpu_count())
+full_libri = False
 
 
 @contextmanager
@@ -49,12 +46,17 @@ def get_executor():
             return
     except:
         pass
-    # Return a local node process pool (single node processing)
-    yield ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn"))
+    # No need to return anything - compute_and_store_features
+    # will just instantiate the pool itself.
+    yield None
 
 
 def main():
-    dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100', 'train-clean-360', 'train-other-500')
+    if full_libri:
+        dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100', 'train-clean-360', 'train-other-500')
+    else:
+        dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
+
     print("Parts we will prepare: ", dataset_parts)
 
     corpus_dirs = [Path('/export/corpora5/LibriSpeech'),
@@ -77,10 +79,6 @@ def main():
         num_jobs=num_jobs
     )
 
-    for k in ['recordings', 'supervisions']:
-        librispeech_manifests['train-clean-100'][k] = combine(
-            librispeech_manifests[p][k] for p in ['train-clean-100', 'train-clean-360', 'train-other-500'])
-
     print('Feature extraction:')
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in librispeech_manifests.items():
@@ -96,8 +94,11 @@ def main():
                 cut_set = cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
             cut_set = cut_set.compute_and_store_features(
                 extractor=Fbank(),
+                storage_path=f'{output_dir}/feats_{partition}',
+                # when an executor is specified, make more partitions
+                num_jobs=num_jobs if ex is not None else 80,
                 executor=ex,
-                storage=LilcomFilesWriter(f'{output_dir}/feats_{partition}')
+                storage_type=LilcomHdf5Writer
             )
             librispeech_manifests[partition]['cuts'] = cut_set
             cut_set.to_json(output_dir / f'cuts_{partition}.json.gz')
