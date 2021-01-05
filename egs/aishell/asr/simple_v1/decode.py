@@ -130,7 +130,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-ctc')
+    exp_dir = Path('exp-lstm-adam')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -138,7 +138,7 @@ def main():
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
-    ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
+    ctc_topo = k2.arc_sort(ctc_topo)
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -151,7 +151,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo_inv=ctc_topo_inv,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
@@ -163,7 +163,7 @@ def main():
     # load dataset
     feature_dir = Path('exp/data')
     print("About to get test cuts")
-    cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
+    cuts_test = CutSet.from_json(feature_dir / 'cuts_test.json.gz')
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
@@ -182,7 +182,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
-    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
+    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -198,22 +198,34 @@ def main():
                      LG=LG,
                      symbols=symbol_table)
     s = ''
+    results2 = []
     for ref, hyp in results:
         s += f'ref={ref}\n'
         s += f'hyp={hyp}\n'
+        results2.append((list(''.join(ref)), list(''.join(hyp))))
     logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
+    dists2 = [edit_distance(r, h) for r, h in results2]
     errors = {
         key: sum(dist[key] for dist in dists)
         for key in ['sub', 'ins', 'del', 'total']
     }
+    errors2 = {
+        key: sum(dist[key] for dist in dists2)
+        for key in ['sub', 'ins', 'del', 'total']
+    }
     total_words = sum(len(ref) for ref, _ in results)
+    total_chars = sum(len(ref) for ref, _ in results2)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
     logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
+    )
+    logging.info(
+        f'%WER {errors2["total"] / total_chars:.2%} '
+        f'[{errors2["total"]} / {total_chars}, {errors2["ins"]} ins, {errors2["del"]} del, {errors2["sub"]} sub ]'
     )
 
 

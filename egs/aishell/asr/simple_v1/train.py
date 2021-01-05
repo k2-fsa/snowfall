@@ -109,7 +109,8 @@ def get_objf(batch: Dict,
     assert decoding_graph.is_cuda()
     assert decoding_graph.device == device
     assert nnet_output.device == device
-
+    # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
+    # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
     tot_scores = k2.get_tot_scores(target_graph,
@@ -176,7 +177,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0:
+        if batch_idx > 0 and batch_idx % 10 == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -238,7 +239,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam-ctc'
+    exp_dir = 'exp-lstm-adam'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -259,16 +260,17 @@ def main():
     graph_compiler = CtcTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        oov='<SPOKEN_NOISE>'
     )
 
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
     cuts_train = CutSet.from_json(feature_dir /
-                                  'cuts_train-clean-100.json.gz')
+                                  'cuts_train.json.gz')
     logging.info("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
+    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev.json.gz')
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
@@ -299,7 +301,7 @@ def main():
 
     learning_rate = 0.00001
     start_epoch = 0
-    num_epochs = 8
+    num_epochs = 10
     best_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
