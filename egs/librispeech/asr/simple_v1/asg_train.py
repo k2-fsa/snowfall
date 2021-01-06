@@ -289,8 +289,7 @@ def main():
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
-    scores = torch.randn(P.scores.numel(), dtype=torch.float32)
-    P.set_scores_stochastic_(scores)
+    P.scores = torch.zeros_like(P.scores)
 
     # load dataset
     feature_dir = Path('exp/data')
