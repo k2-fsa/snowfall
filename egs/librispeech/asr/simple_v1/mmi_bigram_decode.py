@@ -25,8 +25,8 @@ from snowfall.models import AcousticModel
 from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
-from snowfall.training.asg_graph import get_phone_symbols
-from snowfall.training.asg_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import get_phone_symbols
+from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -195,7 +195,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-asg')
+    exp_dir = Path('exp-lstm-adam-mmi-bigram')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
