@@ -29,9 +29,9 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.asg_graph import get_phone_symbols
-from snowfall.training.asg_graph import create_bigram_phone_lm
-from snowfall.training.asg_graph import AsgTrainingGraphCompiler
+from snowfall.training.mmi_graph import get_phone_symbols
+from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -71,7 +71,7 @@ def get_objf(batch: Dict,
              model: AcousticModel,
              P: k2.Fsa,
              device: torch.device,
-             graph_compiler: AsgTrainingGraphCompiler,
+             graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
@@ -151,7 +151,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         P: k2.Fsa,
                         device: torch.device,
-                        graph_compiler: AsgTrainingGraphCompiler):
+                        graph_compiler: MmiTrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -172,7 +172,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel, P: k2.Fsa,
                     device: torch.device,
-                    graph_compiler: AsgTrainingGraphCompiler,
+                    graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
@@ -264,7 +264,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam-asg'
+    exp_dir = 'exp-lstm-adam-mmi-bigram'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -282,7 +282,7 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
-    graph_compiler = AsgTrainingGraphCompiler(
+    graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
         words=word_symbol_table
