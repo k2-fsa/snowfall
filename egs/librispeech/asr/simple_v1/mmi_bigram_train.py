@@ -15,23 +15,35 @@ import k2
 import numpy as np
 import torch
 import torch.optim as optim
-
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 from lhotse.utils import fix_random_seed
-
+from torch import distributed as dist
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 
-from snowfall.common import save_checkpoint, load_checkpoint
+from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.mmi_graph import get_phone_symbols
-from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
+from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import get_phone_symbols
+
+
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # initialize the process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+
+
+def cleanup():
+    dist.destroy_process_group()
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -261,7 +273,17 @@ def describe(model: nn.Module):
     print('=' * 80)
 
 
+def get_parser():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--world-size', default=1)
+    parser.add_argument('--rank', default=0)
+    return parser
+
+
 def main():
+    args = get_parser().parse_args()
+    print('World size:', args.world_size, 'Rank:', args.rank)
     fix_random_seed(42)
 
     exp_dir = 'exp-lstm-adam-mmi-bigram'
@@ -325,10 +347,11 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
-
+    if args.world_size > 1:
+        model = DDP(model)
 
     learning_rate = 1e-3
     start_epoch = 0
@@ -337,8 +360,8 @@ def main():
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0 # for logging only
-    global_batch_idx_valid = 0 # for logging only
+    global_batch_idx_train = 0  # for logging only
+    global_batch_idx_valid = 0  # for logging only
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
@@ -416,6 +439,7 @@ def main():
                            best_epoch=best_epoch)
 
     logging.warning('Done')
+    cleanup()
 
 
 torch.set_num_threads(1)
