@@ -91,9 +91,9 @@ def get_objf(batch: Dict,
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
          torch.floor_divide(supervisions['start_frame'],
-                            model.subsampling_factor),
+                            model.module.subsampling_factor),
          torch.floor_divide(supervisions['num_frames'],
-                            model.subsampling_factor)), 1).to(torch.int32)
+                            model.module.subsampling_factor)), 1).to(torch.int32)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -202,7 +202,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        P.set_scores_stochastic_(model.P_scores)
+        P.set_scores_stochastic_(model.module.P_scores)
         assert P.is_cpu
         assert P.requires_grad is True
 
@@ -276,14 +276,16 @@ def describe(model: nn.Module):
 def get_parser():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--world-size', default=1)
-    parser.add_argument('--rank', default=0)
+    parser.add_argument('--world-size', default=1, type=int)
+    parser.add_argument('--rank', default=1, type=int)
     return parser
 
 
 def main():
     args = get_parser().parse_args()
+    args.rank = args.rank - 1  # SGE...
     print('World size:', args.world_size, 'Rank:', args.rank)
+    setup(args.rank, args.world_size)
     fix_random_seed(42)
 
     exp_dir = 'exp-lstm-adam-mmi-bigram'
@@ -323,11 +325,11 @@ def main():
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=90000,
+                                               max_frames=40000,
                                                shuffle=True)
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=90000,
+                                                  max_frames=30000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     logging.info("About to create train dataloader")
