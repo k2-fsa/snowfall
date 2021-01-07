@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Tuple, Union
 
 import torch
+from torch import distributed as dist
 
 from snowfall.models import AcousticModel
 
@@ -93,13 +94,23 @@ def save_checkpoint(
         objf=objf))
     checkpoint = {
         'state_dict': model.state_dict(),
-        'num_features': model.num_features,
-        'num_classes': model.num_classes,
-        'subsampling_factor': model.subsampling_factor,
         'epoch': epoch,
         'learning_rate': learning_rate,
         'objf': objf
     }
+    if hasattr(model, 'module'):
+        # Saving checkpoint from DDP model
+        checkpoint.update({
+            'num_features': model.module.num_features,
+            'num_classes': model.module.num_classes,
+            'subsampling_factor': model.module.subsampling_factor,
+        })
+    else:
+        checkpoint.update({
+            'num_features': model.num_features,
+            'num_classes': model.num_classes,
+            'subsampling_factor': model.subsampling_factor,
+        })
     torch.save(checkpoint, filename)
 
 

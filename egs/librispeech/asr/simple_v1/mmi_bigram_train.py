@@ -37,8 +37,6 @@ from snowfall.training.mmi_graph import get_phone_symbols
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-
-    # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 
@@ -213,7 +211,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0:
+        if batch_idx % 10 == 0 and dist.get_rank() == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -334,7 +332,7 @@ def main():
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
-                                           num_workers=4)
+                                           num_workers=1)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,
@@ -351,8 +349,6 @@ def main():
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
-    if args.world_size > 1:
-        model = DDP(model)
 
     learning_rate = 1e-3
     start_epoch = 0
@@ -371,6 +367,9 @@ def main():
         logging.info("epoch = {}, objf = {}".format(epoch, objf))
 
     model.to(device)
+    if args.world_size > 1:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model)
     describe(model)
 
     #  optimizer = optim.SGD(model.parameters(),
@@ -413,7 +412,8 @@ def main():
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
-                            objf=objf)
+                            objf=objf,
+                            local_rank=args.rank)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -428,7 +428,8 @@ def main():
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
-                        objf=objf)
+                        objf=objf,
+                        local_rank=args.rank)
         epoch_info_filename = os.path.join(exp_dir,
                                            'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
