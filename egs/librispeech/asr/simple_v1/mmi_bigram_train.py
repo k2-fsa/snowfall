@@ -277,13 +277,12 @@ def get_parser():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--world-size', default=1, type=int)
-    parser.add_argument('--rank', default=1, type=int)
+    parser.add_argument('--rank', default=0, type=int)
     return parser
 
 
 def main():
     args = get_parser().parse_args()
-    args.rank = args.rank - 1  # SGE...
     print('World size:', args.world_size, 'Rank:', args.rank)
     setup(args.rank, args.world_size)
     fix_random_seed(42)
