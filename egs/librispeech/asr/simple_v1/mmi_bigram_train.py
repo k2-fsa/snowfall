@@ -33,6 +33,8 @@ from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 
+den_scale = 1.0
+
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
                                 frames_per_seq: torch.Tensor
@@ -130,7 +132,7 @@ def get_objf(batch: Dict,
     den_tot_scores = k2.get_tot_scores(den,
                                        log_semiring=True,
                                        use_double_scores=True)
-    tot_scores = num_tot_scores - den_tot_scores
+    tot_scores = num_tot_scores - den_scale * den_tot_scores
 
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
@@ -264,7 +266,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam-mmi-bigram'
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -298,20 +300,25 @@ def main():
                                   'cuts_train-clean-100.json.gz')
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
+    logging.info("About to get Musan cuts")
+    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=90000,
-                                               shuffle=True)
+                                               max_frames=30000,
+                                               shuffle=True,
+                                               aug_cuts=cuts_musan,
+                                               aug_prob=0.5,
+                                               aug_snr=(10, 20))
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=90000,
+                                                  max_frames=30000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
-                                           num_workers=4)
+                                           num_workers=2)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,

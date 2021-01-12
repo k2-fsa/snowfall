@@ -195,7 +195,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-mmi-bigram')
+    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table

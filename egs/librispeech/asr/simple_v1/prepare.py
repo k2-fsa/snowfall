@@ -9,8 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from lhotse import CutSet, Fbank, LilcomHdf5Writer
-from lhotse.recipes.librispeech import prepare_librispeech
+from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
+from lhotse.recipes import prepare_librispeech, prepare_musan
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() in case it needs to take effect
@@ -71,12 +71,20 @@ def main():
         sys.exit(1)
 
     output_dir = Path('exp/data')
-    print('Manifest preparation:')
+    print('LibriSpeech manifest preparation:')
     librispeech_manifests = prepare_librispeech(
         corpus_dir=corpus_dir,
         dataset_parts=dataset_parts,
         output_dir=output_dir,
         num_jobs=num_jobs
+    )
+
+    print('Musan manifest preparation:')
+    musan_cuts_path = output_dir / 'cuts_musan.json.gz'
+    musan_manifests = prepare_musan(
+        corpus_dir='/export/corpora5/JHU/musan',
+        output_dir=output_dir,
+        parts=('music', 'speech', 'noise')
     )
 
     print('Feature extraction:')
@@ -96,12 +104,26 @@ def main():
                 extractor=Fbank(),
                 storage_path=f'{output_dir}/feats_{partition}',
                 # when an executor is specified, make more partitions
-                num_jobs=num_jobs if ex is not None else 80,
+                num_jobs=num_jobs if ex is None else 80,
                 executor=ex,
                 storage_type=LilcomHdf5Writer
             )
             librispeech_manifests[partition]['cuts'] = cut_set
             cut_set.to_json(output_dir / f'cuts_{partition}.json.gz')
+        # Now onto Musan
+        if not musan_cuts_path.is_file():
+            print('Extracting features for Musan')
+            # create chunks of Musan with duration 5 - 10 seconds
+            musan_cuts = CutSet.from_manifests(
+                recordings=combine(part['recordings'] for part in musan_manifests.values())
+            ).cut_into_windows(10.0).filter(lambda c: c.duration > 5).compute_and_store_features(
+                extractor=Fbank(),
+                storage_path=f'{output_dir}/feats_musan',
+                num_jobs=num_jobs if ex is None else 80,
+                executor=ex,
+                storage_type=LilcomHdf5Writer
+            )
+            musan_cuts.to_json(musan_cuts_path)
 
 
 if __name__ == '__main__':
