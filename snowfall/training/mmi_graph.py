@@ -69,7 +69,7 @@ def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
     return k2.Fsa.from_str(rules)
 
 
-class AsgTrainingGraphCompiler(object):
+class MmiTrainingGraphCompiler(object):
 
     def __init__(self,
                  L_inv: k2.Fsa,
