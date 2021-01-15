@@ -115,7 +115,7 @@ class Tdnnf1a(AcousticModel):
         x = self.tdnn1(x, dropout=dropout)
 
         # tdnnf requires input of shape [N, C, T]
-        for layer in self.tdnnfs):
+        for layer in self.tdnnfs:
             x = layer(x, dropout=dropout)
 
         # at this point, x is [N, C, T]
