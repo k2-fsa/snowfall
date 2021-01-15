@@ -126,10 +126,10 @@ def get_objf(batch: Dict,
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
     den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 
-    num_tot_scores = k2.get_tot_scores(num,
+    num_tot_scores = num.get_tot_scores(
                                        log_semiring=True,
                                        use_double_scores=True)
-    den_tot_scores = k2.get_tot_scores(den,
+    den_tot_scores = den.get_tot_scores(
                                        log_semiring=True,
                                        use_double_scores=True)
     tot_scores = num_tot_scores - den_scale * den_tot_scores

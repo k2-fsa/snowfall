@@ -112,7 +112,7 @@ def get_objf(batch: Dict,
 
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
-    tot_scores = k2.get_tot_scores(target_graph,
+    tot_scores = target_graph.get_tot_scores(
                                    log_semiring=True,
                                    use_double_scores=True)
 
