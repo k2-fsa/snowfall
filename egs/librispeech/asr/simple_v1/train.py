@@ -29,6 +29,7 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.models.tdnnf import Tdnnf1a
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 
 

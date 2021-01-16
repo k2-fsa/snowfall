@@ -44,22 +44,22 @@ class Tdnnf1a(AcousticModel):
     """
 
     def __init__(self,
-                 feat_dim,
-                 output_dim,
+                 num_features,
+                 num_classes,
                  hidden_dim=1024,
                  bottleneck_dim=128,
                  prefinal_bottleneck_dim=256,
                  kernel_size_list=[3, 3, 3, 1, 3, 3, 3, 3, 3, 3, 3, 3],
                  subsampling_factor_list=[1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 1],
-                 frame_subsampling_factor=3):
+                 subsampling_factor=3):
         super().__init__()
 
-        self.num_features = feat_dim
-        self.num_classes = output_dim
-        self.subsampling_factor = frame_subsampling_factor
+        self.num_features = num_features
+        self.num_classes = num_classes
+        self.subsampling_factor = subsampling_factor
 
         # at present, we support only frame_subsampling_factor to be 3
-        assert frame_subsampling_factor == 3
+        assert self.subsampling_factor == 3
 
         assert len(kernel_size_list) == len(subsampling_factor_list)
         num_layers = len(kernel_size_list)
@@ -103,32 +103,38 @@ class Tdnnf1a(AcousticModel):
         self.register_forward_pre_hook(constrain_orthonormal_hook)
 
     def forward(self, x, dropout=0.):
-        # input x is of shape: [batch_size, seq_len, feat_dim] = [N, T, C]
+        # input x is of shape: [batch_size, feat_dim, seq_len] = [N, C, T]
         assert x.ndim == 3
 
-        # at this point, x is [N, T, C]
-        x = x.permute(0, 2, 1)
+        print('Input', x.shape)
         # at this point, x is [N, C, T]
         x = self.input_batch_norm(x)
 
         # at this point, x is [N, C, T]
         x = self.tdnn1(x, dropout=dropout)
 
+        print('Before TDNNF', x.shape)
         # tdnnf requires input of shape [N, C, T]
         for layer in self.tdnnfs:
             x = layer(x, dropout=dropout)
 
+        print('After TDNNF', x.shape)
         # at this point, x is [N, C, T]
         x = self.prefinal_l(x)
 
+        print('After prefinal_l', x.shape)
         # at this point, x is [N, C, T]
         nnet_output = self.prefinal_chain(x)
+        print('After prefinal_chain', nnet_output.shape)
         # at this point, nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
         # at this point, nnet_output is [N, T, C]
         nnet_output = self.output_affine(nnet_output)
-
-        return nnet_output
+        print('After output_affine', nnet_output.shape)
+        # we return nnet_output [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)
+        print('Returning', nnet_output.shape)
+        return nnet_output.permute(0, 2, 1)
 
 
 def constrain_orthonormal_hook(model, unused_x):
@@ -339,7 +345,8 @@ class FactorizedTDNN(nn.Module):
                  bottleneck_dim,
                  kernel_size,
                  subsampling_factor,
-                 bypass_scale=0.66):
+                 bypass_scale=0.66,
+                 cnn_padding=1):
         super().__init__()
 
         assert abs(bypass_scale) <= 1
@@ -359,7 +366,8 @@ class FactorizedTDNN(nn.Module):
         self.affine = nn.Conv1d(in_channels=bottleneck_dim,
                                 out_channels=dim,
                                 kernel_size=1,
-                                stride=subsampling_factor)
+                                stride=subsampling_factor,
+                                padding=cnn_padding)
 
         # batchnorm requires [N, C, T]
         self.batchnorm = nn.BatchNorm1d(num_features=dim, affine=False)
