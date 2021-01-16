@@ -107,34 +107,34 @@ class Tdnnf1a(AcousticModel):
         # input x is of shape: [batch_size, feat_dim, seq_len] = [N, C, T]
         assert x.ndim == 3
 
-        print('Input', x.shape)
+        #print('Input', x.shape)
         # at this point, x is [N, C, T]
         x = self.input_batch_norm(x)
 
         # at this point, x is [N, C, T]
         x = self.tdnn1(x, dropout=dropout)
 
-        print('Before TDNNF', x.shape)
+        #print('Before TDNNF', x.shape)
         # tdnnf requires input of shape [N, C, T]
         for layer in self.tdnnfs:
             x = layer(x, dropout=dropout)
 
-        print('After TDNNF', x.shape)
+        #print('After TDNNF', x.shape)
         # at this point, x is [N, C, T]
         x = self.prefinal_l(x)
 
-        print('After prefinal_l', x.shape)
+        #print('After prefinal_l', x.shape)
         # at this point, x is [N, C, T]
         nnet_output = self.prefinal_chain(x)
-        print('After prefinal_chain', nnet_output.shape)
+        #print('After prefinal_chain', nnet_output.shape)
         # at this point, nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
         # at this point, nnet_output is [N, T, C]
         nnet_output = self.output_affine(nnet_output)
-        print('After output_affine', nnet_output.shape)
+        #print('After output_affine', nnet_output.shape)
         # we return nnet_output [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
-        print('Returning', nnet_output.shape)
+        #print('Returning', nnet_output.shape)
         return nnet_output.permute(0, 2, 1)
 
 

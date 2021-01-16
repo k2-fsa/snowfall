@@ -29,6 +29,7 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.models.tdnnf import Tdnnf1a
 from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -102,7 +103,7 @@ def get_objf(batch: Dict,
             nnet_output = model(feature)
 
     # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+    #nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     if is_training:
         num, den = graph_compiler.compile(texts, P)
@@ -305,20 +306,20 @@ def main():
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=30000,
+                                               max_frames=60000,
                                                shuffle=True,
                                                aug_cuts=cuts_musan,
                                                aug_prob=0.5,
                                                aug_snr=(10, 20))
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=30000,
+                                                  max_frames=60000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
-                                           num_workers=2)
+                                           num_workers=4)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,
@@ -331,9 +332,9 @@ def main():
     logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
-                       subsampling_factor=3)
+    model = Tdnnf1a(num_features=40,
+                    num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                    subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
 
