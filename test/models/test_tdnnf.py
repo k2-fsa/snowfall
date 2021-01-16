@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from snowfall.models.tdnnf import FactorizedTDNN, _constrain_orthonormal_internal
+from snowfall.models.tdnnf import FactorizedTDNN, Tdnnf1a, _constrain_orthonormal_internal
 
 torch.manual_seed(20200130)
 
@@ -91,3 +91,23 @@ def test_factorized_tdnn():
                            subsampling_factor=3)
     y = model(x)
     assert y.size(2) == math.ceil(math.ceil((T - 3)) - 3)
+
+
+def test_subsampling_matched_lengths():
+    num_features = 4
+    num_classes = 7
+    seq_len = 126
+    subsampled_seq_len = 42  # * 3 == 126
+    model = Tdnnf1a(
+        num_features=num_features,
+        num_classes=num_classes,
+        hidden_dim=16,
+        bottleneck_dim=2,
+        prefinal_bottleneck_dim=4,
+    )
+    inputs = torch.randn(1, num_features, seq_len)
+    outputs = model(inputs)
+    assert len(outputs.shape) == 3
+    assert outputs.shape[0] == 1
+    assert outputs.shape[1] == subsampled_seq_len
+    assert outputs.shape[2] == num_classes

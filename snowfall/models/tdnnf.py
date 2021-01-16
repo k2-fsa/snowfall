@@ -80,7 +80,8 @@ class Tdnnf1a(AcousticModel):
             layer = FactorizedTDNN(dim=hidden_dim,
                                    bottleneck_dim=bottleneck_dim,
                                    kernel_size=kernel_size,
-                                   subsampling_factor=subsampling_factor)
+                                   subsampling_factor=subsampling_factor,
+                                   cnn_padding=int(subsampling_factor == 1))
             tdnnfs.append(layer)
 
         # tdnnfs requires [N, C, T]
@@ -398,7 +399,9 @@ class FactorizedTDNN(nn.Module):
         x = self.dropout(x, alpha=dropout)
 
         if self.linear.kernel_size > 1:
-            x = self.bypass_scale * input_x[:, :, self.s:-self.s:self.s] + x
+            # x = self.bypass_scale * input_x[:, :, self.s:-self.s:self.s] + x
+            # padding now takes care of keeping the shape correct
+            x = self.bypass_scale * input_x + x
         else:
             x = self.bypass_scale * input_x[:, :, ::self.s] + x
         return x
