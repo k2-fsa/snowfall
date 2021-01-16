@@ -4,8 +4,6 @@
 # Copyright 2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
 
-import logging
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -107,35 +105,28 @@ class Tdnnf1a(AcousticModel):
         # input x is of shape: [batch_size, feat_dim, seq_len] = [N, C, T]
         assert x.ndim == 3
 
-        #print('Input', x.shape)
         # at this point, x is [N, C, T]
         x = self.input_batch_norm(x)
 
         # at this point, x is [N, C, T]
         x = self.tdnn1(x, dropout=dropout)
 
-        #print('Before TDNNF', x.shape)
         # tdnnf requires input of shape [N, C, T]
         for layer in self.tdnnfs:
             x = layer(x, dropout=dropout)
 
-        #print('After TDNNF', x.shape)
         # at this point, x is [N, C, T]
         x = self.prefinal_l(x)
 
-        #print('After prefinal_l', x.shape)
         # at this point, x is [N, C, T]
         nnet_output = self.prefinal_chain(x)
-        #print('After prefinal_chain', nnet_output.shape)
         # at this point, nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
         # at this point, nnet_output is [N, T, C]
         nnet_output = self.output_affine(nnet_output)
         nnet_output = F.log_softmax(nnet_output, dim=2)
-        #print('After output_affine', nnet_output.shape)
         # we return nnet_output [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
-        #print('Returning', nnet_output.shape)
         return nnet_output
 
 
@@ -400,8 +391,7 @@ class FactorizedTDNN(nn.Module):
         x = self.dropout(x, alpha=dropout)
 
         if self.linear.kernel_size > 1:
-            # x = self.bypass_scale * input_x[:, :, self.s:-self.s:self.s] + x
-            # padding now takes care of keeping the shape correct
+            # padding takes care of keeping the shapes correct
             x = self.bypass_scale * input_x + x
         else:
             x = self.bypass_scale * input_x[:, :, ::self.s] + x
