@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 
 from snowfall.models.tdnnf import FactorizedTDNN, Tdnnf1a, _constrain_orthonormal_internal
@@ -93,11 +94,11 @@ def test_factorized_tdnn():
     assert y.size(2) == math.ceil(math.ceil((T - 3)) - 3)
 
 
-def test_subsampling_matched_lengths():
+@pytest.mark.parametrize('seq_len', [126, 127, 128, 129, 130, 131])
+def test_subsampling_matched_lengths(seq_len):
     num_features = 4
     num_classes = 7
-    seq_len = 126
-    subsampled_seq_len = 42  # * 3 == 126
+    subsampled_seq_len = math.ceil(seq_len / 3)
     model = Tdnnf1a(
         num_features=num_features,
         num_classes=num_classes,
