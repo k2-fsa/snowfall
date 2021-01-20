@@ -19,7 +19,7 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo: Fsa, labels_disambig_id_start: int,
         G:
             An ``Fsa`` that represents the language model (G), i.e. it's an acceptor
             with words as ``symbols``.
-        ctc_topo:  CTC topology fst, When 0 appears on the left side, it represents
+        ctc_topo:  CTC topology fst, in which when 0 appears on the left side, it represents
                    the blank symbol; when it appears on the right side,
                    it indicates an epsilon.
         labels_disambig_id_start:

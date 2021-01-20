@@ -10,14 +10,12 @@ import k2
 
 def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.
-
-    The resulting topology converts repeated input
-    symbols to a single output symbol.
-
-    Caution:
-      The resulting topo is an FST. Epsilons are on the right
-      side (i.e., olabels) and tokens are on the left side (i.e., ilabels)
-
+    A token which appears once on the right side (i.e. olabels) may
+    appear multiple times on the left side (ilabels), possibly with
+    epsilons in between.
+    When 0 appears on the left side, it represents the blank symbol;
+    when it appears on the right side, it indicates an epsilon. That
+    is, 0 has two meanings here.
     Args:
       tokens:
         A list of tokens, e.g., phones, characters, etc.
