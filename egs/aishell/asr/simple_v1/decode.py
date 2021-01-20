@@ -137,8 +137,9 @@ def main():
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    ctc_topo = k2.arc_sort(build_ctc_topo(list(
-        phone_symbol_table._id2sym.keys())))
+    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids_with_blank = [0] + phone_ids
+    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")

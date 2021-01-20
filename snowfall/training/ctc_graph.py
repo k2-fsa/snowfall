@@ -69,7 +69,9 @@ class CtcTrainingGraphCompiler(object):
         self.phones = phones
         self.words = words
         self.oov = oov
-        self.ctc_topo = k2.arc_sort(build_ctc_topo(list(phones._id2sym.keys())))
+        phone_ids = get_phone_symbols(phones)
+        phone_ids_with_blank = [0] + phone_ids
+        self.ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
     def compile(self, texts: Iterable[str]) -> k2.Fsa:
         decoding_graphs = k2.create_fsa_vec(

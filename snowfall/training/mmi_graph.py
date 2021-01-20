@@ -106,7 +106,7 @@ class MmiTrainingGraphCompiler(object):
         ctc_topo = build_ctc_topo(phone_symbols_with_blank)
         assert ctc_topo.requires_grad is False
 
-        self.ctc_topo_inv = ctc_topo.invert_()
+        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
