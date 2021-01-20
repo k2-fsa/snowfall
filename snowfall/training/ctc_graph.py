@@ -15,8 +15,8 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     symbols to a single output symbol.
 
     Caution:
-      The resulting topo is an FST. Epsilons are on the left
-      side (i.e., ilabels) and tokens are on the right side (i.e., olabels)
+      The resulting topo is an FST. Epsilons are on the right
+      side (i.e., olabels) and tokens are on the left side (i.e., ilabels)
 
     Args:
       tokens:
@@ -28,16 +28,16 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
 
     num_states = len(tokens)
     final_state = num_states
-    rules = ''
+    arcs = ''
     for i in range(num_states):
         for j in range(num_states):
             if i == j:
-                rules += f'{i} {i} 0 {tokens[i]} 0.0\n'
+                arcs += f'{i} {i} {tokens[i]} 0 0.0\n'
             else:
-                rules += f'{i} {j} {tokens[j]} {tokens[j]} 0.0\n'
-        rules += f'{i} {final_state} -1 -1 0.0\n'
-    rules += f'{final_state}'
-    ans = k2.Fsa.from_str(rules)
+                arcs += f'{i} {j} {tokens[j]} {tokens[j]} 0.0\n'
+        arcs += f'{i} {final_state} -1 -1 0.0\n'
+    arcs += f'{final_state}'
+    ans = k2.Fsa.from_str(arcs)
     ans = k2.arc_sort(ans)
     return ans
 
@@ -69,8 +69,7 @@ class CtcTrainingGraphCompiler(object):
         self.phones = phones
         self.words = words
         self.oov = oov
-        ctc_topo_inv = build_ctc_topo(list(phones._id2sym.keys())).invert_()
-        self.ctc_topo_inv = k2.arc_sort(ctc_topo_inv)
+        self.ctc_topo = k2.arc_sort(build_ctc_topo(list(phones._id2sym.keys())))
 
     def compile(self, texts: Iterable[str]) -> k2.Fsa:
         decoding_graphs = k2.create_fsa_vec(
@@ -85,9 +84,10 @@ class CtcTrainingGraphCompiler(object):
         tokens = (token if token in self.words else self.oov
                   for token in text.split(' '))
         word_ids = [self.words[token] for token in tokens]
-        fsa = k2.linear_fsa(word_ids)
-        decoding_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
+        label_graph = k2.linear_fsa(word_ids)
+        decoding_graph = k2.connect(k2.intersect(label_graph,
+                                                 self.L_inv)).invert_()
         decoding_graph = k2.arc_sort(decoding_graph)
-        decoding_graph = k2.compose(self.ctc_topo_inv, decoding_graph)
+        decoding_graph = k2.compose(self.ctc_topo, decoding_graph)
         decoding_graph = k2.connect(decoding_graph)
         return decoding_graph

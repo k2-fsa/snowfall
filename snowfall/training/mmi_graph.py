@@ -106,7 +106,7 @@ class MmiTrainingGraphCompiler(object):
         ctc_topo = build_ctc_topo(phone_symbols_with_blank)
         assert ctc_topo.requires_grad is False
 
-        self.ctc_topo = ctc_topo
+        self.ctc_topo_inv = ctc_topo.invert_()
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
@@ -130,7 +130,7 @@ class MmiTrainingGraphCompiler(object):
         '''
         assert P.is_cpu()
 
-        ctc_topo_P = k2.intersect(self.ctc_topo, P).invert_()
+        ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
         ctc_topo_P = k2.connect(ctc_topo_P)
 
         num_graphs = k2.create_fsa_vec(
