@@ -126,9 +126,10 @@ class Tdnnf1a(AcousticModel):
         nnet_output = nnet_output.permute(0, 2, 1)
         # at this point, nnet_output is [N, T, C]
         nnet_output = self.output_affine(nnet_output)
+        nnet_output = F.log_softmax(nnet_output, dim=2)
         # we return nnet_output [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)
-        return nnet_output.permute(0, 2, 1)
+        return nnet_output
 
     def write_tensorboard_diagnostics(self, tb_writer: SummaryWriter, global_step: Optional[int] = None):
         orth_scores = self.measure_orthonormality()

@@ -103,7 +103,7 @@ def get_objf(batch: Dict,
             nnet_output = model(feature)
 
     # nnet_output is [N, C, T]
-    #nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     if is_training:
         num, den = graph_compiler.compile(texts, P)
