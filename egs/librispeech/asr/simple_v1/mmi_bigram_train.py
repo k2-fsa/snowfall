@@ -244,8 +244,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                             total_valid_objf / total_valid_frames,
-                             global_batch_idx_valid)
+                                 total_valid_objf / total_valid_frames,
+                                 global_batch_idx_valid)
+            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_valid)
         prev_timestamp = datetime.now()
     return total_objf / total_frames
 
@@ -357,21 +358,21 @@ def main():
     model.to(device)
     describe(model)
 
-    #  optimizer = optim.SGD(model.parameters(),
-    #                       lr=learning_rate,
-    #                       momentum=0.9,
-    #                       weight_decay=5e-4)
-    optimizer = optim.AdamW(model.parameters(),
-                            # lr=learning_rate,
-                            weight_decay=5e-4)
+    optimizer = optim.SGD(model.parameters(),
+                          lr=learning_rate,
+                          momentum=0.9,
+                          weight_decay=1e-5)
+    # optimizer = optim.AdamW(model.parameters(),
+    #                         # lr=learning_rate,
+    #                         weight_decay=5e-4)
 
-    curr_learning_rate = learning_rate
+    # curr_learning_rate = learning_rate
     for epoch in range(start_epoch, num_epochs):
-        # curr_learning_rate = learning_rate * pow(0.4, epoch)
-        if epoch > 6:
-            curr_learning_rate *= 0.8
+        curr_learning_rate = learning_rate * pow(0.4, epoch)
+        # if epoch > 6:
+        #     curr_learning_rate *= 0.8
         for param_group in optimizer.param_groups:
-           param_group['lr'] = curr_learning_rate
+            param_group['lr'] = curr_learning_rate
 
         tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
 
