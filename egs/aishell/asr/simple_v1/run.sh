@@ -22,7 +22,7 @@ fi
 
 if [ $stage -le 3 ]; then
   local/prepare_lang.sh --position-dependent-phones false data/local/dict_nosp \
-    "<SPOKEN_NOISE>" data/local/lang_tmp_nosp data/lang_nosp || exit 1;
+    "<UNK>" data/local/lang_tmp_nosp data/lang_nosp || exit 1;
 
   echo "To load L:"
   echo "    Lfst = k2.Fsa.from_openfst(<string of data/lang_nosp/L.fst.txt>, acceptor=False)"

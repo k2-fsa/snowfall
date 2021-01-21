@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
+# Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu, Pingfeng Luo)
 # Apache 2.0
 import multiprocessing
 import os
@@ -11,10 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from aishell import prepare_aishell
-from lhotse import CutSet, Fbank, LilcomFilesWriter, combine
-from lhotse.augmentation import SoxEffectTransform
-
+from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
+from lhotse.recipes import prepare_aishell
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() because it needs to take effect
@@ -51,8 +49,10 @@ def get_executor():
             return
     except:
         pass
-    # Return a local node process pool (single node processing)
-    yield ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn"))
+    if sys.version_info < (3, 7, 9):
+        yield ProcessPoolExecutor(num_jobs)
+    else:
+        yield ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn"))
 
 
 def main():
@@ -67,7 +67,7 @@ def main():
         sys.exit(1)
 
     output_dir = Path('exp/data')
-    print('Manifest preparation:')
+    print('aishell manifest preparation:')
     aishell_manifests = prepare_aishell(
         corpus_dir=corpus_dir,
         output_dir=output_dir
@@ -88,8 +88,10 @@ def main():
                 cut_set = cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
             cut_set = cut_set.compute_and_store_features(
                 extractor=Fbank(),
+                storage_path=f'{output_dir}/feats_{partition}',
+                num_jobs=num_jobs if ex is not None else 80,
                 executor=ex,
-                storage=LilcomFilesWriter(f'{output_dir}/feats_{partition}')
+                storage_type=LilcomHdf5Writer
             )
             aishell_manifests[partition]['cuts'] = cut_set
             cut_set.to_json(output_dir / f'cuts_{partition}.json.gz')

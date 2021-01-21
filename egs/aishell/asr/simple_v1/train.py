@@ -113,7 +113,7 @@ def get_objf(batch: Dict,
     # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
-    tot_scores = k2.get_tot_scores(target_graph,
+    tot_scores = target_graph.get_tot_scores(
                                    log_semiring=True,
                                    use_double_scores=True)
 
@@ -260,8 +260,7 @@ def main():
     graph_compiler = CtcTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table,
-        oov='<SPOKEN_NOISE>'
+        words=word_symbol_table
     )
 
     # load dataset
