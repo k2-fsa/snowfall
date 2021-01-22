@@ -17,6 +17,7 @@ from kaldialign import edit_distance
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 
+from snowfall.common import get_phone_symbols
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
@@ -130,15 +131,16 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-ctc')
+    exp_dir = Path('exp-lstm-adam-ctc-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
-    ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
+    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids_with_blank = [0] + phone_ids
+    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -151,7 +153,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo_inv=ctc_topo_inv,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
@@ -181,7 +183,7 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_ids_with_blank))
     checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)

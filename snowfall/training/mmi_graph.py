@@ -5,39 +5,11 @@ from typing import Iterable
 from typing import List
 from typing import Tuple
 
-import re
-
 import k2
 import torch
 
 from .ctc_graph import build_ctc_topo
-
-
-def get_phone_symbols(symbol_table: k2.SymbolTable,
-                      pattern: str = r'^#\d+$') -> List[int]:
-    '''Return a list of phone IDs containing no disambiguation symbols.
-
-    Caution:
-      0 is not a phone ID so it is excluded from the return value.
-
-    Args:
-      symbol_table:
-        A symbol table in k2.
-      pattern:
-        Symbols containing this pattern are disambiguation symbols.
-    Returns:
-      Return a list of symbol IDs excluding those from disambiguation symbols.
-    '''
-    regex = re.compile(pattern)
-    symbols = symbol_table.symbols
-    ans = []
-    for s in symbols:
-        if not regex.match(s):
-            ans.append(symbol_table[s])
-    if 0 in ans:
-        ans.remove(0)
-    ans.sort()
-    return ans
+from snowfall.common import get_phone_symbols
 
 
 def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
@@ -106,7 +78,7 @@ class MmiTrainingGraphCompiler(object):
         ctc_topo = build_ctc_topo(phone_symbols_with_blank)
         assert ctc_topo.requires_grad is False
 
-        self.ctc_topo = ctc_topo
+        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
@@ -130,7 +102,7 @@ class MmiTrainingGraphCompiler(object):
         '''
         assert P.is_cpu()
 
-        ctc_topo_P = k2.intersect(self.ctc_topo, P).invert_()
+        ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
         ctc_topo_P = k2.connect(ctc_topo_P)
 
         num_graphs = k2.create_fsa_vec(

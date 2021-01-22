@@ -262,6 +262,7 @@ def main():
         phones=phone_symbol_table,
         words=word_symbol_table
     )
+    phone_ids = get_phone_symbols(phone_symbol_table)
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -296,7 +297,10 @@ def main():
     logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table), subsampling_factor=3)
+    model = TdnnLstm1b(
+        num_features=40,
+        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+        subsampling_factor=3)
 
     learning_rate = 0.00001
     start_epoch = 0
