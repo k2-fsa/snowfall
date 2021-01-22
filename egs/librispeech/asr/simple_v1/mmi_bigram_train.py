@@ -77,8 +77,8 @@ def get_objf(batch: Dict,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
-             tb_writer: SummaryWriter,
-             global_batch_idx_train: int,
+             tb_writer: Optional[SummaryWriter] = None,
+             global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
@@ -143,19 +143,19 @@ def get_objf(batch: Dict,
                                                supervision_segments[:, 2])
 
     if is_training:
+        def maybe_log_gradients(tag: str):
+            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 10 == 0:
+                tb_writer.add_scalars(
+                    tag,
+                    measure_gradient_norms(model, norm='l1'),
+                    global_step=global_batch_idx_train
+                )
+
         optimizer.zero_grad()
         (-tot_score).backward()
-        tb_writer.add_scalars(
-            'train/grad_norms',
-            measure_gradient_norms(model, norm='l1'),
-            global_step=global_batch_idx_train
-        )
+        maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
-        tb_writer.add_scalars(
-            'train/clipped_grad_norms',
-            measure_gradient_norms(model, norm='l1'),
-            global_step=global_batch_idx_train
-        )
+        maybe_log_gradients('train/clipped_grad_norms')
         optimizer.step()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
