@@ -7,6 +7,8 @@ from typing import List
 import torch
 import k2
 
+from snowfall.common import get_phone_symbols
+
 
 def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.

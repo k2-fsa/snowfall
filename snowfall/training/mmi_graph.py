@@ -5,39 +5,11 @@ from typing import Iterable
 from typing import List
 from typing import Tuple
 
-import re
-
 import k2
 import torch
 
 from .ctc_graph import build_ctc_topo
-
-
-def get_phone_symbols(symbol_table: k2.SymbolTable,
-                      pattern: str = r'^#\d+$') -> List[int]:
-    '''Return a list of phone IDs containing no disambiguation symbols.
-
-    Caution:
-      0 is not a phone ID so it is excluded from the return value.
-
-    Args:
-      symbol_table:
-        A symbol table in k2.
-      pattern:
-        Symbols containing this pattern are disambiguation symbols.
-    Returns:
-      Return a list of symbol IDs excluding those from disambiguation symbols.
-    '''
-    regex = re.compile(pattern)
-    symbols = symbol_table.symbols
-    ans = []
-    for s in symbols:
-        if not regex.match(s):
-            ans.append(symbol_table[s])
-    if 0 in ans:
-        ans.remove(0)
-    ans.sort()
-    return ans
+from snowfall.common import get_phone_symbols
 
 
 def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:

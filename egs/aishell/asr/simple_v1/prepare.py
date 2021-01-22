@@ -56,7 +56,7 @@ def get_executor():
 
 
 def main():
-    corpus_dirs = [Path('/mnt/cfs2/asr/database/AM/aishell')]
+    corpus_dirs = [Path('/export/data/asr-data/OpenSLR/33')]
     corpus_dir = None
     for d in corpus_dirs:
         if os.path.exists(d):

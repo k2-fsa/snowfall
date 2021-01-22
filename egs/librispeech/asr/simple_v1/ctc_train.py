@@ -27,6 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from snowfall.common import save_checkpoint, load_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.common import get_phone_symbols
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
@@ -238,7 +239,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam-ctc'
+    exp_dir = 'exp-lstm-adam-ctc-musan-3'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -270,11 +271,16 @@ def main():
                                   'cuts_train-clean-100.json.gz')
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
+    logging.info("About to get Musan cuts")
+    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
                                                max_frames=90000,
-                                               shuffle=True)
+                                               shuffle=True,
+                                               aug_cuts=cuts_musan,
+                                               aug_prob=0.5,
+                                               aug_snr=(10, 20))
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
                                                   max_frames=90000,
