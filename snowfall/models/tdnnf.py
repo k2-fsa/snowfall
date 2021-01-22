@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from snowfall.models import AcousticModel
+from snowfall.training.diagnostics import measure_semiorthogonality, measure_weight_norms
 
 
 class Tdnnf1a(AcousticModel):
@@ -132,23 +133,21 @@ class Tdnnf1a(AcousticModel):
         return nnet_output
 
     def write_tensorboard_diagnostics(self, tb_writer: SummaryWriter, global_step: Optional[int] = None):
-        orth_scores = self.measure_orthonormality()
-        tb_writer.add_scalars('train/orthonormality_score', orth_scores, global_step=global_step)
-
-    def measure_orthonormality(self) -> Dict[str, float]:
-        scores = {}
-        for name, m in self.named_modules():
-            if hasattr(m, 'constrain_orthonormal'):
-                weight = m.state_dict()['conv.weight']
-                dim = weight.shape[0]
-                w = weight.reshape(dim, -1)
-                P = torch.mm(w, w.t())
-                scale = torch.trace(torch.mm(P, P.t()) / torch.trace(P))
-                I = torch.eye(dim, dtype=P.dtype, device=P.device)
-                Q = P - scale * I
-                score = torch.trace(torch.mm(Q, Q.t()))
-                scores[name] = score.item()
-        return scores
+        tb_writer.add_scalars(
+            'train/semiorthogonality_score',
+            measure_semiorthogonality(self),
+            global_step=global_step
+        )
+        tb_writer.add_scalars(
+            'train/weight_l2_norms',
+            measure_weight_norms(self, norm='l2'),
+            global_step=global_step
+        )
+        tb_writer.add_scalars(
+            'train/weight_max_norms',
+            measure_weight_norms(self, norm='linf'),
+            global_step=global_step
+        )
 
 
 def constrain_orthonormal_hook(model, unused_x):

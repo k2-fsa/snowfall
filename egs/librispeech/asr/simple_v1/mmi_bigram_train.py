@@ -334,20 +334,32 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = Tdnnf1a(num_features=40,
-                    num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                    num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                     subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
-
-    learning_rate = 1e-3
+    learning_rate = 5e-5
+    weight_decay = 1e-5
+    momentum = 0.9
+    lr_schedule_gamma = 0.4
     start_epoch = 0
     num_epochs = 10
     best_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0 # for logging only
-    global_batch_idx_valid = 0 # for logging only
+    global_batch_idx_train = 0  # for logging only
+    global_batch_idx_valid = 0  # for logging only
+
+    tb_writer.add_hparams(
+        hparam_dict={
+            'learning_rate': learning_rate,
+            'weight_decay': weight_decay,
+            'momentum': momentum,
+            'lr_schedule_gamma': lr_schedule_gamma
+        },
+        metric_dict={}
+    )
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
@@ -360,20 +372,22 @@ def main():
 
     optimizer = optim.SGD(model.parameters(),
                           lr=learning_rate,
-                          momentum=0.9,
-                          weight_decay=1e-5)
+                          momentum=momentum,
+                          weight_decay=weight_decay)
+    lr_scheduler = optim.lr_scheduler.ExponentialLR(
+        optimizer=optimizer,
+        gamma=lr_schedule_gamma,
+        last_epoch=start_epoch - 1
+    )
     # optimizer = optim.AdamW(model.parameters(),
     #                         # lr=learning_rate,
-    #                         weight_decay=5e-4)
+    #                         weight_decay=weight_decay)
 
     # curr_learning_rate = learning_rate
     for epoch in range(start_epoch, num_epochs):
-        curr_learning_rate = learning_rate * pow(0.4, epoch)
-        # if epoch > 6:
-        #     curr_learning_rate *= 0.8
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = curr_learning_rate
-
+        # LR scheduler can hold multiple learning rates for multiple parameter groups;
+        # we have only one parameter group at this time so we always take just the first element.
+        curr_learning_rate = lr_scheduler.get_last_lr()[0]
         tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
 
         logging.info('epoch {}, learning rate {}'.format(
@@ -423,6 +437,8 @@ def main():
                            objf=objf,
                            best_objf=best_objf,
                            best_epoch=best_epoch)
+
+        lr_scheduler.step()
 
     logging.warning('Done')
 
