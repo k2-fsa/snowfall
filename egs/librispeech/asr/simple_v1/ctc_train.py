@@ -239,7 +239,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam-ctc-musan-3'
+    exp_dir = 'exp-lstm-adam-ctc-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 

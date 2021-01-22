@@ -7,8 +7,8 @@
 
 set -eou pipefail
 
-data=/export/data/asr-data/OpenSLR/33
-stage=3
+data=/mnt/cfs2/asr/database/AM/aishell
+stage=1
 
 [ -f path.sh ] && . ./path.sh
 

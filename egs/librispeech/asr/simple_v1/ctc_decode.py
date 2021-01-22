@@ -131,7 +131,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-ctc-musan-2')
+    exp_dir = Path('exp-lstm-adam-ctc-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
