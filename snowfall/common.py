@@ -7,8 +7,10 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Union
+import re
+from typing import List, Tuple, Union
 
+import k2
 import torch
 
 from snowfall.models import AcousticModel
@@ -39,13 +41,16 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, float, float]:
+def load_checkpoint(filename: Pathlike,
+                    model: AcousticModel) -> Tuple[int, float, float]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
 
-    keys = ['state_dict', 'epoch', 'learning_rate', 'objf',
-            'num_features', 'num_classes', 'subsampling_factor']
+    keys = [
+        'state_dict', 'epoch', 'learning_rate', 'objf', 'num_features',
+        'num_classes', 'subsampling_factor'
+    ]
     missing_keys = set(keys) - set(checkpoint.keys())
     if missing_keys:
         raise ValueError(f"Missing keys in checkpoint: {missing_keys}")
@@ -75,22 +80,20 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, floa
     return epoch, learning_rate, objf
 
 
-def save_checkpoint(
-        filename: Pathlike,
-        model: AcousticModel,
-        epoch: int,
-        learning_rate: float,
-        objf: float,
-        local_rank: int = 0
-) -> None:
+def save_checkpoint(filename: Pathlike,
+                    model: AcousticModel,
+                    epoch: int,
+                    learning_rate: float,
+                    objf: float,
+                    local_rank: int = 0) -> None:
     if local_rank is not None and local_rank != 0:
         return
     logging.info('Save checkpoint to {filename}: epoch={epoch}, '
                  'learning_rate={learning_rate}, objf={objf}'.format(
-        filename=filename,
-        epoch=epoch,
-        learning_rate=learning_rate,
-        objf=objf))
+                     filename=filename,
+                     epoch=epoch,
+                     learning_rate=learning_rate,
+                     objf=objf))
     checkpoint = {
         'state_dict': model.state_dict(),
         'num_features': model.num_features,
@@ -103,16 +106,14 @@ def save_checkpoint(
     torch.save(checkpoint, filename)
 
 
-def save_training_info(
-        filename: Pathlike,
-        model_path: Pathlike,
-        current_epoch: int,
-        learning_rate: float,
-        objf: float,
-        best_objf: float,
-        best_epoch: int,
-        local_rank: int = 0
-):
+def save_training_info(filename: Pathlike,
+                       model_path: Pathlike,
+                       current_epoch: int,
+                       learning_rate: float,
+                       objf: float,
+                       best_objf: float,
+                       best_epoch: int,
+                       local_rank: int = 0):
     if local_rank is not None and local_rank != 0:
         return
 
@@ -125,3 +126,30 @@ def save_training_info(
         f.write('best epoch: {}\n'.format(best_epoch))
 
     logging.info('write training info to {}'.format(filename))
+
+
+def get_phone_symbols(symbol_table: k2.SymbolTable,
+                      pattern: str = r'^#\d+$') -> List[int]:
+    '''Return a list of phone IDs containing no disambiguation symbols.
+
+    Caution:
+      0 is not a phone ID so it is excluded from the return value.
+
+    Args:
+      symbol_table:
+        A symbol table in k2.
+      pattern:
+        Symbols containing this pattern are disambiguation symbols.
+    Returns:
+      Return a list of symbol IDs excluding those from disambiguation symbols.
+    '''
+    regex = re.compile(pattern)
+    symbols = symbol_table.symbols
+    ans = []
+    for s in symbols:
+        if not regex.match(s):
+            ans.append(symbol_table[s])
+    if 0 in ans:
+        ans.remove(0)
+    ans.sort()
+    return ans
