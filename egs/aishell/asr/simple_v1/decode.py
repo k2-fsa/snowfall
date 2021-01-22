@@ -152,7 +152,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo_inv=ctc_topo,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
