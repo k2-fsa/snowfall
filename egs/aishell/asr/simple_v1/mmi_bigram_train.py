@@ -266,7 +266,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram'
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -300,11 +300,17 @@ def main():
                                   'cuts_train.json.gz')
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev.json.gz')
+    logging.info("About to get Musan cuts")
+    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
                                                max_frames=10000,
-                                               shuffle=True)
+                                               shuffle=True,
+                                               aug_cuts=cuts_musan,
+                                               aug_prob=0.5,
+                                               aug_snr=(10, 20))
+                                               )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
                                                   max_frames=10000,
