@@ -67,10 +67,7 @@ class Tdnnf1a(AcousticModel):
 
         self.ortho_constrain_count = 0
 
-        self.input_batch_norm = nn.BatchNorm1d(
-            num_features=self.num_features,
-            affine=False
-        )
+        self.input_batch_norm = nn.BatchNorm1d(num_features=self.num_features, affine=True)
 
         self.tdnn1 = TDNN(input_dim=self.num_features, hidden_dim=hidden_dim)
 
