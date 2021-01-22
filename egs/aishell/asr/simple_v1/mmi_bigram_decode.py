@@ -207,8 +207,7 @@ def main():
     P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
-    ctc_topo = build_ctc_topo(phone_ids_with_blank)
-    ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
+    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
     logging.debug("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
@@ -242,7 +241,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo_inv=ctc_topo_inv,
+                        ctc_topo=ctc_topo,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
