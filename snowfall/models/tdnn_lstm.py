@@ -1,7 +1,11 @@
+from typing import Optional
+
 from torch import Tensor
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 
 from snowfall.models import AcousticModel
+from snowfall.training.diagnostics import measure_weight_norms
 
 
 class TdnnLstm1a(AcousticModel):
@@ -162,3 +166,19 @@ class TdnnLstm1b(AcousticModel):
         x = x.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
         x = nn.functional.log_softmax(x, dim=1)
         return x
+
+    def write_tensorboard_diagnostics(
+            self,
+            tb_writer: SummaryWriter,
+            global_step: Optional[int] = None
+    ):
+        tb_writer.add_scalars(
+            'train/weight_l2_norms',
+            measure_weight_norms(self, norm='l2'),
+            global_step=global_step
+        )
+        tb_writer.add_scalars(
+            'train/weight_max_norms',
+            measure_weight_norms(self, norm='linf'),
+            global_step=global_step
+        )
