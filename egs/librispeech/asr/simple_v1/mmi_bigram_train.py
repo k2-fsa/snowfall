@@ -30,6 +30,7 @@ from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.models.tdnnf import Tdnnf1a
+from snowfall.training.diagnostics import measure_gradient_norms
 from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -76,6 +77,7 @@ def get_objf(batch: Dict,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
+             tb_writer: SummaryWriter,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
@@ -142,7 +144,9 @@ def get_objf(batch: Dict,
     if is_training:
         optimizer.zero_grad()
         (-tot_score).backward()
+        tb_writer.add_scalars('train/grad_norms', measure_gradient_norms(model, norm='l1'))
         clip_grad_value_(model.parameters(), 5.0)
+        tb_writer.add_scalars('train/clipped_grad_norms', measure_gradient_norms(model, norm='l1'))
         optimizer.step()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
@@ -198,7 +202,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-            get_objf(batch, model, P, device, graph_compiler, True, optimizer)
+            get_objf(batch, model, P, device, graph_compiler, True, tb_writer, optimizer)
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
