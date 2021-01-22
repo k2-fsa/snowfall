@@ -7,6 +7,8 @@ from torch import nn
 def measure_weight_norms(model: nn.Module, norm: str = 'l2') -> Dict[str, float]:
     """
     Compute the norms of the model's parameters.
+    Norms where it's applicable are normalized by the number
+    of weights (e.g. l1 or l2).
 
     :param model: a torch.nn.Module instance
     :param norm: how to compute the norm. Available values: 'l1', 'l2', 'linf'
@@ -16,9 +18,9 @@ def measure_weight_norms(model: nn.Module, norm: str = 'l2') -> Dict[str, float]
         norms = {}
         for name, param in model.named_parameters():
             if norm == 'l1':
-                val = torch.sum(torch.abs(param))
+                val = torch.mean(torch.abs(param))
             elif norm == 'l2':
-                val = torch.sum(torch.pow(param, 2))
+                val = torch.mean(torch.pow(param, 2))
             elif norm == 'linf':
                 val = torch.max(torch.abs(param))
             else:
