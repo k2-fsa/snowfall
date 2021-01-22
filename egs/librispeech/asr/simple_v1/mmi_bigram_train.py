@@ -78,6 +78,7 @@ def get_objf(batch: Dict,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
              tb_writer: SummaryWriter,
+             global_batch_idx_train: int,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
@@ -144,9 +145,17 @@ def get_objf(batch: Dict,
     if is_training:
         optimizer.zero_grad()
         (-tot_score).backward()
-        tb_writer.add_scalars('train/grad_norms', measure_gradient_norms(model, norm='l1'))
+        tb_writer.add_scalars(
+            'train/grad_norms',
+            measure_gradient_norms(model, norm='l1'),
+            global_step=global_batch_idx_train
+        )
         clip_grad_value_(model.parameters(), 5.0)
-        tb_writer.add_scalars('train/clipped_grad_norms', measure_gradient_norms(model, norm='l1'))
+        tb_writer.add_scalars(
+            'train/clipped_grad_norms',
+            measure_gradient_norms(model, norm='l1'),
+            global_step=global_batch_idx_train
+        )
         optimizer.step()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
@@ -202,7 +211,17 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-            get_objf(batch, model, P, device, graph_compiler, True, tb_writer, optimizer)
+            get_objf(
+                batch=batch,
+                model=model,
+                P=P,
+                device=device,
+                graph_compiler=graph_compiler,
+                is_training=True,
+                tb_writer=tb_writer,
+                global_batch_idx_train=global_batch_idx_train,
+                optimizer=optimizer
+            )
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
