@@ -45,8 +45,10 @@ fi
 
 if [ $stage -le 6 ]; then
   python3 ./train.py
+  python3 ./mmi_bigram_train.py
 fi
 
 if [ $stage -le 7 ]; then
   python3 ./decode.py
+  python3 ./mmi_bigram_decode.py
 fi
