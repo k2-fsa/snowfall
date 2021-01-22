@@ -138,7 +138,7 @@ def main():
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     ctc_topo = build_ctc_topo(list(phone_symbol_table._id2sym.keys()))
-    ctc_topo = k2.arc_sort(ctc_topo)
+    ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
 
     if not os.path.exists(lang_dir / 'LG.pt'):
         print("Loading L_disambig.fst.txt")
@@ -151,7 +151,7 @@ def main():
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
                         G=G,
-                        ctc_topo=ctc_topo,
+                        ctc_topo_inv=ctc_topo_inv,
                         labels_disambig_id_start=first_phone_disambig_id,
                         aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(LG.as_dict(), lang_dir / 'LG.pt')
