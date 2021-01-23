@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 import torch
 
@@ -39,13 +39,13 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, float, float]:
+def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
 
-    keys = ['state_dict', 'epoch', 'learning_rate', 'objf',
-            'num_features', 'num_classes', 'subsampling_factor']
+    keys = ['state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf'
+                                                            'num_features', 'num_classes', 'subsampling_factor']
     missing_keys = set(keys) - set(checkpoint.keys())
     if missing_keys:
         raise ValueError(f"Missing keys in checkpoint: {missing_keys}")
@@ -68,11 +68,7 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Tuple[int, floa
     model.num_classes = checkpoint['num_classes']
     model.subsampling_factor = checkpoint['subsampling_factor']
 
-    epoch = checkpoint['epoch']
-    learning_rate = checkpoint['learning_rate']
-    objf = checkpoint['objf']
-
-    return epoch, learning_rate, objf
+    return checkpoint
 
 
 def save_checkpoint(
@@ -81,16 +77,13 @@ def save_checkpoint(
         epoch: int,
         learning_rate: float,
         objf: float,
+        valid_objf: float,
         local_rank: int = 0
 ) -> None:
     if local_rank is not None and local_rank != 0:
         return
-    logging.info('Save checkpoint to {filename}: epoch={epoch}, '
-                 'learning_rate={learning_rate}, objf={objf}'.format(
-        filename=filename,
-        epoch=epoch,
-        learning_rate=learning_rate,
-        objf=objf))
+    logging.info(f'Save checkpoint to {filename}: epoch={epoch}, '
+                 f'learning_rate={learning_rate}, objf={objf}, valid_objf={valid_objf}')
     checkpoint = {
         'state_dict': model.state_dict(),
         'num_features': model.num_features,
@@ -98,7 +91,8 @@ def save_checkpoint(
         'subsampling_factor': model.subsampling_factor,
         'epoch': epoch,
         'learning_rate': learning_rate,
-        'objf': objf
+        'objf': objf,
+        'valid_objf': valid_objf
     }
     torch.save(checkpoint, filename)
 

@@ -144,7 +144,7 @@ def get_objf(batch: Dict,
 
     if is_training:
         def maybe_log_gradients(tag: str):
-            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 10 == 0:
+            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 200 == 0:
                 tb_writer.add_scalars(
                     tag,
                     measure_gradient_norms(model, norm='l1'),
@@ -200,7 +200,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
     prev_timestamp = datetime.now()
 
     model.train()
-    ragged_shape = P.arcs.shape().to(device)
     for batch_idx, batch in enumerate(dataloader):
         global_batch_idx_train += 1
         timestamp = datetime.now()
@@ -210,18 +209,17 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.is_cpu
         assert P.requires_grad is True
 
-        curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-            get_objf(
-                batch=batch,
-                model=model,
-                P=P,
-                device=device,
-                graph_compiler=graph_compiler,
-                is_training=True,
-                tb_writer=tb_writer,
-                global_batch_idx_train=global_batch_idx_train,
-                optimizer=optimizer
-            )
+        curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
+            batch=batch,
+            model=model,
+            P=P,
+            device=device,
+            graph_compiler=graph_compiler,
+            is_training=True,
+            tb_writer=tb_writer,
+            global_batch_idx_train=global_batch_idx_train,
+            optimizer=optimizer
+        )
 
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
@@ -259,19 +257,20 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 device=device,
                 graph_compiler=graph_compiler)
             global_batch_idx_valid += 1
+            valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(total_valid_objf / total_valid_frames,
+                    .format(valid_average_objf,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                                 total_valid_objf / total_valid_frames,
+                                 valid_average_objf,
                                  global_batch_idx_valid)
             model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_valid)
         prev_timestamp = datetime.now()
-    return total_objf / total_frames
+    return total_objf / total_frames, valid_average_objf, global_batch_idx_train, global_batch_idx_valid
 
 
 def describe(model: nn.Module):
@@ -368,6 +367,7 @@ def main():
     start_epoch = 0
     num_epochs = 10
     best_objf = np.inf
+    best_valid_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
@@ -386,9 +386,10 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        (epoch, learning_rate, objf) = load_checkpoint(filename=model_path, model=model)
-        best_objf = objf
-        logging.info("epoch = {}, objf = {}".format(epoch, objf))
+        ckpt = load_checkpoint(filename=model_path, model=model)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
     describe(model)
@@ -411,31 +412,33 @@ def main():
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # we have only one parameter group at this time so we always take just the first element.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
-        tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
+        tb_writer.add_scalar('learning_rate', curr_learning_rate, global_batch_idx_train)
 
-        logging.info('epoch {}, learning rate {}'.format(
-            epoch, curr_learning_rate))
-        objf = train_one_epoch(dataloader=train_dl,
-                               valid_dataloader=valid_dl,
-                               model=model,
-                               P=P,
-                               device=device,
-                               graph_compiler=graph_compiler,
-                               optimizer=optimizer,
-                               current_epoch=epoch,
-                               tb_writer=tb_writer,
-                               num_epochs=num_epochs,
-                               global_batch_idx_train=global_batch_idx_train,
-                               global_batch_idx_valid=global_batch_idx_valid)
+        logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
+        objf, valid_objf, global_batch_idx_train, global_batch_idx_valid = train_one_epoch(
+            dataloader=train_dl,
+            valid_dataloader=valid_dl,
+            model=model,
+            P=P,
+            device=device,
+            graph_compiler=graph_compiler,
+            optimizer=optimizer,
+            current_epoch=epoch,
+            tb_writer=tb_writer,
+            num_epochs=num_epochs,
+            global_batch_idx_train=global_batch_idx_train,
+            global_batch_idx_valid=global_batch_idx_valid
+        )
         # the lower, the better
-        if objf < best_objf:
-            best_objf = objf
+        if valid_objf < best_valid_objf:
+            best_valid_objf = valid_objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
-                            objf=objf)
+                            objf=objf,
+                            valid_objf=valid_objf)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -450,9 +453,9 @@ def main():
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
-                        objf=objf)
-        epoch_info_filename = os.path.join(exp_dir,
-                                           'epoch-{}-info'.format(epoch))
+                        objf=objf,
+                        valid_objf=valid_objf)
+        epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
                            current_epoch=epoch,
