@@ -111,6 +111,8 @@ def save_training_info(
         learning_rate: float,
         objf: float,
         best_objf: float,
+        valid_objf: float,
+        best_valid_objf: float,
         best_epoch: int,
         local_rank: int = 0
 ):
@@ -123,6 +125,8 @@ def save_training_info(
         f.write('learning rate: {}\n'.format(learning_rate))
         f.write('objf: {}\n'.format(objf))
         f.write('best objf: {}\n'.format(best_objf))
+        f.write('valid objf: {}\n'.format(valid_objf))
+        f.write('best valid objf: {}\n'.format(best_valid_objf))
         f.write('best epoch: {}\n'.format(best_epoch))
 
     logging.info('write training info to {}'.format(filename))

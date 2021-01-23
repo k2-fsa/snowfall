@@ -444,6 +444,7 @@ def main():
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf
+            best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
@@ -457,8 +458,10 @@ def main():
                                model_path=best_model_path,
                                current_epoch=epoch,
                                learning_rate=curr_learning_rate,
-                               objf=best_objf,
+                               objf=objf,
                                best_objf=best_objf,
+                               valid_objf=valid_objf,
+                               best_valid_objf=best_valid_objf,
                                best_epoch=best_epoch)
 
         # we always save the model for every epoch
@@ -478,6 +481,8 @@ def main():
                            learning_rate=curr_learning_rate,
                            objf=objf,
                            best_objf=best_objf,
+                           valid_objf=valid_objf,
+                           best_valid_objf=best_valid_objf,
                            best_epoch=best_epoch)
 
         lr_scheduler.step()
