@@ -17,6 +17,7 @@ from kaldialign import edit_distance
 from lhotse import CutSet
 from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
 
+from snowfall.common import get_phone_symbols
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
@@ -130,7 +131,7 @@ def find_first_disambig_symbol(symbols: SymbolTable) -> int:
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam')
+    exp_dir = Path('exp-lstm-adam-ctc-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -182,7 +183,7 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40, num_classes=len(phone_symbol_table))
+    model = TdnnLstm1b(num_features=40, num_classes=len(phone_ids_with_blank))
     checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)

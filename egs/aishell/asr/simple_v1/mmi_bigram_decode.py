@@ -279,22 +279,34 @@ def main():
                      LG=LG,
                      symbols=symbol_table)
     s = ''
+    results2 = []
     for ref, hyp in results:
         s += f'ref={ref}\n'
         s += f'hyp={hyp}\n'
+        results2.append((list(''.join(ref)), list(''.join(hyp))))
     logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
+    dists2 = [edit_distance(r, h) for r, h in results2]
     errors = {
         key: sum(dist[key] for dist in dists)
         for key in ['sub', 'ins', 'del', 'total']
     }
+    errors2 = {
+        key: sum(dist[key] for dist in dists2)
+        for key in ['sub', 'ins', 'del', 'total']
+    }
     total_words = sum(len(ref) for ref, _ in results)
+    total_chars = sum(len(ref) for ref, _ in results2)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
     logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
+    )
+    logging.info(
+        f'%WER {errors2["total"] / total_chars:.2%} '
+        f'[{errors2["total"]} / {total_chars}, {errors2["ins"]} ins, {errors2["del"]} del, {errors2["sub"]} sub ]'
     )
 
 

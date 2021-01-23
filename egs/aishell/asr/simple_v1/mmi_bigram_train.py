@@ -305,15 +305,14 @@ def main():
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=10000,
+                                               max_frames=30000,
                                                shuffle=True,
                                                aug_cuts=cuts_musan,
                                                aug_prob=0.5,
                                                aug_snr=(10, 20))
-                                               )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=10000,
+                                                  max_frames=30000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     logging.info("About to create train dataloader")

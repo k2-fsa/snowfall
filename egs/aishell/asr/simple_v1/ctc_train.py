@@ -27,6 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from snowfall.common import save_checkpoint, load_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.common import get_phone_symbols
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
@@ -109,8 +110,7 @@ def get_objf(batch: Dict,
     assert decoding_graph.is_cuda()
     assert decoding_graph.device == device
     assert nnet_output.device == device
-    # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
-    # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
+
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
     tot_scores = target_graph.get_tot_scores(
@@ -177,7 +177,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx > 0 and batch_idx % 10 == 0:
+        if batch_idx % 10 == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -239,7 +239,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = 'exp-lstm-adam'
+    exp_dir = 'exp-lstm-adam-ctc-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -271,11 +271,16 @@ def main():
                                   'cuts_train.json.gz')
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev.json.gz')
+    logging.info("About to get Musan cuts")
+    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
     train = K2SpeechRecognitionIterableDataset(cuts_train,
                                                max_frames=90000,
-                                               shuffle=True)
+                                               shuffle=True,
+                                               aug_cuts=cuts_musan,
+                                               aug_prob=0.5,
+                                               aug_snr=(10, 20))
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
                                                   max_frames=90000,
