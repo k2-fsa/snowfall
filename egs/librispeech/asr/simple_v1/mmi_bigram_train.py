@@ -389,6 +389,8 @@ def main():
         ckpt = load_checkpoint(filename=model_path, model=model)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        global_batch_idx_valid = ckpt['global_batch_idx_valid']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
@@ -413,6 +415,7 @@ def main():
         # we have only one parameter group at this time so we always take just the first element.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
         tb_writer.add_scalar('learning_rate', curr_learning_rate, global_batch_idx_train)
+        tb_writer.add_scalar('epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train, global_batch_idx_valid = train_one_epoch(
@@ -438,7 +441,9 @@ def main():
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
-                            valid_objf=valid_objf)
+                            valid_objf=valid_objf,
+                            global_batch_idx_train=global_batch_idx_train,
+                            global_batch_idx_valid=global_batch_idx_valid)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -454,7 +459,9 @@ def main():
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
-                        valid_objf=valid_objf)
+                        valid_objf=valid_objf,
+                        global_batch_idx_train=global_batch_idx_train,
+                        global_batch_idx_valid=global_batch_idx_valid)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
