@@ -396,10 +396,19 @@ def main():
     model.to(device)
     describe(model)
 
-    optimizer = optim.SGD(model.parameters(),
-                          lr=learning_rate,
-                          momentum=momentum,
-                          weight_decay=weight_decay)
+    out_layer_keys = {'output_affine.weight', 'output_affine.bias'}
+    optimizer = optim.SGD(
+        [
+            # Default optimization settings
+            {'params': [p for key, p in model.named_parameters() if key not in out_layer_keys]},
+            # Output layer may need smaller LR
+            {'params': [model.output_affine.weight], 'lr': learning_rate * 0.5},
+            {'params': [model.output_affine.bias], 'lr': learning_rate * 0.1},
+        ],
+        lr=learning_rate,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
     lr_scheduler = optim.lr_scheduler.ExponentialLR(
         optimizer=optimizer,
         gamma=lr_schedule_gamma,
