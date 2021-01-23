@@ -45,8 +45,8 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     checkpoint = torch.load(filename, map_location='cpu')
 
     keys = [
-        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf'
-                                                        'num_features', 'num_classes', 'subsampling_factor',
+        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
+        'num_features', 'num_classes', 'subsampling_factor',
         'global_batch_idx_train', 'global_batch_idx_valid'
     ]
     missing_keys = set(keys) - set(checkpoint.keys())
