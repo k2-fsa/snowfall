@@ -13,6 +13,7 @@ res_dir=$1
 dict_dir=$2
 mkdir -p $dict_dir
 cp $res_dir/lexicon.txt $dict_dir
+echo '<UNK> spn' >> $dict_dir/lexicon.txt
 
 cat $dict_dir/lexicon.txt | awk '{ for(n=2;n<=NF;n++){ phones[$n] = 1; }} END{for (p in phones) print p;}'| \
   perl -e 'while(<>){ chomp($_); $phone = $_; next if ($phone eq "sil");
