@@ -1,5 +1,6 @@
 k2
 kaldialign
+kaldilm
 lhotse@git+https://github.com/lhotse-speech/lhotse
 tensorboard
 torch>=1.6.0

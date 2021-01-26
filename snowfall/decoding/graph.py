@@ -30,13 +30,13 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo: Fsa, labels_disambig_id_start: int,
             words vocabulary.
     :return:
     """
-    L_inv = k2.arc_sort(L.invert_())
+    L = k2.arc_sort(L)
     G = k2.arc_sort(G)
     logging.debug("Intersecting L and G")
-    LG = k2.intersect(L_inv, G)
+    LG = k2.compose(L, G)
     logging.debug(f'LG shape = {LG.shape}')
     logging.debug("Connecting L*G")
-    LG = k2.connect(LG).invert_()
+    LG = k2.connect(LG)
     logging.debug(f'LG shape = {LG.shape}')
     logging.debug("Determinizing L*G")
     LG = k2.determinize(LG)

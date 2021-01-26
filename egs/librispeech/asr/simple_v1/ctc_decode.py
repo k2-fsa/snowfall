@@ -148,7 +148,7 @@ def main():
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
         print("Loading G.fsa.txt")
         with open(lang_dir / 'G.fsa.txt') as f:
-            G = k2.Fsa.from_openfst(f.read(), acceptor=True)
+            G = k2.Fsa.from_openfst(f.read(), acceptor=False)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
