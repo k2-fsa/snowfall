@@ -363,9 +363,9 @@ def main():
     logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = Tdnnf1a(num_features=40,
-                    num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-                    subsampling_factor=3)
+    model = TdnnLstm1b(num_features=40,
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+                       subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     start_epoch = 0
@@ -376,7 +376,7 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
-    use_adam = False
+    use_adam = True
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))

@@ -13,6 +13,12 @@ from torch.utils.tensorboard import SummaryWriter
 from snowfall.models import AcousticModel
 from snowfall.training.diagnostics import measure_semiorthogonality, measure_weight_norms
 
+"""
+CAUTION! This model is not fully ported from Kaldi. It will converge, but its training
+is still unstable and it seems to underperform its Kaldi counterpart.
+We expect to improve this going forward.
+"""
+
 
 def tdnnf_optimizer(
         model: nn.Module,
