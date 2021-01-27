@@ -203,9 +203,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int,
-                    global_batch_idx_valid: int):
+                    global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
+    valid_average_objf = float('inf')
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
 
@@ -266,7 +266,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
-            global_batch_idx_valid += 1
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             logging.info(
@@ -277,10 +276,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
             tb_writer.add_scalar('train/global_valid_average_objf',
                                  valid_average_objf,
-                                 global_batch_idx_valid)
-            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_valid)
+                                 global_batch_idx_train)
+            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
-    return total_objf / total_frames, valid_average_objf, global_batch_idx_train, global_batch_idx_valid
+    return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
 def describe(model: nn.Module):
@@ -378,7 +377,6 @@ def main():
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
-    global_batch_idx_valid = 0  # for logging only
     use_adam = False
 
     if start_epoch > 0:
@@ -387,7 +385,6 @@ def main():
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
-        global_batch_idx_valid = ckpt['global_batch_idx_valid']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
@@ -431,7 +428,7 @@ def main():
         tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
-        objf, valid_objf, global_batch_idx_train, global_batch_idx_valid = train_one_epoch(
+        objf, valid_objf, global_batch_idx_train = train_one_epoch(
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
@@ -443,7 +440,6 @@ def main():
             tb_writer=tb_writer,
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
-            global_batch_idx_valid=global_batch_idx_valid
         )
         # the lower, the better
         if valid_objf < best_valid_objf:
@@ -456,8 +452,7 @@ def main():
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
-                            global_batch_idx_train=global_batch_idx_train,
-                            global_batch_idx_valid=global_batch_idx_valid)
+                            global_batch_idx_train=global_batch_idx_train)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -476,8 +471,7 @@ def main():
                         learning_rate=curr_learning_rate,
                         objf=objf,
                         valid_objf=valid_objf,
-                        global_batch_idx_train=global_batch_idx_train,
-                        global_batch_idx_valid=global_batch_idx_valid)
+                        global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,

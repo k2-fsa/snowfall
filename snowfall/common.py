@@ -47,7 +47,7 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     keys = [
         'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
         'num_features', 'num_classes', 'subsampling_factor',
-        'global_batch_idx_train', 'global_batch_idx_valid'
+        'global_batch_idx_train'
     ]
     missing_keys = set(keys) - set(checkpoint.keys())
     if missing_keys:
@@ -82,7 +82,6 @@ def save_checkpoint(
         objf: float,
         valid_objf: float,
         global_batch_idx_train: int,
-        global_batch_idx_valid: int,
         local_rank: int = 0
 ) -> None:
     if local_rank is not None and local_rank != 0:
@@ -99,7 +98,6 @@ def save_checkpoint(
         'objf': objf,
         'valid_objf': valid_objf,
         'global_batch_idx_train': global_batch_idx_train,
-        'global_batch_idx_valid': global_batch_idx_valid
     }
     torch.save(checkpoint, filename)
 
