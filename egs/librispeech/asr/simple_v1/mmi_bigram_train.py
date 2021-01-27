@@ -29,8 +29,8 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.models.tdnnf import Tdnnf1a
-from snowfall.training.diagnostics import measure_gradient_norms
+from snowfall.models.tdnnf import Tdnnf1a, tdnnf_optimizer_param_groups
+from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -156,7 +156,17 @@ def get_objf(batch: Dict,
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
-        optimizer.step()
+        if global_batch_idx_train % 200 == 0:
+            # Once in a time we will perform a more costly diagnostic
+            # to check the relative parameter change per minibatch.
+            deltas = optim_step_and_measure_param_change(model, optimizer)
+            tb_writer.add_scalars(
+                'train/relative_param_change_per_minibatch',
+                deltas,
+                global_step=global_batch_idx_train
+            )
+        else:
+            optimizer.step()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
@@ -360,10 +370,6 @@ def main():
                     subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
-    learning_rate = 5e-5
-    weight_decay = 1e-5
-    momentum = 0.9
-    lr_schedule_gamma = 0.4
     start_epoch = 0
     num_epochs = 10
     best_objf = np.inf
@@ -373,16 +379,7 @@ def main():
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
     global_batch_idx_valid = 0  # for logging only
-
-    tb_writer.add_hparams(
-        hparam_dict={
-            'learning_rate': learning_rate,
-            'weight_decay': weight_decay,
-            'momentum': momentum,
-            'lr_schedule_gamma': lr_schedule_gamma
-        },
-        metric_dict={}
-    )
+    use_adam = False
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
@@ -396,35 +393,42 @@ def main():
     model.to(device)
     describe(model)
 
-    out_layer_keys = {'output_affine.weight', 'output_affine.bias'}
-    optimizer = optim.SGD(
-        [
-            # Default optimization settings
-            {'params': [p for key, p in model.named_parameters() if key not in out_layer_keys]},
-            # Output layer may need smaller LR
-            {'params': [model.output_affine.weight], 'lr': learning_rate * 0.5},
-            {'params': [model.output_affine.bias], 'lr': learning_rate * 0.1},
-        ],
-        lr=learning_rate,
-        momentum=momentum,
-        weight_decay=weight_decay
-    )
-    lr_scheduler = optim.lr_scheduler.ExponentialLR(
-        optimizer=optimizer,
-        gamma=lr_schedule_gamma,
-        last_epoch=start_epoch - 1
-    )
-    # optimizer = optim.AdamW(model.parameters(),
-    #                         # lr=learning_rate,
-    #                         weight_decay=weight_decay)
+    if use_adam:
+        learning_rate = 1e-3
+        weight_decay = 5e-4
+        optimizer = optim.AdamW(model.parameters(),
+                                lr=learning_rate,
+                                weight_decay=weight_decay)
+        # Equivalent to the following in the epoch loop:
+        #  if epoch > 6:
+        #      curr_learning_rate *= 0.8
+        lr_scheduler = optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda ep: 1.0 if ep < 7 else 0.8 ** (ep - 6)
+        )
+    else:
+        learning_rate = 5e-5
+        weight_decay = 1e-5
+        momentum = 0.9
+        lr_schedule_gamma = 0.7
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=learning_rate,
+            momentum=momentum,
+            weight_decay=weight_decay
+        )
+        lr_scheduler = optim.lr_scheduler.ExponentialLR(
+            optimizer=optimizer,
+            gamma=lr_schedule_gamma,
+            last_epoch=start_epoch - 1
+        )
 
-    # curr_learning_rate = learning_rate
     for epoch in range(start_epoch, num_epochs):
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
-        # we have only one parameter group at this time so we always take just the first element.
+        # For now we report just the first LR which we assume concerns most of the parameters.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
-        tb_writer.add_scalar('learning_rate', curr_learning_rate, global_batch_idx_train)
-        tb_writer.add_scalar('epoch', epoch, global_batch_idx_train)
+        tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+        tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train, global_batch_idx_valid = train_one_epoch(

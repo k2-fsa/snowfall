@@ -4,11 +4,21 @@ import torch
 from torch import nn
 
 
+def l1_norm(x):
+    return torch.sum(torch.abs(x))
+
+
+def l2_norm(x):
+    return torch.sum(torch.pow(x, 2))
+
+
+def linf_norm(x):
+    return torch.max(torch.abs(x))
+
+
 def measure_weight_norms(model: nn.Module, norm: str = 'l2') -> Dict[str, float]:
     """
     Compute the norms of the model's parameters.
-    Norms where it's applicable are normalized by the number
-    of weights (e.g. l1 or l2).
 
     :param model: a torch.nn.Module instance
     :param norm: how to compute the norm. Available values: 'l1', 'l2', 'linf'
@@ -18,11 +28,11 @@ def measure_weight_norms(model: nn.Module, norm: str = 'l2') -> Dict[str, float]
         norms = {}
         for name, param in model.named_parameters():
             if norm == 'l1':
-                val = torch.mean(torch.abs(param))
+                val = l1_norm(param)
             elif norm == 'l2':
-                val = torch.mean(torch.pow(param, 2))
+                val = l2_norm(param)
             elif norm == 'linf':
-                val = torch.max(torch.abs(param))
+                val = linf_norm(param)
             else:
                 raise ValueError(f"Unknown norm type: {norm}")
             norms[name] = val.item()
@@ -56,22 +66,46 @@ def measure_semiorthogonality(model: nn.Module) -> Dict[str, float]:
 def measure_gradient_norms(model: nn.Module, norm: str = 'l1') -> Dict[str, float]:
     """
     Compute the norms of the gradients for each of model's parameters.
-    Norms where it's applicable are normalized by the number
-    of weights (e.g. l1 or l2).
 
     :param model: a torch.nn.Module instance
     :param norm: how to compute the norm. Available values: 'l1', 'l2', 'linf'
     :return: a dict mapping from parameter's name to its gradient's norm.
     """
-    norms = {}
-    for name, param in model.named_parameters():
-        if norm == 'l1':
-            val = torch.mean(torch.abs(param.grad))
-        elif norm == 'l2':
-            val = torch.mean(torch.pow(param.grad, 2))
-        elif norm == 'linf':
-            val = torch.max(torch.abs(param.grad))
-        else:
-            raise ValueError(f"Unknown norm type: {norm}")
-        norms[name] = val.item()
-    return norms
+    with torch.no_grad():
+        norms = {}
+        for name, param in model.named_parameters():
+            if norm == 'l1':
+                val = l1_norm(param)
+            elif norm == 'l2':
+                val = l2_norm(param)
+            elif norm == 'linf':
+                val = linf_norm(param)
+            else:
+                raise ValueError(f"Unknown norm type: {norm}")
+            norms[name] = val.item()
+        return norms
+
+
+def optim_step_and_measure_param_change(
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer
+) -> Dict[str, float]:
+    """
+    Perform model weight update and measure the "relative change in parameters per minibatch."
+    It is understood as a ratio between the L2 norm of the difference between original and updates parameters,
+    and the L2 norm of the original parameter. It is given by the formula:
+
+        .. math::
+            \begin{aligned}
+                \delta = \frac{\Vert\theta - \theta_{new}\Vert^2}{\Vert\theta\Vert^2}
+            \end{aligned}
+    """
+    param_copy = {n: p.detach().clone() for n, p in model.named_parameters()}
+    optimizer.step()
+    relative_change = {}
+    with torch.no_grad():
+        for n, p_new in model.named_parameters():
+            p_orig = param_copy[n]
+            delta = l2_norm(p_orig - p_new) / l2_norm(p_orig)
+            relative_change[n] = delta.item()
+    return relative_change

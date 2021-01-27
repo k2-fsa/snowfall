@@ -14,6 +14,29 @@ from snowfall.models import AcousticModel
 from snowfall.training.diagnostics import measure_semiorthogonality, measure_weight_norms
 
 
+def tdnnf_optimizer(
+        model: nn.Module,
+        learning_rate: float = 5e-5,
+        momentum: float = 0.9,
+        weight_decay: float = 1e-5) -> torch.optim.Optimizer:
+    """
+    This is an example of an optimizer with parameter/layer-specific learning rates.
+    We don't use it by default but it can be helpful in tuning the training of a specific model.
+    """
+    out_layer_keys = {'output_affine.weight', 'output_affine.bias', 'prefinal_l.weight', 'prefinal_l.bias'}
+    return torch.optim.SGD([
+        # Default optimization settings
+        {'params': [p for key, p in model.named_parameters() if key not in out_layer_keys]},
+        # Output layer may need smaller LR
+        {'params': [model.output_affine.weight], 'lr': learning_rate * 0.5},
+        {'params': [model.output_affine.bias], 'lr': learning_rate * 0.1},
+    ],
+        lr=learning_rate,
+        momentum=momentum,
+        weight_decay=weight_decay
+    )
+
+
 class Tdnnf1a(AcousticModel):
     """
     This is a PyTorch implementation of a standard Kaldi TDNN-F model architecture.
