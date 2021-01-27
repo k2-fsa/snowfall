@@ -3,7 +3,7 @@
 # Copyright 2021 John's Hopkins University (author: Piotr Żelasko)
 # Copyright 2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
-from typing import Dict, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn

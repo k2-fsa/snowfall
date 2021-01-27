@@ -10,7 +10,7 @@ set -eou pipefail
 stage=1
 
 if [ $stage -le 1 ]; then
-  local/download_lm.sh "openslr.magicdatatech.com/resources/11" data/local/lm
+  local/download_lm.sh "openslr.org/resources/11" data/local/lm
 fi
 
 if [ $stage -le 2 ]; then
@@ -31,8 +31,11 @@ fi
 
 if [ $stage -le 4 ]; then
   # Build G
-  local/arpa2fst.py data/local/lm/lm_tgmed.arpa |
-    local/sym2int.pl -f 3 data/lang_nosp/words.txt >data/lang_nosp/G.fsa.txt
+  python3 -m kaldilm \
+    --read-symbol-table="data/lang_nosp/words.txt" \
+    --disambig-symbol='#0' \
+    --max-order=3 \
+    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fsa.txt
 
   echo "To load G:"
   echo "    Gfsa = k2.Fsa.from_openfst(<string of data/lang_nosp/G.fsa.txt>, acceptor=True)"

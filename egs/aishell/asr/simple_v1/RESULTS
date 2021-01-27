@@ -1,0 +1,6 @@
+# This result was obtained by Pingfeng Luo in 2021.01.23, after a rewrite of run file.
+# To see results from the scripts ctc_train.py and mmi_bigram_train.py, look at the top of those files, we don't put those in the RESULTS file.
+# 
+# CTC result:
+# Note: This is initial result and it will be updated when setup changes.
+%WER 13.89% [14547 / 104765, 482 ins, 404 del, 13661 sub ] exp-lstm-adam-ctc
