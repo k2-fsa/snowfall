@@ -124,7 +124,7 @@ class MmiMbrTrainingGraphCompiler(object):
         '''
         assert P.is_cpu()
 
-        logging.info('compiling', len(texts))
+        logging.info('compiling'.format(len(texts)))
         ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
         ctc_topo_P = k2.connect(ctc_topo_P)
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
