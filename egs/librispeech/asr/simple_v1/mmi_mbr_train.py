@@ -143,10 +143,10 @@ def get_objf(batch: Dict,
     decoding_lattice = k2.intersect_dense_pruned(
         decoding_graph,
         dense_fsa_vec,
+        20.0,
         7.0,
-        3.0,
         30,
-        100,
+        10000,
         seqframe_idx_name='seqframe_idx')
 
     num_rows = dense_fsa_vec.scores.shape[0]
