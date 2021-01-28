@@ -32,7 +32,7 @@ from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
-from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
+from snowfall.training.mmi_mbr_graph import MmiMbrTrainingGraphCompiler
 
 den_scale = 1.0
 
@@ -74,7 +74,7 @@ def get_objf(batch: Dict,
              model: AcousticModel,
              P: k2.Fsa,
              device: torch.device,
-             graph_compiler: MmiTrainingGraphCompiler,
+             graph_compiler: MmiMbrTrainingGraphCompiler,
              is_training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
@@ -106,47 +106,103 @@ def get_objf(batch: Dict,
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     if is_training:
-        num, den = graph_compiler.compile(texts, P)
+        num, den, mbr_num, mbr_den = graph_compiler.compile(texts, P)
     else:
         with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
+            num, den, mbr_num, mbr_den = graph_compiler.compile(texts, P)
 
     assert num.requires_grad == is_training
     assert den.requires_grad is False
+    assert mbr_num.requires_grad is False
+    assert mbr_den.requires_grad is False
+
     num = num.to(device)
     den = den.to(device)
 
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
+    mbr_num = mbr_num.to(device)
+    mbr_den = mbr_den.to(device)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    logging.info('intersect dense num')
+    num_graph = k2.intersect_dense(num, dense_fsa_vec, 10.0)
 
-    num_tot_scores = num.get_tot_scores(
-                                       log_semiring=True,
-                                       use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
-                                       log_semiring=True,
-                                       use_double_scores=True)
+    logging.info('intersect dense den')
+    den_graph = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+
+    logging.info('num get tot scores')
+    num_tot_scores = num_graph.get_tot_scores(log_semiring=True,
+                                              use_double_scores=True)
+
+    logging.info('den get tot scores')
+    den_tot_scores = den_graph.get_tot_scores(log_semiring=True,
+                                              use_double_scores=True)
+
     tot_scores = num_tot_scores - den_scale * den_tot_scores
 
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
+    logging.info('mbr_num_graph')
+    # now for mbr loss
+    mbr_num_graph = k2.intersect_dense(mbr_num,
+                                       dense_fsa_vec,
+                                       10.0,
+                                       seqframe_idx_name='seqframe_idx')
+    logging.info('mbr_den_graph {}'.format(mbr_den.shape))
+
+    mbr_den_graph = k2.intersect_dense_pruned(mbr_den,
+                                              dense_fsa_vec,
+                                              7.0,
+                                              3.0,
+                                              30,
+                                              100,
+                                              seqframe_idx_name='seqframe_idx')
+
+    num_rows = dense_fsa_vec.scores.shape[0]
+    num_cols = dense_fsa_vec.scores.shape[1] - 1
+    logging.info('mbr num create sparse')
+    mbr_num_sparse = k2.create_sparse(rows=mbr_num_graph.seqframe_idx,
+                                      cols=mbr_num_graph.phones,
+                                      values=mbr_num_graph.get_arc_post(
+                                          True, True).exp(),
+                                      size=(num_rows, num_cols),
+                                      min_col_index=0)
+
+    logging.info('mbr den create sparse')
+    mbr_den_sparse = k2.create_sparse(rows=mbr_den_graph.seqframe_idx,
+                                      cols=mbr_den_graph.phones,
+                                      values=mbr_den_graph.get_arc_post(
+                                          True, True).exp(),
+                                      size=(num_rows, num_cols),
+                                      min_col_index=0)
+    # NOTE: Due to limited support of PyTorch's autograd for sparse tensors,
+    # we cannot use (mbr_num_sparse - mbr_den_sparse) here
+    #
+    # The following works only for torch >= 1.7.0
+    logging.info('mbr sum')
+    mbr_loss = torch.sparse.sum(
+        k2.sparse.abs((mbr_num_sparse + (-mbr_den_sparse)).coalesce()))
+
+    mmi_loss = -tot_score
+
+    total_loss = mmi_loss + mbr_loss
+
+
+    logging.info('backward')
     if is_training:
         optimizer.zero_grad()
-        (-tot_score).backward()
+        total_loss.backward()
         clip_grad_value_(model.parameters(), 5.0)
         optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
-    ), all_frames.cpu().item()
+    ans = (
+        total_loss.detach().cpu().item(),
+        tot_frames.cpu().item(),
+        all_frames.cpu().item(),
+    )
     return ans
 
 
@@ -154,7 +210,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         P: k2.Fsa,
                         device: torch.device,
-                        graph_compiler: MmiTrainingGraphCompiler):
+                        graph_compiler: MmiMbrTrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
@@ -175,7 +231,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel, P: k2.Fsa,
                     device: torch.device,
-                    graph_compiler: MmiTrainingGraphCompiler,
+                    graph_compiler: MmiMbrTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
@@ -267,7 +323,7 @@ def describe(model: nn.Module):
 def main():
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
+    exp_dir = f'exp-lstm-adam-mmi-mbr-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -278,15 +334,41 @@ def main():
 
     logging.info("Loading L.fst")
     if (lang_dir / 'Linv.pt').exists():
+        logging.info('Loading precompiled L')
         L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
+        logging.info('Compiling L')
         with open(lang_dir / 'L.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
-    graph_compiler = MmiTrainingGraphCompiler(
+    logging.info("Loading L_disambig.fst")
+    if (lang_dir / 'L_disambig.pt').exists():
+        logging.info('Loading precompiled L_disambig')
+        L_disambig = k2.Fsa.from_dict(torch.load(lang_dir / 'L_disambig.pt'))
+    else:
+        logging.info('Compiling L_disambig')
+        with open(lang_dir / 'L_disambig.fst.txt') as f:
+            L_disambig = k2.Fsa.from_openfst(f.read(), acceptor=False)
+            L_disambig = k2.arc_sort(L_disambig)
+            torch.save(L_disambig.as_dict(), lang_dir / 'L_disambig.pt')
+
+    logging.info("Loading G.fst")
+    if (lang_dir / 'G_uni.pt').exists():
+        logging.info('Loading precompiled G')
+        G = k2.Fsa.from_dict(torch.load(lang_dir / 'G_uni.pt'))
+    else:
+        logging.info('Compiling G')
+        with open(lang_dir / 'G_uni.fst.txt') as f:
+            G = k2.Fsa.from_openfst(f.read(), acceptor=False)
+            G = k2.arc_sort(G)
+            torch.save(G.as_dict(), lang_dir / 'G_uni.pt')
+
+    graph_compiler = MmiMbrTrainingGraphCompiler(
         L_inv=L_inv,
+        L_disambig=L_disambig,
+        G=G,
         phones=phone_symbol_table,
         words=word_symbol_table
     )
@@ -371,7 +453,7 @@ def main():
         if epoch > 6:
             curr_learning_rate *= 0.8
         for param_group in optimizer.param_groups:
-           param_group['lr'] = curr_learning_rate
+            param_group['lr'] = curr_learning_rate
 
         tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
 
