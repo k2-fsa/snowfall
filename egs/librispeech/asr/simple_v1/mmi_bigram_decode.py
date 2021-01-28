@@ -213,9 +213,9 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = Tdnnf1a(num_features=40,
-                    num_classes=len(phone_ids) + 1, # +1 for the blank symbol
-                    subsampling_factor=3)
+    model = TdnnLstm1b(num_features=40,
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+                       subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
