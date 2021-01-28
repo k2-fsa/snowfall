@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import k2
+import k2.sparse
 import numpy as np
 import torch
 import torch.optim as optim
