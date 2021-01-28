@@ -124,7 +124,6 @@ class MmiMbrTrainingGraphCompiler(object):
         '''
         assert P.is_cpu()
 
-        logging.info('compiling'.format(len(texts)))
         ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
         ctc_topo_P = k2.connect(ctc_topo_P)
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
@@ -132,12 +131,10 @@ class MmiMbrTrainingGraphCompiler(object):
         num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        logging.info('num')
         num = k2.compose(ctc_topo_P, num_graphs, inner_labels='phones')
         num = k2.connect(num)
         num = k2.arc_sort(num)
 
-        logging.info('den')
         den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
 
         decoding_graphs = k2.create_fsa_vec([self.decoding_graph] * len(texts))

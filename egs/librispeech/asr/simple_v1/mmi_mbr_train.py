@@ -124,17 +124,13 @@ def get_objf(batch: Dict,
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    logging.info('intersect dense num')
     num_graph = k2.intersect_dense(num, dense_fsa_vec, 10.0, seqframe_idx_name='seqframe_idx')
 
-    logging.info('intersect dense den')
     den_graph = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 
-    logging.info('num get tot scores')
     num_tot_scores = num_graph.get_tot_scores(log_semiring=True,
                                               use_double_scores=True)
 
-    logging.info('den get tot scores')
     den_tot_scores = den_graph.get_tot_scores(log_semiring=True,
                                               use_double_scores=True)
 
@@ -143,8 +139,6 @@ def get_objf(batch: Dict,
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
-
-    logging.info('Decoding. It will not terminate. Debug it! Use kill -9 to kill it')
 
     decoding_lattice = k2.intersect_dense_pruned(
         decoding_graph,
@@ -157,7 +151,6 @@ def get_objf(batch: Dict,
 
     num_rows = dense_fsa_vec.scores.shape[0]
     num_cols = dense_fsa_vec.scores.shape[1] - 1
-    logging.info('mbr num create sparse')
     mbr_num_sparse = k2.create_sparse(rows=num_graph.seqframe_idx,
                                       cols=num_graph.phones,
                                       values=num_graph.get_arc_post(
@@ -165,7 +158,6 @@ def get_objf(batch: Dict,
                                       size=(num_rows, num_cols),
                                       min_col_index=0)
 
-    logging.info('mbr lattice create sparse')
     mbr_den_sparse = k2.create_sparse(rows=decoding_lattice.seqframe_idx,
                                       cols=decoding_lattice.phones,
                                       values=decoding_lattice.get_arc_post(
@@ -176,7 +168,6 @@ def get_objf(batch: Dict,
     # we cannot use (mbr_num_sparse - mbr_den_sparse) here
     #
     # The following works only for torch >= 1.7.0
-    logging.info('mbr sum')
     mbr_loss = torch.sparse.sum(
         k2.sparse.abs((mbr_num_sparse + (-mbr_den_sparse)).coalesce()))
 
@@ -184,8 +175,6 @@ def get_objf(batch: Dict,
 
     total_loss = mmi_loss + mbr_loss
 
-
-    logging.info('backward')
     if is_training:
         optimizer.zero_grad()
         total_loss.backward()
