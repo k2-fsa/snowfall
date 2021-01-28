@@ -106,27 +106,25 @@ def get_objf(batch: Dict,
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     if is_training:
-        num, den, mbr_num, mbr_den = graph_compiler.compile(texts, P)
+        num, den, decoding_graph = graph_compiler.compile(texts, P)
     else:
         with torch.no_grad():
-            num, den, mbr_num, mbr_den = graph_compiler.compile(texts, P)
+            num, den, decoding_graph = graph_compiler.compile(texts, P)
 
     assert num.requires_grad == is_training
     assert den.requires_grad is False
-    assert mbr_num.requires_grad is False
-    assert mbr_den.requires_grad is False
+    assert decoding_graph.requires_grad is False
 
     num = num.to(device)
     den = den.to(device)
 
-    mbr_num = mbr_num.to(device)
-    mbr_den = mbr_den.to(device)
+    decoding_graph = decoding_graph.to(device)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
     logging.info('intersect dense num')
-    num_graph = k2.intersect_dense(num, dense_fsa_vec, 10.0)
+    num_graph = k2.intersect_dense(num, dense_fsa_vec, 10.0, seqframe_idx_name='seqframe_idx')
 
     logging.info('intersect dense den')
     den_graph = k2.intersect_dense(den, dense_fsa_vec, 10.0)
@@ -145,36 +143,31 @@ def get_objf(batch: Dict,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
-    logging.info('mbr_num_graph')
-    # now for mbr loss
-    mbr_num_graph = k2.intersect_dense(mbr_num,
-                                       dense_fsa_vec,
-                                       10.0,
-                                       seqframe_idx_name='seqframe_idx')
-    logging.info('mbr_den_graph {}'.format(mbr_den.shape))
+    logging.info('Decoding. It will not terminate. Debug it! Use kill -9 to kill it')
 
-    mbr_den_graph = k2.intersect_dense_pruned(mbr_den,
-                                              dense_fsa_vec,
-                                              7.0,
-                                              3.0,
-                                              30,
-                                              100,
-                                              seqframe_idx_name='seqframe_idx')
+    decoding_lattice = k2.intersect_dense_pruned(
+        decoding_graph,
+        dense_fsa_vec,
+        7.0,
+        3.0,
+        30,
+        100,
+        seqframe_idx_name='seqframe_idx')
 
     num_rows = dense_fsa_vec.scores.shape[0]
     num_cols = dense_fsa_vec.scores.shape[1] - 1
     logging.info('mbr num create sparse')
-    mbr_num_sparse = k2.create_sparse(rows=mbr_num_graph.seqframe_idx,
-                                      cols=mbr_num_graph.phones,
-                                      values=mbr_num_graph.get_arc_post(
+    mbr_num_sparse = k2.create_sparse(rows=num_graph.seqframe_idx,
+                                      cols=num_graph.phones,
+                                      values=num_graph.get_arc_post(
                                           True, True).exp(),
                                       size=(num_rows, num_cols),
                                       min_col_index=0)
 
-    logging.info('mbr den create sparse')
-    mbr_den_sparse = k2.create_sparse(rows=mbr_den_graph.seqframe_idx,
-                                      cols=mbr_den_graph.phones,
-                                      values=mbr_den_graph.get_arc_post(
+    logging.info('mbr lattice create sparse')
+    mbr_den_sparse = k2.create_sparse(rows=decoding_lattice.seqframe_idx,
+                                      cols=decoding_lattice.phones,
+                                      values=decoding_lattice.get_arc_post(
                                           True, True).exp(),
                                       size=(num_rows, num_cols),
                                       min_col_index=0)

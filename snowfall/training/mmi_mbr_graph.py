@@ -80,22 +80,26 @@ class MmiMbrTrainingGraphCompiler(object):
             logging.info("Composing (ctc_topo, L, G)")
             first_phone_disambig_id = find_first_disambig_symbol(phones)
             first_word_disambig_id = find_first_disambig_symbol(words)
-            mbr_den = compile_LG(
+            # decoding_graph is the result of composing (ctc_topo, L, G)
+            decoding_graph = compile_LG(
                 L=L_disambig,
                 G=G,
                 ctc_topo=ctc_topo,
                 labels_disambig_id_start=first_phone_disambig_id,
                 aux_labels_disambig_id_start=first_word_disambig_id)
-            torch.save(mbr_den.as_dict(), lang_dir / 'ctc_topo_LG_uni.pt')
+            torch.save(decoding_graph.as_dict(),
+                       lang_dir / 'ctc_topo_LG_uni.pt')
         else:
             logging.info("Loading pre-compiled ctc_topo_LG")
-            d = torch.load(lang_dir / 'ctc_topo_LG_uni.pt')
-            mbr_den = k2.Fsa.from_dict(d)
+            decoding_graph = k2.Fsa.from_dict(
+                torch.load(lang_dir / 'ctc_topo_LG_uni.pt'))
 
-        self.mbr_den = mbr_den
+        assert hasattr(decoding_graph, 'phones')
+
+        self.decoding_graph = decoding_graph
 
     def compile(self, texts: Iterable[str],
-                P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
+                P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa, k2.Fsa]:
         '''Create numerator and denominator graphs from transcripts
         and the bigram phone LM.
 
@@ -106,7 +110,7 @@ class MmiMbrTrainingGraphCompiler(object):
           P:
             The bigram phone LM created by :func:`create_bigram_phone_lm`.
         Returns:
-          A tuple (num_graph, den_graph, mbr_num_graph, mbr_den_graph), where
+          A tuple (num_graph, den_graph, decoding_graphs), where
 
             - `num_graph` is the numerator graph. It is an FsaVec with
               shape `(len(texts), None, None)`.
@@ -116,9 +120,7 @@ class MmiMbrTrainingGraphCompiler(object):
               shape of the `num_graph`.
               It is the result of compose(ctc_topo, P)
 
-            - mbr_num_graph: It is the result of compose(ctc_topo, L, transcript)
-
-            - mbr_den_graph: It is the result of compose(ctc_topo, L, G)
+            - decoding_graph: It is the result of compose(ctc_topo, L, G)
         '''
         assert P.is_cpu()
 
@@ -130,11 +132,6 @@ class MmiMbrTrainingGraphCompiler(object):
         num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        logging.info('mbr num')
-        mbr_num = k2.compose(self.ctc_topo, num_graphs, inner_labels='phones')
-        mbr_num = k2.connect(mbr_num)
-        mbr_num = k2.arc_sort(mbr_num)
-
         logging.info('num')
         num = k2.compose(ctc_topo_P, num_graphs)
         num = k2.connect(num)
@@ -143,10 +140,9 @@ class MmiMbrTrainingGraphCompiler(object):
         logging.info('den')
         den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
 
-        logging.info('mbr den')
-        mbr_den = k2.create_fsa_vec([self.mbr_den] * len(texts))
+        decoding_graphs = k2.create_fsa_vec([self.decoding_graph] * len(texts))
 
-        return num, den, mbr_num, mbr_den
+        return num, den, decoding_graphs
 
     @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:
