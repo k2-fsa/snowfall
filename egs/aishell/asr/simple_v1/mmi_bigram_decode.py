@@ -116,7 +116,7 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
-    assert(aux_labels.num_axes() == 2)
+    assert (aux_labels.num_axes() == 2)
     aux_labels, _ = k2.ragged.index(aux_labels,
                                     invert_permutation(indices).to(dtype=torch.int32,
                                                                    device=best_paths.device))
@@ -127,6 +127,7 @@ def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
     ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
     ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
     return ans
+
 
 def find_first_disambig_symbol(symbols: SymbolTable) -> int:
     return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
@@ -149,7 +150,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
     num_phones = len(phone_ids)
     table = np.zeros((num_phones + 1, num_phones + 2))
     table[:, 0] = 0
-    table[0, -1] = 0 # the start state has no arcs to the final state
+    table[0, -1] = 0  # the start state has no arcs to the final state
     assert P.arcs.dim0() == num_phones + 2
     arcs = P.arcs.values()[:, :3]
     probability = P.scores.exp().tolist()
@@ -214,7 +215,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
@@ -266,7 +267,6 @@ def main():
     #  if not torch.cuda.is_available():
     #  logging.error('No GPU detected!')
     #  sys.exit(-1)
-
 
     logging.debug("convert LG to device")
     LG = LG.to(device)

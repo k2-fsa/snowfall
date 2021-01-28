@@ -115,7 +115,6 @@ def get_objf(batch: Dict,
     num = num.to(device)
     den = den.to(device)
 
-
     # nnet_output2 = nnet_output.clone()
     # blank_bias = -7.0
     # nnet_output2[:,:,0] += blank_bias
@@ -127,11 +126,11 @@ def get_objf(batch: Dict,
     den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 
     num_tot_scores = num.get_tot_scores(
-                                       log_semiring=True,
-                                       use_double_scores=True)
+        log_semiring=True,
+        use_double_scores=True)
     den_tot_scores = den.get_tot_scores(
-                                       log_semiring=True,
-                                       use_double_scores=True)
+        log_semiring=True,
+        use_double_scores=True)
     tot_scores = num_tot_scores - den_scale * den_tot_scores
 
     (tot_score, tot_frames,
@@ -243,8 +242,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                             total_valid_objf / total_valid_frames,
-                             global_batch_idx_valid)
+                                 total_valid_objf / total_valid_frames,
+                                 global_batch_idx_valid)
         prev_timestamp = datetime.now()
     return total_objf / total_frames
 
@@ -332,10 +331,9 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
-
 
     learning_rate = 1e-3
     start_epoch = 0
@@ -344,8 +342,8 @@ def main():
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0 # for logging only
-    global_batch_idx_valid = 0 # for logging only
+    global_batch_idx_train = 0  # for logging only
+    global_batch_idx_valid = 0  # for logging only
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
@@ -370,7 +368,7 @@ def main():
         if epoch > 6:
             curr_learning_rate *= 0.8
         for param_group in optimizer.param_groups:
-           param_group['lr'] = curr_learning_rate
+            param_group['lr'] = curr_learning_rate
 
         tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
 

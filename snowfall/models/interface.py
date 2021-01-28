@@ -1,4 +1,7 @@
+from typing import Optional
+
 from torch import nn
+from torch.utils.tensorboard import SummaryWriter
 
 
 class AcousticModel(nn.Module):
@@ -18,3 +21,17 @@ class AcousticModel(nn.Module):
     # When greater than one, the networks output sequence length will be
     # this many times smaller than the input sequence length.
     subsampling_factor: int
+
+    def write_tensorboard_diagnostics(
+            self,
+            tb_writer: SummaryWriter,
+            global_step: Optional[int] = None
+    ):
+        """
+        Collect interesting diagnostic info about the model and write to to TensorBoard.
+        Unless overridden, logs nothing.
+
+        :param tb_writer: a TensorBoard ``SummaryWriter`` instance.
+        :param global_step: optional number of total training steps done so far.
+        """
+        pass

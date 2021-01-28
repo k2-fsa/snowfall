@@ -114,8 +114,8 @@ def get_objf(batch: Dict,
     target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
 
     tot_scores = target_graph.get_tot_scores(
-                                   log_semiring=True,
-                                   use_double_scores=True)
+        log_semiring=True,
+        use_double_scores=True)
 
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
@@ -314,8 +314,8 @@ def main():
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0 # for logging only
-    global_batch_idx_valid = 0 # for logging only
+    global_batch_idx_train = 0  # for logging only
+    global_batch_idx_valid = 0  # for logging only
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))

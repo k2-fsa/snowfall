@@ -7,8 +7,8 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Tuple, Union
 import re
-from typing import List, Tuple, Union
 
 import k2
 import torch
@@ -41,15 +41,15 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
     logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike,
-                    model: AcousticModel) -> Tuple[int, float, float]:
+def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
 
     keys = [
-        'state_dict', 'epoch', 'learning_rate', 'objf', 'num_features',
-        'num_classes', 'subsampling_factor'
+        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
+        'num_features', 'num_classes', 'subsampling_factor',
+        'global_batch_idx_train'
     ]
     missing_keys = set(keys) - set(checkpoint.keys())
     if missing_keys:
@@ -73,27 +73,23 @@ def load_checkpoint(filename: Pathlike,
     model.num_classes = checkpoint['num_classes']
     model.subsampling_factor = checkpoint['subsampling_factor']
 
-    epoch = checkpoint['epoch']
-    learning_rate = checkpoint['learning_rate']
-    objf = checkpoint['objf']
-
-    return epoch, learning_rate, objf
+    return checkpoint
 
 
-def save_checkpoint(filename: Pathlike,
-                    model: AcousticModel,
-                    epoch: int,
-                    learning_rate: float,
-                    objf: float,
-                    local_rank: int = 0) -> None:
+def save_checkpoint(
+        filename: Pathlike,
+        model: AcousticModel,
+        epoch: int,
+        learning_rate: float,
+        objf: float,
+        valid_objf: float,
+        global_batch_idx_train: int,
+        local_rank: int = 0
+) -> None:
     if local_rank is not None and local_rank != 0:
         return
-    logging.info('Save checkpoint to {filename}: epoch={epoch}, '
-                 'learning_rate={learning_rate}, objf={objf}'.format(
-                     filename=filename,
-                     epoch=epoch,
-                     learning_rate=learning_rate,
-                     objf=objf))
+    logging.info(f'Save checkpoint to {filename}: epoch={epoch}, '
+                 f'learning_rate={learning_rate}, objf={objf}, valid_objf={valid_objf}')
     checkpoint = {
         'state_dict': model.state_dict(),
         'num_features': model.num_features,
@@ -101,19 +97,25 @@ def save_checkpoint(filename: Pathlike,
         'subsampling_factor': model.subsampling_factor,
         'epoch': epoch,
         'learning_rate': learning_rate,
-        'objf': objf
+        'objf': objf,
+        'valid_objf': valid_objf,
+        'global_batch_idx_train': global_batch_idx_train,
     }
     torch.save(checkpoint, filename)
 
 
-def save_training_info(filename: Pathlike,
-                       model_path: Pathlike,
-                       current_epoch: int,
-                       learning_rate: float,
-                       objf: float,
-                       best_objf: float,
-                       best_epoch: int,
-                       local_rank: int = 0):
+def save_training_info(
+        filename: Pathlike,
+        model_path: Pathlike,
+        current_epoch: int,
+        learning_rate: float,
+        objf: float,
+        best_objf: float,
+        valid_objf: float,
+        best_valid_objf: float,
+        best_epoch: int,
+        local_rank: int = 0
+):
     if local_rank is not None and local_rank != 0:
         return
 
@@ -123,6 +125,8 @@ def save_training_info(filename: Pathlike,
         f.write('learning rate: {}\n'.format(learning_rate))
         f.write('objf: {}\n'.format(objf))
         f.write('best objf: {}\n'.format(best_objf))
+        f.write('valid objf: {}\n'.format(valid_objf))
+        f.write('best valid objf: {}\n'.format(best_valid_objf))
         f.write('best epoch: {}\n'.format(best_epoch))
 
     logging.info('write training info to {}'.format(filename))
