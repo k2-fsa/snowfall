@@ -1,9 +1,14 @@
+from typing import Optional
+
 from torch import Tensor
 from torch import nn
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
+from torch.utils.tensorboard import SummaryWriter
+
 from snowfall.models import AcousticModel
+from snowfall.training.diagnostics import measure_weight_norms
 
 
 class Tdnn1a(AcousticModel):
@@ -97,3 +102,19 @@ class Tdnn1a(AcousticModel):
         x = self.tdnn(x)
         x = nn.functional.log_softmax(x, dim=1)
         return x
+
+    def write_tensorboard_diagnostics(
+            self,
+            tb_writer: SummaryWriter,
+            global_step: Optional[int] = None
+    ):
+        tb_writer.add_scalars(
+            'train/weight_l2_norms',
+            measure_weight_norms(self, norm='l2'),
+            global_step=global_step
+        )
+        tb_writer.add_scalars(
+            'train/weight_max_norms',
+            measure_weight_norms(self, norm='linf'),
+            global_step=global_step
+        )
