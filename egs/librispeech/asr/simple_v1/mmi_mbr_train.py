@@ -71,7 +71,7 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
-def get_objf(batch: Dict,
+def get_loss(batch: Dict,
              model: AcousticModel,
              P: k2.Fsa,
              device: torch.device,
@@ -182,32 +182,38 @@ def get_objf(batch: Dict,
         optimizer.step()
 
     ans = (
-        total_loss.detach().cpu().item(),
+        mmi_loss.detach().cpu().item(),
+        mbr_loss.detach().cpu().item(),
         tot_frames.cpu().item(),
         all_frames.cpu().item(),
     )
     return ans
 
 
-def get_validation_objf(dataloader: torch.utils.data.DataLoader,
+def get_validation_loss(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiMbrTrainingGraphCompiler):
-    total_objf = 0.
+    total_loss = 0.
+    total_mmi_loss = 0.
+    total_mbr_loss = 0.
     total_frames = 0.  # for display only
     total_all_frames = 0.  # all frames including those seqs that failed.
 
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, P, device,
-                                            graph_compiler, False)
-        total_objf += objf
+        mmi_loss, mbr_loss, frames, all_frames = get_loss(
+            batch, model, P, device, graph_compiler, False)
+        cur_loss = mmi_loss + mbr_loss
+        total_loss += cur_loss
+        total_mmi_loss += mmi_loss
+        total_mbr_loss += mbr_loss
         total_frames += frames
         total_all_frames += all_frames
 
-    return total_objf, total_frames, total_all_frames
+    return total_loss, total_mmi_loss, total_mbr_loss, total_frames, total_all_frames
 
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
@@ -221,7 +227,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     num_epochs: int,
                     global_batch_idx_train: int,
                     global_batch_idx_valid: int):
-    total_objf, total_frames, total_all_frames = 0., 0., 0.
+    total_loss, total_mmi_loss, total_mbr_loss, total_frames, total_all_frames = 0., 0., 0., 0., 0.
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
 
@@ -236,39 +242,67 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.is_cpu
         assert P.requires_grad is True
 
-        curr_batch_objf, curr_batch_frames, curr_batch_all_frames = \
-            get_objf(batch, model, P, device, graph_compiler, True, optimizer)
+        curr_batch_mmi_loss, curr_batch_mbr_loss, curr_batch_frames, curr_batch_all_frames = \
+            get_loss(batch, model, P, device, graph_compiler, True, optimizer)
 
-        total_objf += curr_batch_objf
+        total_mmi_loss += curr_batch_mmi_loss
+        total_mbr_loss += curr_batch_mbr_loss
+        curr_batch_loss = curr_batch_mmi_loss + curr_batch_mbr_loss
+        total_loss += curr_batch_loss
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
         if batch_idx % 10 == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
-                'global average objf: {:.6f} over {} '
-                'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
+                'global average loss: {:.6f}, '
+                'global average mmi loss: {:.6f}, '
+                'global average mbr loss: {:.6f} over {} '
+                'frames ({:.1f}% kept), '
+                'current batch average loss: {:.6f}, '
+                'current batch average mmi loss: {:.6f}, '
+                'current batch average mbr loss: {:.6f} '
+                'over {} frames ({:.1f}% kept) '
                 'avg time waiting for batch {:.3f}s'.format(
                     batch_idx, current_epoch, num_epochs,
-                    total_objf / total_frames, total_frames,
+                    total_loss / total_frames,
+                    total_mmi_loss / total_frames,
+                    total_mbr_loss / total_frames, total_frames,
                     100.0 * total_frames / total_all_frames,
-                    curr_batch_objf / (curr_batch_frames + 0.001),
+                    curr_batch_loss / (curr_batch_frames + 0.001),
+                    curr_batch_mmi_loss / (curr_batch_frames + 0.001),
+                    curr_batch_mbr_loss / (curr_batch_frames + 0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
 
-            tb_writer.add_scalar('train/global_average_objf',
-                                 total_objf / total_frames, global_batch_idx_train)
+            tb_writer.add_scalar('train/global_average_loss',
+                                 total_loss / total_frames, global_batch_idx_train)
 
-            tb_writer.add_scalar('train/current_batch_average_objf',
-                                 curr_batch_objf / (curr_batch_frames + 0.001),
+            tb_writer.add_scalar('train/global_average_mmi_loss',
+                                 total_mmi_loss / total_frames, global_batch_idx_train)
+
+            tb_writer.add_scalar('train/global_average_mbr_loss',
+                                 total_mbr_loss / total_frames, global_batch_idx_train)
+
+            tb_writer.add_scalar('train/current_batch_average_loss',
+                                 curr_batch_loss / (curr_batch_frames + 0.001),
+                                 global_batch_idx_train)
+
+            tb_writer.add_scalar('train/current_batch_average_mmi_loss',
+                                 curr_batch_mmi_loss / (curr_batch_frames + 0.001),
+                                 global_batch_idx_train)
+
+            tb_writer.add_scalar('train/current_batch_average_mbr_loss',
+                                 curr_batch_mbr_loss / (curr_batch_frames + 0.001),
                                  global_batch_idx_train)
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        if batch_idx > 0 and batch_idx % 200 == 0:
-            total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
+        if batch_idx > 0 and batch_idx % 3000 == 0:
+            total_valid_loss, total_valid_mmi_loss, total_valid_mbr_loss, \
+                    total_valid_frames, total_valid_all_frames = get_validation_loss(
                 dataloader=valid_dataloader,
                 model=model,
                 P=P,
@@ -277,16 +311,30 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             global_batch_idx_valid += 1
             model.train()
             logging.info(
-                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(total_valid_objf / total_valid_frames,
+                'Validation average loss: {:.6f}, '
+                'Validation average mmi loss: {:.6f}, '
+                'Validation average mbr loss: {:.6f} '
+                'over {} frames ({:.1f}% kept)'
+                    .format(total_valid_loss / total_valid_frames,
+                            total_valid_mmi_loss / total_valid_frames,
+                            total_valid_mbr_loss / total_valid_frames,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
-            tb_writer.add_scalar('train/global_valid_average_objf',
-                             total_valid_objf / total_valid_frames,
+            tb_writer.add_scalar('train/global_valid_average_loss',
+                             total_valid_loss / total_valid_frames,
                              global_batch_idx_valid)
+
+            tb_writer.add_scalar('train/global_valid_average_mmi_loss',
+                             total_valid_mmi_loss / total_valid_frames,
+                             global_batch_idx_valid)
+
+            tb_writer.add_scalar('train/global_valid_average_mbr_loss',
+                             total_valid_mbr_loss / total_valid_frames,
+                             global_batch_idx_valid)
+
         prev_timestamp = datetime.now()
-    return total_objf / total_frames
+    return total_loss / total_frames
 
 
 def describe(model: nn.Module):
