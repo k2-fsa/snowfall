@@ -205,7 +205,12 @@ def get_validation_loss(dataloader: torch.utils.data.DataLoader,
 
     for batch_idx, batch in enumerate(dataloader):
         mmi_loss, mbr_loss, frames, all_frames = get_loss(
-            batch, model, P, device, graph_compiler, False)
+            batch=batch,
+            model=model,
+            P=P,
+            device=device,
+            graph_compiler=graph_compiler,
+            is_training=False)
         cur_loss = mmi_loss + mbr_loss
         total_loss += cur_loss
         total_mmi_loss += mmi_loss
@@ -225,9 +230,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int,
-                    global_batch_idx_valid: int):
+                    global_batch_idx_train: int):
     total_loss, total_mmi_loss, total_mbr_loss, total_frames, total_all_frames = 0., 0., 0., 0., 0.
+    valid_average_loss = float('inf')
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
 
@@ -242,8 +247,14 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.is_cpu
         assert P.requires_grad is True
 
-        curr_batch_mmi_loss, curr_batch_mbr_loss, curr_batch_frames, curr_batch_all_frames = \
-            get_loss(batch, model, P, device, graph_compiler, True, optimizer)
+        curr_batch_mmi_loss, curr_batch_mbr_loss, curr_batch_frames, curr_batch_all_frames = get_loss(
+            batch=batch,
+            model=model,
+            P=P,
+            device=device,
+            graph_compiler=graph_compiler,
+            is_training=True,
+            optimizer)
 
         total_mmi_loss += curr_batch_mmi_loss
         total_mbr_loss += curr_batch_mbr_loss
@@ -308,7 +319,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
-            global_batch_idx_valid += 1
+            valid_average_loss = total_valid_loss / total_valid_frames
             model.train()
             logging.info(
                 'Validation average loss: {:.6f}, '
@@ -323,18 +334,18 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
             tb_writer.add_scalar('train/global_valid_average_loss',
                              total_valid_loss / total_valid_frames,
-                             global_batch_idx_valid)
+                             global_batch_idx_train)
 
             tb_writer.add_scalar('train/global_valid_average_mmi_loss',
                              total_valid_mmi_loss / total_valid_frames,
-                             global_batch_idx_valid)
+                             global_batch_idx_train)
 
             tb_writer.add_scalar('train/global_valid_average_mbr_loss',
                              total_valid_mbr_loss / total_valid_frames,
-                             global_batch_idx_valid)
+                             global_batch_idx_train)
 
         prev_timestamp = datetime.now()
-    return total_loss / total_frames
+    return total_loss / total_frames, valid_average_loss, global_batch_idx_train
 
 
 def describe(model: nn.Module):
@@ -426,13 +437,13 @@ def main():
                                                aug_snr=(10, 20))
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=30000,
+                                                  max_frames=60000,
                                                   shuffle=False,
                                                   concat_cuts=False)
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(train,
                                            batch_size=None,
-                                           num_workers=2)
+                                           num_workers=4)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(validate,
                                            batch_size=None,
@@ -446,77 +457,103 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
+                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
-
-    learning_rate = 1e-3
     start_epoch = 0
     num_epochs = 10
     best_objf = np.inf
+    best_valid_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0 # for logging only
-    global_batch_idx_valid = 0 # for logging only
+    global_batch_idx_train = 0  # for logging only
+    use_adam = True
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        (epoch, learning_rate, objf) = load_checkpoint(filename=model_path, model=model)
-        best_objf = objf
-        logging.info("epoch = {}, objf = {}".format(epoch, objf))
+        ckpt = load_checkpoint(filename=model_path, model=model)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
     describe(model)
 
-    #  optimizer = optim.SGD(model.parameters(),
-    #                       lr=learning_rate,
-    #                       momentum=0.9,
-    #                       weight_decay=5e-4)
-    optimizer = optim.AdamW(model.parameters(),
-                            # lr=learning_rate,
-                            weight_decay=5e-4)
+    if use_adam:
+        learning_rate = 1e-3
+        weight_decay = 5e-4
+        optimizer = optim.AdamW(model.parameters(),
+                                lr=learning_rate,
+                                weight_decay=weight_decay)
+        # Equivalent to the following in the epoch loop:
+        #  if epoch > 6:
+        #      curr_learning_rate *= 0.8
+        lr_scheduler = optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda ep: 1.0 if ep < 7 else 0.8 ** (ep - 6)
+        )
+    else:
+        learning_rate = 5e-5
+        weight_decay = 1e-5
+        momentum = 0.9
+        lr_schedule_gamma = 0.7
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=learning_rate,
+            momentum=momentum,
+            weight_decay=weight_decay
+        )
+        lr_scheduler = optim.lr_scheduler.ExponentialLR(
+            optimizer=optimizer,
+            gamma=lr_schedule_gamma,
+            last_epoch=start_epoch - 1
+        )
 
-    curr_learning_rate = learning_rate
+
     for epoch in range(start_epoch, num_epochs):
-        # curr_learning_rate = learning_rate * pow(0.4, epoch)
-        if epoch > 6:
-            curr_learning_rate *= 0.8
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = curr_learning_rate
+        # LR scheduler can hold multiple learning rates for multiple parameter groups;
+        # For now we report just the first LR which we assume concerns most of the parameters.
+        curr_learning_rate = lr_scheduler.get_last_lr()[0]
+        tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+        tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
-        tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
-
-        logging.info('epoch {}, learning rate {}'.format(
-            epoch, curr_learning_rate))
-        objf = train_one_epoch(dataloader=train_dl,
-                               valid_dataloader=valid_dl,
-                               model=model,
-                               P=P,
-                               device=device,
-                               graph_compiler=graph_compiler,
-                               optimizer=optimizer,
-                               current_epoch=epoch,
-                               tb_writer=tb_writer,
-                               num_epochs=num_epochs,
-                               global_batch_idx_train=global_batch_idx_train,
-                               global_batch_idx_valid=global_batch_idx_valid)
+        logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
+        objf, valid_objf, global_batch_idx_train = train_one_epoch(
+            dataloader=train_dl,
+            valid_dataloader=valid_dl,
+            model=model,
+            P=P,
+            device=device,
+            graph_compiler=graph_compiler,
+            optimizer=optimizer,
+            current_epoch=epoch,
+            tb_writer=tb_writer,
+            num_epochs=num_epochs,
+            global_batch_idx_train=global_batch_idx_train,
+        )
         # the lower, the better
-        if objf < best_objf:
+        if valid_objf < best_valid_objf:
+            best_valid_objf = valid_objf
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
-                            objf=objf)
+                            objf=objf,
+                            valid_objf=valid_objf,
+                            global_batch_idx_train=global_batch_idx_train)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
                                learning_rate=curr_learning_rate,
-                               objf=best_objf,
+                               objf=objf,
                                best_objf=best_objf,
+                               valid_objf=valid_objf,
+                               best_valid_objf=best_valid_objf,
                                best_epoch=best_epoch)
 
         # we always save the model for every epoch
@@ -525,16 +562,21 @@ def main():
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
-                        objf=objf)
-        epoch_info_filename = os.path.join(exp_dir,
-                                           'epoch-{}-info'.format(epoch))
+                        objf=objf,
+                        valid_objf=valid_objf,
+                        global_batch_idx_train=global_batch_idx_train)
+        epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
                            current_epoch=epoch,
                            learning_rate=curr_learning_rate,
                            objf=objf,
                            best_objf=best_objf,
+                           valid_objf=valid_objf,
+                           best_valid_objf=best_valid_objf,
                            best_epoch=best_epoch)
+
+        lr_scheduler.step()
 
     logging.warning('Done')
 

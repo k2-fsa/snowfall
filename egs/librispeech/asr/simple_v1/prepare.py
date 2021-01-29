@@ -75,7 +75,8 @@ def main():
     )
     musan_dir = locate_corpus(
         Path('/export/corpora5/JHU/musan'),
-        Path('/export/common/data/corpora/MUSAN/musan')
+        Path('/export/common/data/corpora/MUSAN/musan'),
+        Path('/root/fangjun/data/musan'),
     )
 
     output_dir = Path('exp/data')
