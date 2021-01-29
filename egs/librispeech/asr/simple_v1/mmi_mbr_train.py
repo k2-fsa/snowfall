@@ -254,7 +254,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
-            optimizer)
+            optimizer=optimizer)
 
         total_mmi_loss += curr_batch_mmi_loss
         total_mbr_loss += curr_batch_mbr_loss
