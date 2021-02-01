@@ -110,7 +110,7 @@ class MmiMbrTrainingGraphCompiler(object):
           P:
             The bigram phone LM created by :func:`create_bigram_phone_lm`.
         Returns:
-          A tuple (num_graph, den_graph, decoding_graphs), where
+          A tuple (num_graph, den_graph, decoding_graph), where
 
             - `num_graph` is the numerator graph. It is an FsaVec with
               shape `(len(texts), None, None)`.
@@ -118,9 +118,10 @@ class MmiMbrTrainingGraphCompiler(object):
 
             - `den_graph` is the denominator graph. It is an FsaVec with the same
               shape of the `num_graph`.
-              It is the result of compose(ctc_topo, P)
+              It is the result of compose(ctc_topo, P).
 
             - decoding_graph: It is the result of compose(ctc_topo, L, G)
+              Note that it is a single Fsa, not an FsaVec.
         '''
         assert P.is_cpu()
 
@@ -137,9 +138,7 @@ class MmiMbrTrainingGraphCompiler(object):
 
         den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
 
-        decoding_graphs = k2.create_fsa_vec([self.decoding_graph] * len(texts))
-
-        return num, den, decoding_graphs
+        return num, den, self.decoding_graph
 
     @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:

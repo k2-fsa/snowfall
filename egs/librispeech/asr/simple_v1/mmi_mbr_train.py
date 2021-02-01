@@ -39,27 +39,30 @@ den_scale = 1.0
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
+                                frames_per_seq: torch.Tensor,
+                                finite_indexes: Optional[torch.Tensor]=None
                                 ) -> Tuple[float, int, int]:
     ''' Figures out the total score(log-prob) over all successful supervision segments
     (i.e. those for which the total score wasn't -infinity), and the corresponding
     number of frames of neural net output
          Args:
             tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
+                       from forward-backward. If `finite_indexes` is not None, `-inf` entries
+                       from tot_scores should have already been removed. If `finite_indexes`
+                       is None, then `tot_scores` may contain `-inf` elements.
         frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
                        frames for each segment
+        finite_indexes: a tensor containing successful segment indexes, e.g. [0 1 3 4 5]
         Returns:
              Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
         where ok_frames is the frames for successful (finite) segments, and
        all_frames is the frames for all segments (finite or not).
     '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
+    if finite_indexes is None:
+        finite_indexes = torch.isfinite(tot_scores)
+        tot_scores = tot_scores[finite_indexes]
     if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
+        bad_indexes = ~finite_indexes
         if bad_indexes.shape[0] > 0:
             print("Bad indexes: ", bad_indexes, ", bad lengths: ",
                   frames_per_seq[bad_indexes], " vs. max length ",
@@ -68,7 +71,7 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
     # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
     all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
+    return (tot_scores.sum(), ok_frames, all_frames)
 
 
 def get_loss(batch: Dict,
@@ -116,6 +119,7 @@ def get_loss(batch: Dict,
     assert num_graph.requires_grad == is_training
     assert den_graph.requires_grad is False
     assert decoding_graph.requires_grad is False
+    assert len(decoding_graph.shape) == 2 or decoding_graph.shape == (1, None, None)
 
     num_graph = num_graph.to(device)
     den_graph = den_graph.to(device)
@@ -130,19 +134,6 @@ def get_loss(batch: Dict,
                                   10.0,
                                   seqframe_idx_name='seqframe_idx')
 
-    den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
-
-    num_tot_scores = num_lats.get_tot_scores(log_semiring=True,
-                                             use_double_scores=True)
-
-    den_tot_scores = den_lats.get_tot_scores(log_semiring=True,
-                                             use_double_scores=True)
-
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
 
     mbr_lats = k2.intersect_dense_pruned(decoding_graph,
                                          dense_fsa_vec,
@@ -151,6 +142,36 @@ def get_loss(batch: Dict,
                                          30,
                                          10000,
                                          seqframe_idx_name='seqframe_idx')
+
+    if True:
+        # WARNING: the else branch is not working at present (the total loss is not stable)
+        den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
+    else:
+        # in this case, we can remove den_graph
+        den_lats = mbr_lats
+
+    num_tot_scores = num_lats.get_tot_scores(log_semiring=True,
+                                             use_double_scores=True)
+
+    den_tot_scores = den_lats.get_tot_scores(log_semiring=True,
+                                             use_double_scores=True)
+
+    if id(den_lats) == id(mbr_lats):
+        # Some entries in den_tot_scores may be -inf.
+        # The corresponding sequences are discarded/ignored.
+        finite_indexes = torch.isfinite(den_tot_scores)
+        den_tot_scores = den_tot_scores[finite_indexes]
+        num_tot_scores = num_tot_scores[finite_indexes]
+    else:
+        finite_indexes =  None
+
+    tot_scores = num_tot_scores - den_scale * den_tot_scores
+
+    (tot_score, tot_frames,
+     all_frames) = get_tot_objf_and_num_frames(tot_scores,
+                                               supervision_segments[:, 2],
+                                               finite_indexes)
+
 
     num_rows = dense_fsa_vec.scores.shape[0]
     num_cols = dense_fsa_vec.scores.shape[1] - 1
