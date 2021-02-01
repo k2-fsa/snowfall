@@ -7,7 +7,7 @@
 
 set -eou pipefail
 
-stage=6
+stage=0
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.org/resources/11" data/local/lm
@@ -57,7 +57,7 @@ fi
 
 if [ $stage -le 6 ]; then
   # python3 ./train.py # ctc training
-  # python3 ./mmi_bigram_train.py
+  # python3 ./mmi_bigram_train.py # ctc training + bigram phone LM
   python3 ./mmi_mbr_train.py
 fi
 
