@@ -107,32 +107,36 @@ def get_loss(batch: Dict,
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     if is_training:
-        num, den, decoding_graph = graph_compiler.compile(texts, P)
+        num_graph, den_graph, decoding_graph = graph_compiler.compile(texts, P)
     else:
         with torch.no_grad():
-            num, den, decoding_graph = graph_compiler.compile(texts, P)
+            num_graph, den_graph, decoding_graph = graph_compiler.compile(
+                texts, P)
 
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
+    assert num_graph.requires_grad == is_training
+    assert den_graph.requires_grad is False
     assert decoding_graph.requires_grad is False
 
-    num = num.to(device)
-    den = den.to(device)
+    num_graph = num_graph.to(device)
+    den_graph = den_graph.to(device)
 
     decoding_graph = decoding_graph.to(device)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    num_graph = k2.intersect_dense(num, dense_fsa_vec, 10.0, seqframe_idx_name='seqframe_idx')
+    num_lats = k2.intersect_dense(num_graph,
+                                  dense_fsa_vec,
+                                  10.0,
+                                  seqframe_idx_name='seqframe_idx')
 
-    den_graph = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
-    num_tot_scores = num_graph.get_tot_scores(log_semiring=True,
-                                              use_double_scores=True)
+    num_tot_scores = num_lats.get_tot_scores(log_semiring=True,
+                                             use_double_scores=True)
 
-    den_tot_scores = den_graph.get_tot_scores(log_semiring=True,
-                                              use_double_scores=True)
+    den_tot_scores = den_lats.get_tot_scores(log_semiring=True,
+                                             use_double_scores=True)
 
     tot_scores = num_tot_scores - den_scale * den_tot_scores
 
@@ -140,28 +144,27 @@ def get_loss(batch: Dict,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
-    decoding_lattice = k2.intersect_dense_pruned(
-        decoding_graph,
-        dense_fsa_vec,
-        20.0,
-        7.0,
-        30,
-        10000,
-        seqframe_idx_name='seqframe_idx')
+    mbr_lats = k2.intersect_dense_pruned(decoding_graph,
+                                         dense_fsa_vec,
+                                         20.0,
+                                         7.0,
+                                         30,
+                                         10000,
+                                         seqframe_idx_name='seqframe_idx')
 
     num_rows = dense_fsa_vec.scores.shape[0]
     num_cols = dense_fsa_vec.scores.shape[1] - 1
-    mbr_num_sparse = k2.create_sparse(rows=num_graph.seqframe_idx,
-                                      cols=num_graph.phones,
-                                      values=num_graph.get_arc_post(
-                                          True, True).exp(),
+    mbr_num_sparse = k2.create_sparse(rows=num_lats.seqframe_idx,
+                                      cols=num_lats.phones,
+                                      values=num_lats.get_arc_post(True,
+                                                                   True).exp(),
                                       size=(num_rows, num_cols),
                                       min_col_index=0)
 
-    mbr_den_sparse = k2.create_sparse(rows=decoding_lattice.seqframe_idx,
-                                      cols=decoding_lattice.phones,
-                                      values=decoding_lattice.get_arc_post(
-                                          True, True).exp(),
+    mbr_den_sparse = k2.create_sparse(rows=mbr_lats.seqframe_idx,
+                                      cols=mbr_lats.phones,
+                                      values=mbr_lats.get_arc_post(True,
+                                                                   True).exp(),
                                       size=(num_rows, num_cols),
                                       min_col_index=0)
     # NOTE: Due to limited support of PyTorch's autograd for sparse tensors,
