@@ -81,6 +81,7 @@ def get_loss(batch: Dict,
              graph_compiler: MmiMbrTrainingGraphCompiler,
              is_training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
+    assert P.device == device
     feature = batch['features']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
@@ -261,14 +262,12 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
     prev_timestamp = datetime.now()
 
     model.train()
-    ragged_shape = P.arcs.shape().to(device)
     for batch_idx, batch in enumerate(dataloader):
         global_batch_idx_train += 1
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
         P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
         assert P.requires_grad is True
 
         curr_batch_mmi_loss, curr_batch_mbr_loss, curr_batch_frames, curr_batch_all_frames = get_loss(
@@ -393,6 +392,15 @@ def main():
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
+    if not torch.cuda.is_available():
+        logging.warn('No GPU detected!')
+        logging.warn('USE CPU (very slow)!')
+        device = torch.device('cpu')
+    else:
+        logging.info('Use GPU')
+        device_id = 0
+        device = torch.device('cuda', device_id)
+
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
@@ -435,6 +443,7 @@ def main():
         L_inv=L_inv,
         L_disambig=L_disambig,
         G=G,
+        device=device,
         phones=phone_symbol_table,
         words=word_symbol_table
     )
@@ -473,13 +482,7 @@ def main():
                                            batch_size=None,
                                            num_workers=1)
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
-
     logging.info("About to create model")
-    device_id = 0
-    device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
@@ -505,6 +508,8 @@ def main():
 
     model.to(device)
     describe(model)
+
+    P = P.to(device)
 
     if use_adam:
         learning_rate = 1e-3

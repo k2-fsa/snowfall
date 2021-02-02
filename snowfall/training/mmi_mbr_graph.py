@@ -28,6 +28,7 @@ class MmiMbrTrainingGraphCompiler(object):
                  G: k2.Fsa,
                  phones: k2.SymbolTable,
                  words: k2.SymbolTable,
+                 device: torch.device,
                  oov: str = '<UNK>'):
         '''
         Args:
@@ -42,9 +43,14 @@ class MmiMbrTrainingGraphCompiler(object):
             The phone symbol table.
           words:
             The word symbol table.
+          device:
+            The target device that all FSAs should be moved to.
           oov:
             Out of vocabulary word.
         '''
+
+        L_inv = L_inv.to(device)
+        G = G.to(device)
 
         if L_inv.properties & k2.fsa_properties.ARC_SORTED != 0:
             L_inv = k2.arc_sort(L_inv)
@@ -64,12 +70,14 @@ class MmiMbrTrainingGraphCompiler(object):
         self.L = L
         self.phones = phones
         self.words = words
+        self.device = device
         self.oov = oov
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
 
-        ctc_topo = k2.arc_sort(build_ctc_topo(phone_symbols_with_blank))
+        ctc_topo = k2.arc_sort(
+            build_ctc_topo(phone_symbols_with_blank).to(device))
         assert ctc_topo.requires_grad is False
 
         self.ctc_topo = ctc_topo
@@ -77,14 +85,14 @@ class MmiMbrTrainingGraphCompiler(object):
 
         lang_dir = Path('data/lang_nosp')
         if not (lang_dir / 'ctc_topo_LG_uni.pt').exists():
-            logging.info("Composing (ctc_topo, L, G)")
+            logging.info("Composing (ctc_topo, L_disambig, G)")
             first_phone_disambig_id = find_first_disambig_symbol(phones)
             first_word_disambig_id = find_first_disambig_symbol(words)
-            # decoding_graph is the result of composing (ctc_topo, L, G)
+            # decoding_graph is the result of composing (ctc_topo, L_disambig, G)
             decoding_graph = compile_LG(
-                L=L_disambig,
-                G=G,
-                ctc_topo=ctc_topo,
+                L=L_disambig.to('cpu'),
+                G=G.to('cpu'),
+                ctc_topo=ctc_topo.to('cpu'),
                 labels_disambig_id_start=first_phone_disambig_id,
                 aux_labels_disambig_id_start=first_word_disambig_id)
             torch.save(decoding_graph.as_dict(),
@@ -96,7 +104,7 @@ class MmiMbrTrainingGraphCompiler(object):
 
         assert hasattr(decoding_graph, 'phones')
 
-        self.decoding_graph = decoding_graph
+        self.decoding_graph = decoding_graph.to(device)
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa, k2.Fsa]:
@@ -120,26 +128,45 @@ class MmiMbrTrainingGraphCompiler(object):
               shape of the `num_graph`.
               It is the result of compose(ctc_topo, P).
 
-            - decoding_graph: It is the result of compose(ctc_topo, L, G)
+            - decoding_graph: It is the result of compose(ctc_topo, L_disambig, G)
               Note that it is a single Fsa, not an FsaVec.
         '''
-        assert P.is_cpu()
+        assert P.device == self.device
+        P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
-        ctc_topo_P = k2.connect(ctc_topo_P)
+        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
+                                  P_with_self_loops,
+                                  treat_epsilons_specially=False).invert()
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
 
+        # TODO(fangjun): remove cache and create num_graphs in a single call
+        # with k2.intersect_device
         num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        num = k2.compose(ctc_topo_P, num_graphs, inner_labels='phones')
-        num = k2.connect(num)
+        num_graphs_no_epsilons = k2.remove_epsilons_iterative_tropical(
+            num_graphs)
+
+        num_graphs_with_self_loops = k2.add_epsilon_self_loops(
+            num_graphs_no_epsilons)
+
+        num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
+
+        num = k2.compose(ctc_topo_P,
+                         num_graphs_with_self_loops,
+                         treat_epsilons_specially=False,
+                         inner_labels='phones')
         num = k2.arc_sort(num)
 
-        den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
+        ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
+        indexes = torch.zeros(len(texts),
+                              dtype=torch.int32,
+                              device=self.device)
+        den = k2.index_fsa(ctc_topo_P_vec, indexes)
 
         return num, den, self.decoding_graph
 
+    # TODO(fangjun): Remove cache.
     @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:
         '''Convert transcript to an Fsa with the help of lexicon
@@ -148,6 +175,8 @@ class MmiMbrTrainingGraphCompiler(object):
         Args:
           text:
             The transcript containing words separated by spaces.
+            For instance, it may be 'HELLO SNOWFALL', which contains
+            two words.
 
         Returns:
           Return an FST corresponding to the transcript. Its `labels` are
@@ -156,7 +185,12 @@ class MmiMbrTrainingGraphCompiler(object):
         tokens = (token if token in self.words else self.oov
                   for token in text.split(' '))
         word_ids = [self.words[token] for token in tokens]
-        fsa = k2.linear_fsa(word_ids)
-        num_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
+        fsa = k2.linear_fsa(word_ids, self.device)
+        fsa = k2.add_epsilon_self_loops(fsa)
+        # NOTE: k2.intersect may be dispatched to k2.intersect_device
+        # See the doc of `k2.intersect` for the pre-condition.
+        num_graph = k2.intersect(self.L_inv,
+                                 fsa,
+                                 treat_epsilons_specially=False).invert_()
         num_graph = k2.arc_sort(num_graph)
         return num_graph
