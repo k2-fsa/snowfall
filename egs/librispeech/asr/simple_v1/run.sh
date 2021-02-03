@@ -7,7 +7,7 @@
 
 set -eou pipefail
 
-stage=1
+stage=0
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.org/resources/11" data/local/lm
@@ -34,11 +34,21 @@ if [ $stage -le 4 ]; then
   python3 -m kaldilm \
     --read-symbol-table="data/lang_nosp/words.txt" \
     --disambig-symbol='#0' \
-    --max-order=3 \
-    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fsa.txt
+    --max-order=1 \
+    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G_uni.fst.txt
 
+  python3 -m kaldilm \
+    --read-symbol-table="data/lang_nosp/words.txt" \
+    --disambig-symbol='#0' \
+    --max-order=3 \
+    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fst.txt
+
+  echo ""
   echo "To load G:"
-  echo "    Gfsa = k2.Fsa.from_openfst(<string of data/lang_nosp/G.fsa.txt>, acceptor=True)"
+  echo "Use::"
+  echo "  with open('data/lang_nosp/G.fst.txt') as f:"
+  echo "    G = k2.Fsa.from_openfst(f.read(), acceptor=False)"
+  echo ""
 fi
 
 if [ $stage -le 5 ]; then
@@ -47,10 +57,12 @@ fi
 
 if [ $stage -le 6 ]; then
   # python3 ./train.py # ctc training
-  python3 ./mmi_bigram_train.py
+  # python3 ./mmi_bigram_train.py # ctc training + bigram phone LM
+  python3 ./mmi_mbr_train.py
 fi
 
 if [ $stage -le 7 ]; then
   # python3 ./decode.py # ctc decoding
-  python3 ./mmi_bigram_decode.py
+  # python3 ./mmi_bigram_decode.py
+  python3 ./mmi_mbr_decode.py
 fi
