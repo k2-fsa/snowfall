@@ -52,7 +52,7 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo: Fsa, labels_disambig_id_start: int,
         LG.aux_labels.values()[
             LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
     logging.info("Removing epsilons")
-    LG = k2.remove_epsilons_iterative_tropical(LG)
+    LG = k2.remove_epsilon(LG)
     logging.info(f'LG shape = {LG.shape}')
     logging.info("Connecting rm-eps(det(L*G))")
     LG = k2.connect(LG)
