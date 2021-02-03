@@ -141,11 +141,8 @@ class MmiMbrTrainingGraphCompiler(object):
 
         num_graphs = self.build_num_graphs(texts)
 
-        num_graphs_no_epsilons = k2.remove_epsilons_iterative_tropical(
+        num_graphs_with_self_loops = k2.remove_epsilon_and_add_self_loops(
             num_graphs)
-
-        num_graphs_with_self_loops = k2.add_epsilon_self_loops(
-            num_graphs_no_epsilons)
 
         num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
 
