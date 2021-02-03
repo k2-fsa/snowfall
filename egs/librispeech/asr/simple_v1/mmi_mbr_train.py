@@ -36,6 +36,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_mbr_graph import MmiMbrTrainingGraphCompiler
 
 den_scale = 1.0
+g_counter = 0 # for debugging only
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -80,6 +81,7 @@ def get_loss(batch: Dict,
              device: torch.device,
              graph_compiler: MmiMbrTrainingGraphCompiler,
              is_training: bool,
+             current_epoch: int,
              optimizer: Optional[torch.optim.Optimizer] = None):
     assert P.device == device
     feature = batch['features']
@@ -198,7 +200,17 @@ def get_loss(batch: Dict,
 
     mmi_loss = -tot_score
 
-    total_loss = mmi_loss + mbr_loss
+    global g_counter
+    if current_epoch == 0:
+        if g_counter < 5:
+            g_counter += 1
+            logging.warn('total_loss = mmi_loss + mbr_loss')
+        total_loss = mmi_loss + mbr_loss
+    else:
+        if g_counter > -5:
+            g_counter -= 1
+            logging.warn('total_loss = mbr_loss')
+        total_loss = mbr_loss
 
     if is_training:
         optimizer.zero_grad()
@@ -219,6 +231,7 @@ def get_validation_loss(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         P: k2.Fsa,
                         device: torch.device,
+                        current_epoch: int,
                         graph_compiler: MmiMbrTrainingGraphCompiler):
     total_loss = 0.
     total_mmi_loss = 0.
@@ -234,6 +247,7 @@ def get_validation_loss(dataloader: torch.utils.data.DataLoader,
             model=model,
             P=P,
             device=device,
+            current_epoch=current_epoch,
             graph_compiler=graph_compiler,
             is_training=False)
         cur_loss = mmi_loss + mbr_loss
@@ -277,6 +291,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
+            current_epoch=current_epoch,
             optimizer=optimizer)
 
         total_mmi_loss += curr_batch_mmi_loss
@@ -341,6 +356,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 model=model,
                 P=P,
                 device=device,
+                current_epoch=current_epoch,
                 graph_compiler=graph_compiler)
             valid_average_loss = total_valid_loss / total_valid_frames
             model.train()
