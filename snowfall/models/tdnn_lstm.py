@@ -5,6 +5,7 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 from snowfall.models import AcousticModel
+from snowfall.models.normalize import GradientNormalizeIn, GradientNormalizeOut
 from snowfall.training.diagnostics import measure_weight_norms
 
 
@@ -15,9 +16,11 @@ class TdnnLstm1a(AcousticModel):
         num_classes (int): Number of output classes
     """
 
-    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3) -> None:
+    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3, epsilon: float = 0.01) -> None:
         super().__init__()
         self.num_features = num_features
+        self.grad_normalize_in = GradientNormalizeIn(epsilon)
+        self.grad_normalize_out = GradientNormalizeOut(epsilon)
         self.num_classes = num_classes
         self.subsampling_factor = subsampling_factor
         self.tdnn = nn.Sequential(
@@ -94,11 +97,13 @@ class TdnnLstm1a(AcousticModel):
         Returns:
             Tensor: Predictor tensor of dimension (batch_size, number_of_classes, input_length).
         """
+        x = self.grad_normalize_in(x)
         x = self.tdnn(x)
         x, _ = self.lstm(x.permute(2, 0, 1))  # (B, F, T) -> (T, B, F)
         x = x.permute(1, 2, 0)  # (T, B, F) -> (B, F, T)
         x = self.dropout(x)
         x = self.tdnn2(x)
+        x = self.grad_normalize_out(x)
         x = nn.functional.log_softmax(x, dim=1)
         return x
 
@@ -110,9 +115,12 @@ class TdnnLstm1b(AcousticModel):
         num_classes (int): Number of output classes
     """
 
-    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3) -> None:
+    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3,
+                 epsilon:float = 0.01) -> None:
         super().__init__()
         self.num_features = num_features
+        self.grad_normalize_in = GradientNormalizeIn(epsilon)
+        self.grad_normalize_out = GradientNormalizeOut(epsilon)
         self.num_classes = num_classes
         self.subsampling_factor = subsampling_factor
         self.tdnn = nn.Sequential(
@@ -154,6 +162,7 @@ class TdnnLstm1b(AcousticModel):
         Returns:
             Tensor: Predictor tensor of dimension (batch_size, number_of_classes, input_length).
         """
+        x = self.grad_normalize_in(x)
         x = self.tdnn(x)
         x = x.permute(2, 0, 1)  # (B, F, T) -> (T, B, F) -> how LSTM expects it
         for lstm, bnorm in zip(self.lstms, self.lstm_bnorms):
@@ -164,6 +173,7 @@ class TdnnLstm1b(AcousticModel):
         x = x.transpose(1, 0)  # (T, B, F) -> (B, T, F) -> linear expects "features" in the last dim
         x = self.linear(x)
         x = x.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
+        x = self.grad_normalize_out(x)
         x = nn.functional.log_softmax(x, dim=1)
         return x
 
