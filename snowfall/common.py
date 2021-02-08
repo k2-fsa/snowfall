@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 import re
 
 import k2
@@ -157,3 +157,59 @@ def get_phone_symbols(symbol_table: k2.SymbolTable,
         ans.remove(0)
     ans.sort()
     return ans
+
+
+def describe(model: torch.nn.Module):
+    print('=' * 80)
+    print('Model parameters summary:')
+    print('=' * 80)
+    total = 0
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total += num_params
+        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    print('=' * 80)
+    print('Total:', total)
+    print('=' * 80)
+
+
+def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> List[List[int]]:
+    '''Extract the texts from the best-path FSAs, in the original order (before
+       the permutation given by `indices`).
+       Args:
+           best_paths:  a k2.Fsa with best_paths.arcs.num_axes() == 3, i.e.
+                    containing multiple FSAs, which is expected to be the result
+                    of k2.shortest_path (otherwise the returned values won't
+                    be meaningful).  Must have the 'aux_labels' attribute, as
+                  a ragged tensor.
+           indices: possibly a torch.Tensor giving the permutation that we used
+                    on the supervisions of this minibatch to put them in decreasing
+                    order of num-frames.  We'll apply the inverse permutation.
+                    Doesn't have to be on the same device as `best_paths`
+      Return:
+          Returns a list of lists of int, containing the label sequences we
+          decoded.
+    '''
+    # remove any 0's or -1's (there should be no 0's left but may be -1's.)
+    aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
+    aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
+                                                aux_labels.shape())
+    # remove the states and arcs axes.
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
+    assert(aux_labels.num_axes() == 2)
+    aux_labels, _ = k2.ragged.index(aux_labels,
+                                    invert_permutation(indices).to(dtype=torch.int32,
+                                                                   device=best_paths.device))
+    return k2.ragged.to_list(aux_labels)
+
+
+def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
+    ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
+    ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
+    return ans
+
+
+def find_first_disambig_symbol(symbols: k2.SymbolTable) -> int:
+    return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))

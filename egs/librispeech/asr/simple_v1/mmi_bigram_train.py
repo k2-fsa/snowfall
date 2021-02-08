@@ -25,6 +25,7 @@ from lhotse.utils import fix_random_seed
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.common import describe
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
@@ -276,20 +277,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
-
-
-def describe(model: nn.Module):
-    print('=' * 80)
-    print('Model parameters summary:')
-    print('=' * 80)
-    total = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        total += num_params
-        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
-    print('=' * 80)
-    print('Total:', total)
-    print('=' * 80)
 
 
 def main():
