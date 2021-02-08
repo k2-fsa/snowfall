@@ -28,6 +28,7 @@ from snowfall.common import save_checkpoint, load_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.common import get_phone_symbols
+from snowfall.common import describe
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.models.tdnnf import Tdnnf1a
@@ -160,9 +161,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int,
-                    global_batch_idx_valid: int):
+                    global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
+    valid_average_objf = float('inf')
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
 
@@ -208,33 +209,19 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 model=model,
                 device=device,
                 graph_compiler=graph_compiler)
-            global_batch_idx_valid += 1
+            valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(total_valid_objf / total_valid_frames,
+                    .format(valid_average_objf,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                             total_valid_objf / total_valid_frames,
-                             global_batch_idx_valid)
+                             valid_average_objf,
+                             global_batch_idx_train)
         prev_timestamp = datetime.now()
-    return total_objf / total_frames
-
-
-def describe(model: nn.Module):
-    print('=' * 80)
-    print('Model parameters summary:')
-    print('=' * 80)
-    total = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        total += num_params
-        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
-    print('=' * 80)
-    print('Total:', total)
-    print('=' * 80)
+    return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
 def main():
@@ -312,17 +299,19 @@ def main():
     start_epoch = 0
     num_epochs = 8
     best_objf = np.inf
+    best_valid_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
-    global_batch_idx_valid = 0  # for logging only
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        (epoch, learning_rate, objf) = load_checkpoint(filename=model_path, model=model)
-        best_objf = objf
-        logging.info("epoch = {}, objf = {}".format(epoch, objf))
+        ckpt = load_checkpoint(filename=model_path, model=model)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
     describe(model)
@@ -345,7 +334,7 @@ def main():
 
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))
-        objf = train_one_epoch(dataloader=train_dl,
+        objf, valid_objf, global_batch_idx_train = train_one_epoch(dataloader=train_dl,
                                valid_dataloader=valid_dl,
                                model=model,
                                device=device,
@@ -354,23 +343,27 @@ def main():
                                current_epoch=epoch,
                                tb_writer=tb_writer,
                                num_epochs=num_epochs,
-                               global_batch_idx_train=global_batch_idx_train,
-                               global_batch_idx_valid=global_batch_idx_valid)
+                               global_batch_idx_train=global_batch_idx_train)
         # the lower, the better
-        if objf < best_objf:
+        if valid_objf < best_valid_objf:
+            best_valid_objf = valid_objf
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
-                            objf=objf)
+                            objf=objf,
+                            valid_objf=valid_objf,
+                            global_batch_idx_train=global_batch_idx_train)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
                                learning_rate=curr_learning_rate,
                                objf=best_objf,
                                best_objf=best_objf,
+                               valid_objf=valid_objf,
+                               best_valid_objf=best_valid_objf,
                                best_epoch=best_epoch)
 
         # we always save the model for every epoch
@@ -379,7 +372,9 @@ def main():
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
-                        objf=objf)
+                        objf=objf,
+                        valid_objf=valid_objf,
+                        global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir,
                                            'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
@@ -388,6 +383,8 @@ def main():
                            learning_rate=curr_learning_rate,
                            objf=objf,
                            best_objf=best_objf,
+                           valid_objf=valid_objf,
+                           best_valid_objf=best_valid_objf,
                            best_epoch=best_epoch)
 
     logging.warning('Done')
