@@ -3,35 +3,32 @@
 #                2021  Pingfeng Luo
 # Apache 2.0
 
+import k2
 import logging
 import math
+import numpy as np
 import os
 import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional, Tuple
-
-import k2
-import numpy as np
 import torch
 import torch.optim as optim
-
-from lhotse import CutSet
-from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
-from lhotse.utils import fix_random_seed
-
+from datetime import datetime
+from pathlib import Path
 from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
+from typing import Dict, Optional, Tuple
 
-from snowfall.common import save_checkpoint, load_checkpoint
+from lhotse import CutSet
+from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.utils import fix_random_seed
+from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.mmi_graph import get_phone_symbols
-from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
+from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
 
@@ -303,25 +300,39 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=30000,
-                                               shuffle=True,
-                                               aug_cuts=cuts_musan,
-                                               aug_prob=0.5,
-                                               aug_snr=(10, 20))
-    logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=30000,
-                                                  shuffle=False,
-                                                  concat_cuts=False)
+    train = K2SpeechRecognitionDataset(
+        cuts_train,
+        cut_transforms=[
+            CutConcatenate(),
+            CutMix(
+                cuts=cuts_musan,
+                prob=0.5,
+                snr=(10, 20)
+            )
+        ]
+    )
+    train_sampler = SingleCutSampler(
+        cuts_train,
+        max_frames=30000,
+        shuffle=True,
+    )
     logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(train,
-                                           batch_size=None,
-                                           num_workers=2)
+    train_dl = torch.utils.data.DataLoader(
+        train,
+        sampler=train_sampler,
+        batch_size=None,
+        num_workers=4
+    )
+    logging.info("About to create dev dataset")
+    validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=30000)
     logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(validate,
-                                           batch_size=None,
-                                           num_workers=1)
+    valid_dl = torch.utils.data.DataLoader(
+        validate,
+        sampler=valid_sampler,
+        batch_size=None,
+        num_workers=1
+    )
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
