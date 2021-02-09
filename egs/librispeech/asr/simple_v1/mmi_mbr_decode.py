@@ -22,7 +22,7 @@ from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
-from snowfall.models.tdnnf import Tdnnf1a
+from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -195,7 +195,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan')
+    exp_dir = Path('exp-lstm-adam-mmi-mbr-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -214,7 +214,7 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 

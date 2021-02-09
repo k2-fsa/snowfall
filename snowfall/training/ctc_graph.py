@@ -7,17 +7,17 @@ from typing import List
 import torch
 import k2
 
+from snowfall.common import get_phone_symbols
+
 
 def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.
-
-    The resulting topology converts repeated input
-    symbols to a single output symbol.
-
-    Caution:
-      The resulting topo is an FST. Epsilons are on the left
-      side (i.e., ilabels) and tokens are on the right side (i.e., olabels)
-
+    A token which appears once on the right side (i.e. olabels) may
+    appear multiple times on the left side (ilabels), possibly with
+    epsilons in between.
+    When 0 appears on the left side, it represents the blank symbol;
+    when it appears on the right side, it indicates an epsilon. That
+    is, 0 has two meanings here.
     Args:
       tokens:
         A list of tokens, e.g., phones, characters, etc.
@@ -28,16 +28,16 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
 
     num_states = len(tokens)
     final_state = num_states
-    rules = ''
+    arcs = ''
     for i in range(num_states):
         for j in range(num_states):
             if i == j:
-                rules += f'{i} {i} 0 {tokens[i]} 0.0\n'
+                arcs += f'{i} {i} {tokens[i]} 0 0.0\n'
             else:
-                rules += f'{i} {j} {tokens[j]} {tokens[j]} 0.0\n'
-        rules += f'{i} {final_state} -1 -1 0.0\n'
-    rules += f'{final_state}'
-    ans = k2.Fsa.from_str(rules)
+                arcs += f'{i} {j} {tokens[j]} {tokens[j]} 0.0\n'
+        arcs += f'{i} {final_state} -1 -1 0.0\n'
+    arcs += f'{final_state}'
+    ans = k2.Fsa.from_str(arcs)
     ans = k2.arc_sort(ans)
     return ans
 
@@ -69,8 +69,9 @@ class CtcTrainingGraphCompiler(object):
         self.phones = phones
         self.words = words
         self.oov = oov
-        ctc_topo_inv = build_ctc_topo(list(phones._id2sym.keys())).invert_()
-        self.ctc_topo_inv = k2.arc_sort(ctc_topo_inv)
+        phone_ids = get_phone_symbols(phones)
+        phone_ids_with_blank = [0] + phone_ids
+        self.ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
     def compile(self, texts: Iterable[str]) -> k2.Fsa:
         decoding_graphs = k2.create_fsa_vec(
@@ -85,9 +86,10 @@ class CtcTrainingGraphCompiler(object):
         tokens = (token if token in self.words else self.oov
                   for token in text.split(' '))
         word_ids = [self.words[token] for token in tokens]
-        fsa = k2.linear_fsa(word_ids)
-        decoding_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
+        label_graph = k2.linear_fsa(word_ids)
+        decoding_graph = k2.connect(k2.intersect(label_graph,
+                                                 self.L_inv)).invert_()
         decoding_graph = k2.arc_sort(decoding_graph)
-        decoding_graph = k2.compose(self.ctc_topo_inv, decoding_graph)
+        decoding_graph = k2.compose(self.ctc_topo, decoding_graph)
         decoding_graph = k2.connect(decoding_graph)
         return decoding_graph

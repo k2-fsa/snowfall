@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+#                2021  Pingfeng Luo
 # Apache 2.0
 
 import logging
@@ -22,7 +22,7 @@ from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
-from snowfall.models.tdnnf import Tdnnf1a
+from snowfall.models.tdnn import Tdnn1a
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -116,7 +116,7 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
-    assert(aux_labels.num_axes() == 2)
+    assert (aux_labels.num_axes() == 2)
     aux_labels, _ = k2.ragged.index(aux_labels,
                                     invert_permutation(indices).to(dtype=torch.int32,
                                                                    device=best_paths.device))
@@ -127,6 +127,7 @@ def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
     ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
     ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
     return ans
+
 
 def find_first_disambig_symbol(symbols: SymbolTable) -> int:
     return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
@@ -149,7 +150,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
     num_phones = len(phone_ids)
     table = np.zeros((num_phones + 1, num_phones + 2))
     table[:, 0] = 0
-    table[0, -1] = 0 # the start state has no arcs to the final state
+    table[0, -1] = 0  # the start state has no arcs to the final state
     assert P.arcs.dim0() == num_phones + 2
     arcs = P.arcs.values()[:, :3]
     probability = P.scores.exp().tolist()
@@ -234,9 +235,9 @@ def main():
         logging.debug("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        logging.debug("Loading G.fst.txt")
-        with open(lang_dir / 'G.fst.txt') as f:
-            G = k2.Fsa.from_openfst(f.read(), acceptor=False)
+        logging.debug("Loading G.fsa.txt")
+        with open(lang_dir / 'G.fsa.txt') as f:
+            G = k2.Fsa.from_openfst(f.read(), acceptor=True)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,
@@ -253,7 +254,7 @@ def main():
     # load dataset
     feature_dir = Path('exp/data')
     logging.debug("About to get test cuts")
-    cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
+    cuts_test = CutSet.from_json(feature_dir / 'cuts_test.json.gz')
 
     logging.debug("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
@@ -267,7 +268,6 @@ def main():
     #  logging.error('No GPU detected!')
     #  sys.exit(-1)
 
-
     logging.debug("convert LG to device")
     LG = LG.to(device)
     LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
@@ -279,22 +279,34 @@ def main():
                      LG=LG,
                      symbols=symbol_table)
     s = ''
+    results2 = []
     for ref, hyp in results:
         s += f'ref={ref}\n'
         s += f'hyp={hyp}\n'
+        results2.append((list(''.join(ref)), list(''.join(hyp))))
     logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
+    dists2 = [edit_distance(r, h) for r, h in results2]
     errors = {
         key: sum(dist[key] for dist in dists)
         for key in ['sub', 'ins', 'del', 'total']
     }
+    errors2 = {
+        key: sum(dist[key] for dist in dists2)
+        for key in ['sub', 'ins', 'del', 'total']
+    }
     total_words = sum(len(ref) for ref, _ in results)
+    total_chars = sum(len(ref) for ref, _ in results2)
     # Print Kaldi-like message:
     # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
     logging.info(
         f'%WER {errors["total"] / total_words:.2%} '
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
+    )
+    logging.info(
+        f'%WER {errors2["total"] / total_chars:.2%} '
+        f'[{errors2["total"]} / {total_chars}, {errors2["ins"]} ins, {errors2["del"]} del, {errors2["sub"]} sub ]'
     )
 
 

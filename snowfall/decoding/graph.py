@@ -5,7 +5,7 @@ import torch
 from k2 import Fsa
 
 
-def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv:Fsa, labels_disambig_id_start: int,
+def compile_LG(L: Fsa, G: Fsa, ctc_topo: Fsa, labels_disambig_id_start: int,
                aux_labels_disambig_id_start: int) -> Fsa:
     """
     Creates a decoding graph using a lexicon fst ``L`` and language model fsa ``G``.
@@ -19,7 +19,9 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv:Fsa, labels_disambig_id_start: int,
         G:
             An ``Fsa`` that represents the language model (G), i.e. it's an acceptor
             with words as ``symbols``.
-        ctc_topo_inv:  Epsilons are in `aux_labels` and `labels` contain phone IDs.
+        ctc_topo:  CTC topology fst, in which when 0 appears on the left side, it represents
+                   the blank symbol; when it appears on the right side,
+                   it indicates an epsilon.
         labels_disambig_id_start:
             An integer ID corresponding to the first disambiguation symbol in the
             phonetic alphabet.
@@ -28,46 +30,47 @@ def compile_LG(L: Fsa, G: Fsa, ctc_topo_inv:Fsa, labels_disambig_id_start: int,
             words vocabulary.
     :return:
     """
-    L_inv = k2.arc_sort(L.invert_())
+    L = k2.arc_sort(L)
     G = k2.arc_sort(G)
-    logging.debug("Intersecting L and G")
-    LG = k2.intersect(L_inv, G)
-    logging.debug(f'LG shape = {LG.shape}')
-    logging.debug("Connecting L*G")
-    LG = k2.connect(LG).invert_()
-    logging.debug(f'LG shape = {LG.shape}')
-    logging.debug("Determinizing L*G")
-    LG = k2.determinize(LG)
-    logging.debug(f'LG shape = {LG.shape}')
-    logging.debug("Connecting det(L*G)")
+    logging.info("Intersecting L and G")
+    LG = k2.compose(L, G)
+    logging.info(f'LG shape = {LG.shape}')
+    logging.info("Connecting L*G")
     LG = k2.connect(LG)
-    logging.debug(f'LG shape = {LG.shape}')
-    logging.debug("Removing disambiguation symbols on L*G")
+    logging.info(f'LG shape = {LG.shape}')
+    logging.info("Determinizing L*G")
+    LG = k2.determinize(LG)
+    logging.info(f'LG shape = {LG.shape}')
+    logging.info("Connecting det(L*G)")
+    LG = k2.connect(LG)
+    logging.info(f'LG shape = {LG.shape}')
+    logging.info("Removing disambiguation symbols on L*G")
     LG.labels[LG.labels >= labels_disambig_id_start] = 0
     if isinstance(LG.aux_labels, torch.Tensor):
         LG.aux_labels[LG.aux_labels >= aux_labels_disambig_id_start] = 0
     else:
-        LG.aux_labels.values()[LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
-    logging.debug("Removing epsilons")
-    LG = k2.remove_epsilons_iterative_tropical(LG)
-    logging.debug(f'LG shape = {LG.shape}')
-    logging.debug("Connecting rm-eps(det(L*G))")
+        LG.aux_labels.values()[
+            LG.aux_labels.values() >= aux_labels_disambig_id_start] = 0
+    logging.info("Removing epsilons")
+    LG = k2.remove_epsilon(LG)
+    logging.info(f'LG shape = {LG.shape}')
+    logging.info("Connecting rm-eps(det(L*G))")
     LG = k2.connect(LG)
-    logging.debug(f'LG shape = {LG.shape}')
+    logging.info(f'LG shape = {LG.shape}')
     LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
 
-    logging.debug("Arc sorting")
+    logging.info("Arc sorting LG")
     LG = k2.arc_sort(LG)
 
-    logging.debug("Composing")
-    LG = k2.compose(ctc_topo_inv, LG)
+    logging.info("Composing ctc_topo LG")
+    LG = k2.compose(ctc_topo, LG, inner_labels='phones')
 
-    logging.debug("Connecting")
+    logging.info("Connecting LG")
     LG = k2.connect(LG)
 
-    logging.debug("Arc sorting")
+    logging.info("Arc sorting LG")
     LG = k2.arc_sort(LG)
-    logging.debug(
+    logging.info(
         f'LG is arc sorted: {(LG.properties & k2.fsa_properties.ARC_SORTED) != 0}'
     )
     return LG
