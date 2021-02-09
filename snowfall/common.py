@@ -3,16 +3,14 @@
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
 
+import k2
 import logging
 import os
+import re
+import torch
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
-import re
-
-import k2
-import torch
-from torch import distributed as dist
+from typing import Any, Dict, List, Union
 
 from snowfall.models import AcousticModel
 
@@ -168,3 +166,22 @@ def get_phone_symbols(symbol_table: k2.SymbolTable,
         ans.remove(0)
     ans.sort()
     return ans
+
+
+def cut_id_dumper(dataloader, path: Path):
+    """
+    Debugging utility. Writes processed cut IDs to a file.
+    Expects ``return_cuts=True`` to be passed to the Dataset class.
+
+    Example::
+
+        >>> for batch in cut_id_dumper(dataloader):
+        ...     pass
+    """
+    if not dataloader.dataset.return_cuts:
+        return dataloader  # do nothing, "return_cuts=True" was not set
+    with path.open('w') as f:
+        for batch in dataloader:
+            for cut in batch['supervisions']['cut']:
+                print(cut.id, file=f)
+            yield batch
