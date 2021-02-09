@@ -40,7 +40,7 @@ from snowfall.training.mmi_graph import get_phone_symbols
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 
 def cleanup():
@@ -154,7 +154,11 @@ def get_objf(batch: Dict,
 
     if is_training:
         def maybe_log_gradients(tag: str):
-            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 200 == 0:
+            if (
+                    tb_writer is not None
+                    and global_batch_idx_train is not None
+                    and global_batch_idx_train % 200 == 0
+            ):
                 tb_writer.add_scalars(
                     tag,
                     measure_gradient_norms(model, norm='l1'),
@@ -166,7 +170,7 @@ def get_objf(batch: Dict,
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
-        if global_batch_idx_train % 200 == 0:
+        if tb_writer is not None and global_batch_idx_train % 200 == 0:
             # Once in a time we will perform a more costly diagnostic
             # to check the relative parameter change per minibatch.
             deltas = optim_step_and_measure_param_change(model, optimizer)
@@ -178,8 +182,7 @@ def get_objf(batch: Dict,
         else:
             optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
-    ), all_frames.cpu().item()
+    ans = -tot_score.detach(), tot_frames.to(device), all_frames.to(device)
     return ans
 
 
@@ -211,7 +214,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
-                    tb_writer: SummaryWriter,
+                    tb_writer: Optional[SummaryWriter],
                     num_epochs: int,
                     global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
@@ -241,6 +244,12 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             optimizer=optimizer
         )
 
+        # Synchronize the loss to the master node so that we display it correctly.
+        # dist.reduce performs sum reduction by default.
+        dist.reduce(curr_batch_objf, dst=0)
+        dist.reduce(curr_batch_frames, dst=0)
+        dist.reduce(curr_batch_all_frames, dst=0)
+
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
@@ -258,10 +267,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
-
             tb_writer.add_scalar('train/global_average_objf',
                                  total_objf / total_frames, global_batch_idx_train)
-
             tb_writer.add_scalar('train/current_batch_average_objf',
                                  curr_batch_objf / (curr_batch_frames + 0.001),
                                  global_batch_idx_train)
@@ -269,25 +276,33 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        if batch_idx > 0 and batch_idx % 200 == 0:
+        if batch_idx > 0 and batch_idx % 1000 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
+            # Synchronize the loss to the master node so that we display it correctly.
+            # dist.reduce performs sum reduction by default.
+            dist.reduce(total_valid_objf, dst=0)
+            dist.reduce(total_valid_frames, dst=0)
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
-            logging.info(
-                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(valid_average_objf,
-                            total_valid_frames,
-                            100.0 * total_valid_frames / total_valid_all_frames))
-
-            tb_writer.add_scalar('train/global_valid_average_objf',
-                                 valid_average_objf,
-                                 global_batch_idx_train)
-            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+            if dist.get_rank() == 0:
+                logging.info(
+                    'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
+                        .format(valid_average_objf,
+                                total_valid_frames,
+                                100.0 * total_valid_frames / total_valid_all_frames))
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_valid_average_objf',
+                                     valid_average_objf,
+                                     global_batch_idx_train)
+                (model.module if isinstance(model, DDP) else model).write_tensorboard_diagnostics(
+                    tb_writer,
+                    global_step=global_batch_idx_train
+                )
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -322,7 +337,7 @@ def main():
 
     exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.rank == 0 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -472,8 +487,9 @@ def main():
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
-        tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
-        tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
+        if tb_writer is not None:
+            tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+            tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train = train_one_epoch(
