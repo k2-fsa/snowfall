@@ -431,6 +431,7 @@ def main():
         )
 
     for epoch in range(start_epoch, num_epochs):
+        train_sampler.set_epoch(epoch)
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]

@@ -346,6 +346,7 @@ def main():
                             weight_decay=5e-4)
 
     for epoch in range(start_epoch, num_epochs):
+        train_sampler.set_epoch(epoch)
         curr_learning_rate = 1e-3
         # curr_learning_rate = learning_rate * pow(0.4, epoch)
         # for param_group in optimizer.param_groups:

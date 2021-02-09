@@ -554,6 +554,7 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
+        train_sampler.set_epoch(epoch)
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
         tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
         tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)

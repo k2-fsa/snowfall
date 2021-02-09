@@ -375,6 +375,7 @@ def main():
 
     curr_learning_rate = learning_rate
     for epoch in range(start_epoch, num_epochs):
+        train_sampler.set_epoch(epoch)
         # curr_learning_rate = learning_rate * pow(0.4, epoch)
         if epoch > 6:
             curr_learning_rate *= 0.8
