@@ -325,7 +325,7 @@ def get_parser():
     parser.add_argument(
         '--num-epochs',
         type=int,
-        default=30,
+        default=15,
         help="Number of traning epochs.")
     parser.add_argument(
         '--start-epoch',
@@ -336,7 +336,7 @@ def get_parser():
         '--max-frames',
         type=int,
         default=45000,
-        help="Maximum number of feature frames in a single batch..") 
+        help="Maximum number of feature frames in a single batch.") 
     parser.add_argument(
         '--accum-grad',
         type=int,
@@ -367,7 +367,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-transformer-noam-mmi-att-' + str(args.att_rate) + '-musan')
+    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 

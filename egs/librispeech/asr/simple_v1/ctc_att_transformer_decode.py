@@ -98,6 +98,11 @@ def get_parser():
         default=30,
         help="Decoding epoch.")
     parser.add_argument(
+        '--max-frames',
+        type=int,
+        default=100000,
+        help="Maximum number of feature frames in a single batch.") 
+    parser.add_argument(
         '--avg',
         type=int,
         default=5,
@@ -114,11 +119,12 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
-    att_rate = args.att_rate
     epoch = args.epoch
+    max_frames = args.max_frames
     avg = args.avg
+    att_rate = args.att_rate
 
-    exp_dir = Path('exp-transformer-noam-ctc-att-' + str(att_rate) + '-musan')
+    exp_dir = Path('exp-transformer-noam-ctc-att-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -156,7 +162,7 @@ def main():
 
     print("About to create test dataset")
     test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=100000,
+                                              max_frames=max_frames,
                                               shuffle=False,
                                               concat_cuts=False)
     print("About to create test dataloader")
@@ -186,7 +192,7 @@ def main():
         checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')
         load_checkpoint(checkpoint, model)
     else:
-        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in range(epoch - 5, epoch)]
+        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in range(epoch - avg, epoch)]
         average_checkpoint(checkpoints, model)
 
     model.to(device)
