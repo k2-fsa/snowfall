@@ -40,7 +40,7 @@ class Transformer(AcousticModel):
         if subsampling_factor != 4:
             raise NotImplementedError("Support only 'subsampling_factor=4'.")
         
-        self.encoder_embed = Conv2dSubsampling(num_features, d_model, dropout)
+        self.encoder_embed = Conv2dSubsampling(num_features, d_model)
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
@@ -264,7 +264,7 @@ class TransformerDecoderLayer(nn.Module):
         activation: str = "relu", normalize_before: bool = True) -> None:
         super(TransformerDecoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
-        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
+        self.src_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -319,7 +319,7 @@ class TransformerDecoderLayer(nn.Module):
         residual = tgt
         if self.normalize_before:
             tgt = self.norm2(tgt)
-        tgt2 = self.multihead_attn(tgt, memory, memory, attn_mask=memory_mask,
+        tgt2 = self.src_attn(tgt, memory, memory, attn_mask=memory_mask,
                                    key_padding_mask=memory_key_padding_mask)[0]
         tgt = residual + self.dropout2(tgt2)
         if not self.normalize_before:
@@ -351,11 +351,10 @@ class Conv2dSubsampling(nn.Module):
     Args:
         idim: Input dimension.
         odim: Output dimension.
-        dropout: Dropout rate.
 
     """
 
-    def __init__(self, idim: int, odim: int, dropout: float = 0.1) -> None:
+    def __init__(self, idim: int, odim: int) -> None:
         """Construct an Conv2dSubsampling object."""
         super(Conv2dSubsampling, self).__init__()
         self.conv = nn.Sequential(
@@ -720,7 +719,7 @@ def pad_list(ys: List[Tensor], pad_value: float) -> Tensor:
     """
     n_batch = len(ys)
     max_len = max(x.size(0) for x in ys)
-    pad = ys[0].new(n_batch, max_len, *ys[0].size()[1:]).fill_(pad_value)
+    pad = ys[0].new_full((n_batch, max_len, *ys[0].size()[1:]), pad_value)
 
     for i in range(n_batch):
         pad[i, : ys[i].size(0)] = ys[i]
