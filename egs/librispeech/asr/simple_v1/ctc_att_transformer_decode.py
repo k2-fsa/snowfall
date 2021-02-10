@@ -56,7 +56,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
 
-        blank_bias = -3.0
+        blank_bias = -1.0
         nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)

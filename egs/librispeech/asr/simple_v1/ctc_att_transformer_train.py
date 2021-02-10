@@ -182,6 +182,28 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
                     global_batch_idx_train: int):
+    """One epoch training and validation.
+
+    Args:
+        dataloader: Training dataloader
+        valid_dataloader: Validation dataloader
+        model: Acoustic model to be trained
+        device: Training device, torch.device("cpu") or torch.device("cuda", device_id)
+        graph_compiler: MMI training graph compiler
+        optimizer: Training optimizer
+        accum_grad: Number of gradient accumulation
+        att_rate: Attention loss rate, final loss is att_rate * att_loss + (1-att_rate) * other_loss
+        current_epoch: current training epoch, for logging only
+        tb_writer: tensorboard SummaryWriter
+        num_epochs: total number of training epochs, for logging only
+        global_batch_idx_train: global training batch index before this epoch, for logging only
+
+    Returns:
+        A tuple of 3 scalar:  (total_objf / total_frames, valid_average_objf, global_batch_idx_train)
+        - `total_objf / total_frames` is the average training loss
+        - `valid_average_objf` is the average validation loss
+        - `global_batch_idx_train` is the global training batch index after this epoch
+    """
     total_objf, total_frames, total_all_frames = 0., 0., 0.
     valid_average_objf = float('inf')
     time_waiting_for_batch = 0
@@ -281,7 +303,7 @@ def get_parser():
     parser.add_argument(
         '--accum-grad',
         type=int,
-        default=2,
+        default=1,
         help="Number of gradient accumulation.") 
     parser.add_argument(
         '--att-rate',
