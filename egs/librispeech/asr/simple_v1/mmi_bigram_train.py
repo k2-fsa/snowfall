@@ -13,6 +13,7 @@ import sys
 import torch
 import torch.optim as optim
 from datetime import datetime
+from distributed.utils_test import cleanup
 from pathlib import Path
 from torch import distributed as dist
 from torch import nn
@@ -27,23 +28,13 @@ from lhotse.utils import fix_random_seed
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
-
-
-def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-
-
-def cleanup():
-    dist.destroy_process_group()
-
 
 den_scale = 1.0
 
@@ -323,20 +314,20 @@ def describe(model: nn.Module):
 def get_parser():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--world-size', default=1, type=int)
-    parser.add_argument('--rank', default=0, type=int)
+    parser.add_argument('--world_size', default=1, type=int)
+    parser.add_argument('--local_rank', default=0, type=int)
     return parser
 
 
 def main():
     args = get_parser().parse_args()
-    print('World size:', args.world_size, 'Rank:', args.rank)
-    setup(args.rank, args.world_size)
+    print('World size:', args.world_size, 'Rank:', args.local_rank)
+    setup_dist(rank=args.local_rank, world_size=args.world_size)
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.rank == 0 else None
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
+    setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -385,7 +376,7 @@ def main():
     )
     train_sampler = SingleCutSampler(
         cuts_train,
-        max_frames=90000,
+        max_frames=30000,
         shuffle=True,
     )
     logging.info("About to create train dataloader")
@@ -411,7 +402,7 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = 0
+    device_id = args.local_rank
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -439,7 +430,7 @@ def main():
     model.to(device)
     if args.world_size > 1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     describe(model)
 
     if use_adam:
@@ -473,7 +464,7 @@ def main():
         )
 
     for epoch in range(start_epoch, num_epochs):
-        train.sampler.set_epoch(epoch)
+        train_sampler.set_epoch(epoch)
 
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
@@ -506,7 +497,7 @@ def main():
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
-                            local_rank=args.rank,
+                            local_rank=args.local_rank,
                             valid_objf=valid_objf,
                             global_batch_idx_train=global_batch_idx_train)
             save_training_info(filename=best_epoch_info_filename,
@@ -526,7 +517,7 @@ def main():
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
-                        local_rank=args.rank,
+                        local_rank=args.local_rank,
                         valid_objf=valid_objf,
                         global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))

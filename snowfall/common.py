@@ -17,7 +17,7 @@ from snowfall.models import AcousticModel
 Pathlike = Union[str, Path]
 
 
-def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
+def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: bool = True) -> None:
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
@@ -34,10 +34,11 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
                         format=formatter,
                         level=level,
                         filemode='w')
-    console = logging.StreamHandler()
-    console.setLevel(level)
-    console.setFormatter(logging.Formatter(formatter))
-    logging.getLogger('').addHandler(console)
+    if use_console:
+        console = logging.StreamHandler()
+        console.setLevel(level)
+        console.setFormatter(logging.Formatter(formatter))
+        logging.getLogger('').addHandler(console)
 
 
 def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
