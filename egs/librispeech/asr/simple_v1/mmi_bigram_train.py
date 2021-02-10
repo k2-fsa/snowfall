@@ -22,9 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset.sampling import SingleCutSampler
-from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
-from lhotse.dataset.transforms import CutConcatenate, CutMix
+from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
@@ -45,6 +43,7 @@ def setup(rank, world_size):
 
 def cleanup():
     dist.destroy_process_group()
+
 
 den_scale = 1.0
 
@@ -373,16 +372,8 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionIterableDataset(
+    train = K2SpeechRecognitionDataset(
         cuts_train,
-        return_cuts=True,
-        sampler=SingleCutSampler(
-            cuts_train,
-            max_frames=30000,
-            shuffle=True,
-            world_size=args.world_size,
-            local_rank=args.rank
-        ),
         cut_transforms=[
             CutConcatenate(),
             CutMix(
@@ -392,25 +383,28 @@ def main():
             )
         ]
     )
-    logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionIterableDataset(
-        cuts_dev,
-        return_cuts=True,
-        sampler=SingleCutSampler(
-            cuts_dev,
-            max_frames=30000,
-            world_size=args.world_size,
-            local_rank=args.rank
-        )
+    train_sampler = SingleCutSampler(
+        cuts_train,
+        max_frames=90000,
+        shuffle=True,
     )
     logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(train,
-                                           batch_size=None,
-                                           num_workers=3)
+    train_dl = torch.utils.data.DataLoader(
+        train,
+        sampler=train_sampler,
+        batch_size=None,
+        num_workers=4
+    )
+    logging.info("About to create dev dataset")
+    validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000)
     logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(validate,
-                                           batch_size=None,
-                                           num_workers=1)
+    valid_dl = torch.utils.data.DataLoader(
+        validate,
+        sampler=valid_sampler,
+        batch_size=None,
+        num_workers=1
+    )
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
@@ -479,9 +473,6 @@ def main():
         )
 
     for epoch in range(start_epoch, num_epochs):
-        # Lhotse's samplers follow PyTorch's DistributedSampler's convention of
-        # manually setting the epoch to get a different shuffling for each epoch
-        # (but consistent across dataloading workers to avoid sample duplication).
         train.sampler.set_epoch(epoch)
 
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
