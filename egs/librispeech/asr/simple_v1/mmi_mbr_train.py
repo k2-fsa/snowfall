@@ -4,35 +4,30 @@
 #                                                   Fangjun Kuang)
 # Apache 2.0
 
-import logging
-import math
-import os
-import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Optional, Tuple
-
 import k2
 import k2.sparse
+import logging
 import numpy as np
+import os
 import torch
 import torch.optim as optim
-
-from lhotse import CutSet
-from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
-from lhotse.utils import fix_random_seed
-
+from datetime import datetime
+from pathlib import Path
 from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
+from typing import Dict, Optional, Tuple
 
-from snowfall.common import save_checkpoint, load_checkpoint
+from lhotse import CutSet
+from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.utils import fix_random_seed
+from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_mbr_graph import MmiMbrTrainingGraphCompiler
 
 den_scale = 1.0
@@ -462,25 +457,39 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionIterableDataset(cuts_train,
-                                               max_frames=30000,
-                                               shuffle=True,
-                                               aug_cuts=cuts_musan,
-                                               aug_prob=0.5,
-                                               aug_snr=(10, 20))
-    logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionIterableDataset(cuts_dev,
-                                                  max_frames=60000,
-                                                  shuffle=False,
-                                                  concat_cuts=False)
+    train = K2SpeechRecognitionDataset(
+        cuts_train,
+        cut_transforms=[
+            CutConcatenate(),
+            CutMix(
+                cuts=cuts_musan,
+                prob=0.5,
+                snr=(10, 20)
+            )
+        ]
+    )
+    train_sampler = SingleCutSampler(
+        cuts_train,
+        max_frames=30000,
+        shuffle=True,
+    )
     logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(train,
-                                           batch_size=None,
-                                           num_workers=4)
+    train_dl = torch.utils.data.DataLoader(
+        train,
+        sampler=train_sampler,
+        batch_size=None,
+        num_workers=4
+    )
+    logging.info("About to create dev dataset")
+    validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=60000)
     logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(validate,
-                                           batch_size=None,
-                                           num_workers=1)
+    valid_dl = torch.utils.data.DataLoader(
+        validate,
+        sampler=valid_sampler,
+        batch_size=None,
+        num_workers=1
+    )
 
     logging.info("About to create model")
     model = TdnnLstm1b(num_features=40,
@@ -545,6 +554,7 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
+        train_sampler.set_epoch(epoch)
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
         tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
         tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
