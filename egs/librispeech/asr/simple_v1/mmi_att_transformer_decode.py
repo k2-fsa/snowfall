@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+#                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
 import k2
 import logging
 import numpy as np
 import os
+import argparse
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
@@ -18,12 +20,13 @@ from typing import Union
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import load_checkpoint
+from snowfall.common import average_checkpoint
 from snowfall.common import setup_logger
 from snowfall.common import get_texts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
-from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.models.transformer import Transformer
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -41,8 +44,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             (supervisions['sequence_idx'],
              torch.floor_divide(supervisions['start_frame'],
                                 model.subsampling_factor),
-             torch.floor_divide(supervisions['num_frames'],
-                                model.subsampling_factor)), 1).to(torch.int32)
+             (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
@@ -52,7 +54,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
         with torch.no_grad():
-            nnet_output = model(feature)
+            nnet_output, _, _ = model(feature, supervision_segments)
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
@@ -153,8 +155,41 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
         f.write(str(x))
 
 
+def get_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--epoch',
+        type=int,
+        default=20,
+        help="Decoding epoch.")
+    parser.add_argument(
+        '--max-frames',
+        type=int,
+        default=100000,
+        help="Maximum number of feature frames in a single batch.") 
+    parser.add_argument(
+        '--avg',
+        type=int,
+        default=5,
+        help="Number of checkpionts to average. Automaticly select "
+             "consecutive checkpoints before checkpoint specified by'--epoch'. ")
+    parser.add_argument(
+        '--att-rate',
+        type=float,
+        default=0.0,
+        help="Attention loss rate.")
+    return parser
+
+
 def main():
-    exp_dir = Path('exp-lstm-adam-mmi-mbr-musan')
+    args = get_parser().parse_args()
+    
+    epoch = args.epoch
+    max_frames = args.max_frames
+    avg = args.avg
+    att_rate = args.att_rate
+
+    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -172,13 +207,26 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1, # +1 for the blank symbol
-                       subsampling_factor=3)
+
+    if att_rate != 0.0:
+        num_decoder_layers = 6
+    else:
+        num_decoder_layers = 0
+
+    model = Transformer(
+            num_features=40,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
-    load_checkpoint(checkpoint, model)
+    if avg == 1:
+        checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')
+        load_checkpoint(checkpoint, model)
+    else:
+        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in range(epoch - avg, epoch)]
+        average_checkpoint(checkpoints, model)
+
     model.to(device)
     model.eval()
 
@@ -214,10 +262,10 @@ def main():
     logging.debug("About to get test cuts")
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
-    logging.info("About to create test dataset")
+    logging.debug("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=100000)
-    logging.info("About to create test dataloader")
+    sampler = SingleCutSampler(cuts_test, max_frames=max_frames)
+    logging.debug("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
     #  if not torch.cuda.is_available():
