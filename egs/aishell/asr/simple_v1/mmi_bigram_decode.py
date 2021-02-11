@@ -114,7 +114,7 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
-    assert (aux_labels.num_axes() == 2)
+    assert(aux_labels.num_axes() == 2)
     aux_labels, _ = k2.ragged.index(aux_labels,
                                     invert_permutation(indices).to(dtype=torch.int32,
                                                                    device=best_paths.device))
@@ -148,7 +148,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
     num_phones = len(phone_ids)
     table = np.zeros((num_phones + 1, num_phones + 2))
     table[:, 0] = 0
-    table[0, -1] = 0  # the start state has no arcs to the final state
+    table[0, -1] = 0 # the start state has no arcs to the final state
     assert P.arcs.dim0() == num_phones + 2
     arcs = P.arcs.values()[:, :3]
     probability = P.scores.exp().tolist()
@@ -233,9 +233,9 @@ def main():
         logging.debug("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        logging.debug("Loading G.fsa.txt")
-        with open(lang_dir / 'G.fsa.txt') as f:
-            G = k2.Fsa.from_openfst(f.read(), acceptor=True)
+        logging.debug("Loading G.fst.txt")
+        with open(lang_dir / 'G.fst.txt') as f:
+            G = k2.Fsa.from_openfst(f.read(), acceptor=False)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         LG = compile_LG(L=L,

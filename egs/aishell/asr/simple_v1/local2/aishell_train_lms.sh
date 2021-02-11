@@ -30,7 +30,7 @@ fi
 cleantext=$dir/text.no_oov
 
 cat $text | awk -v lex=$lexicon 'BEGIN{while((getline<lex) >0){ seen[$1]=1; } }
-  {for(n=1; n<=NF;n++) {  if (seen[$n]) { printf("%s ", $n); } else {printf("<SPOKEN_NOISE> ");} } printf("\n");}' \
+  {for(n=1; n<=NF;n++) {  if (seen[$n]) { printf("%s ", $n); } else {printf("<UNK> ");} } printf("\n");}' \
   > $cleantext || exit 1;
 
 cat $cleantext | awk '{for(n=2;n<=NF;n++) print $n; }' | sort | uniq -c | \
@@ -43,8 +43,8 @@ cat $cleantext | awk '{for(n=2;n<=NF;n++) print $n; }' | \
   cat - <(grep -w -v '!SIL' $lexicon | awk '{print $1}') | \
    sort | uniq -c | sort -nr > $dir/unigram.counts || exit 1;
 
-# note: we probably won't really make use of <SPOKEN_NOISE> as there aren't any OOVs
-cat $dir/unigram.counts  | awk '{print $2}' | get_word_map.pl "<s>" "</s>" "<SPOKEN_NOISE>" > $dir/word_map \
+# note: we probably won't really make use of <UNK> as there aren't any OOVs
+cat $dir/unigram.counts  | awk '{print $2}' | get_word_map.pl "<s>" "</s>" "<UNK>" > $dir/word_map \
    || exit 1;
 
 # note: ignore 1st field of train.txt, it's the utterance-id.
@@ -78,11 +78,11 @@ cat $dir/word_map | awk '{print $1}' | cat - <(echo "<s>"; echo "</s>" ) > $sdir
 
 
 ngram-count -text $sdir/train -order 3 -limit-vocab -vocab $sdir/wordlist -unk \
-  -map-unk "<SPOKEN_NOISE>" -kndiscount -interpolate -lm $sdir/srilm.o3g.kn.gz
+  -map-unk "<UNK>" -kndiscount -interpolate -lm $sdir/srilm.o3g.kn.gz
 ngram -lm $sdir/srilm.o3g.kn.gz -ppl $sdir/heldout
 # 0 zeroprobs, logprob= -250954 ppl= 90.5091 ppl1= 132.482
 
 # Note: perplexity SRILM gives to Kaldi-LM model is same as kaldi-lm reports above.
-# Difference in WSJ must have been due to different treatment of <SPOKEN_NOISE>.
+# Difference in WSJ must have been due to different treatment of <UNK>.
 ngram -lm $dir/3gram-mincount/lm_unpruned.gz  -ppl $sdir/heldout
 # 0 zeroprobs, logprob= -250913 ppl= 90.4439 ppl1= 132.379
