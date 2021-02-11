@@ -10,6 +10,7 @@ import re
 import torch
 from datetime import datetime
 from pathlib import Path
+from torch.nn.parallel import DistributedDataParallel
 from typing import Any, Dict, List, Union
 
 from snowfall.models import AcousticModel
@@ -78,7 +79,7 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
 
 def save_checkpoint(
         filename: Pathlike,
-        model: AcousticModel,
+        model: Union[AcousticModel, DistributedDataParallel],
         epoch: int,
         learning_rate: float,
         objf: float,
@@ -88,6 +89,8 @@ def save_checkpoint(
 ) -> None:
     if local_rank is not None and local_rank != 0:
         return
+    if isinstance(model, DistributedDataParallel):
+        model = model.module
     logging.info(f'Save checkpoint to {filename}: epoch={epoch}, '
                  f'learning_rate={learning_rate}, objf={objf}, valid_objf={valid_objf}')
     checkpoint = {
@@ -97,20 +100,10 @@ def save_checkpoint(
         'objf': objf,
         'valid_objf': valid_objf,
         'global_batch_idx_train': global_batch_idx_train,
+        'num_features': model.num_features,
+        'num_classes': model.num_classes,
+        'subsampling_factor': model.subsampling_factor,
     }
-    if hasattr(model, 'module'):
-        # Saving checkpoint from DDP model
-        checkpoint.update({
-            'num_features': model.module.num_features,
-            'num_classes': model.module.num_classes,
-            'subsampling_factor': model.module.subsampling_factor,
-        })
-    else:
-        checkpoint.update({
-            'num_features': model.num_features,
-            'num_classes': model.num_classes,
-            'subsampling_factor': model.subsampling_factor,
-        })
     torch.save(checkpoint, filename)
 
 

@@ -83,12 +83,15 @@ def get_objf(batch: Dict,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
+    subsampling_factor = model.module.subsampling_factor if isinstance(model, DDP) else model.subsampling_factor
     supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         torch.floor_divide(supervisions['start_frame'],
-                            model.module.subsampling_factor),
-         torch.floor_divide(supervisions['num_frames'],
-                            model.module.subsampling_factor)), 1).to(torch.int32)
+        (
+            supervisions['sequence_idx'],
+            torch.floor_divide(supervisions['start_frame'], subsampling_factor),
+            torch.floor_divide(supervisions['num_frames'], subsampling_factor)
+        ),
+        1
+    ).to(torch.int32)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -218,7 +221,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        P.set_scores_stochastic_(model.module.P_scores)
+        if isinstance(model, DDP):
+            P.set_scores_stochastic_(model.module.P_scores)
+        else:
+            P.set_scores_stochastic_(model.P_scores)
         assert P.is_cpu
         assert P.requires_grad is True
 
