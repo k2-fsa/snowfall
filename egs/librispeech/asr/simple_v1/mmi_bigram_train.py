@@ -313,7 +313,7 @@ def describe(model: nn.Module):
         total += num_params
         logging.info(f'* {name}: {num_params:>{80 - len(name) - 4}}')
     logging.info('=' * 80)
-    logging.info('Total:', total)
+    logging.info(f'Total: {total}')
     logging.info('=' * 80)
 
 
@@ -446,7 +446,9 @@ def main():
 
     model.to(device)
     if args.world_size > 1:
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        # Piotr: I am disabling sync batchnorm since I observed the training can sometimes
+        #        hang inside of this function...
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     describe(model)
 
