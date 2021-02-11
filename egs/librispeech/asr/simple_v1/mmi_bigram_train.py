@@ -23,9 +23,9 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
-from snowfall.common import load_checkpoint, save_checkpoint
+from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.dist import setup_dist
@@ -304,17 +304,17 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
 
 def describe(model: nn.Module):
-    print('=' * 80)
-    print('Model parameters summary:')
-    print('=' * 80)
+    logging.info('=' * 80)
+    logging.info('Model parameters summary:')
+    logging.info('=' * 80)
     total = 0
     for name, param in model.named_parameters():
         num_params = param.numel()
         total += num_params
-        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
-    print('=' * 80)
-    print('Total:', total)
-    print('=' * 80)
+        logging.info(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    logging.info('=' * 80)
+    logging.info('Total:', total)
+    logging.info('=' * 80)
 
 
 def get_parser():
@@ -322,6 +322,7 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--world_size', default=1, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
+    parser.add_argument('--bucketing_sampler', type=str2bool, default=True)
     return parser
 
 
@@ -380,11 +381,21 @@ def main():
             )
         ]
     )
-    train_sampler = SingleCutSampler(
-        cuts_train,
-        max_frames=30000,
-        shuffle=True,
-    )
+    if args.bucketing_sampler:
+        logging.info('Using BucketingSampler.')
+        train_sampler = BucketingSampler(
+            cuts_train,
+            max_frames=30000,
+            shuffle=True,
+            num_buckets=30
+        )
+    else:
+        logging.info('Using regular sampler with cut concatenation.')
+        train_sampler = SingleCutSampler(
+            cuts_train,
+            max_frames=30000,
+            shuffle=True,
+        )
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,

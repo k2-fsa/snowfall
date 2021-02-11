@@ -2,7 +2,7 @@
 
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
-
+import argparse
 import k2
 import logging
 import os
@@ -179,3 +179,14 @@ def cut_id_dumper(dataloader, path: Path):
             for cut in batch['supervisions']['cut']:
                 print(cut.id, file=f)
             yield batch
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')

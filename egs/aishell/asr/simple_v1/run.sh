@@ -44,10 +44,8 @@ if [ $stage -le 5 ]; then
 fi
 
 if [ $stage -le 6 ]; then
-  #  python3 ./ctc_train.py
+  python3 ./ctc_train.py
   #python3 ./mmi_bigram_train.py
-  ngpus=2
-  python3 -m torch.distributed.launch --nproc_per_node=$ngpus ./mmi_bigram_train.py --world_size $ngpus
 fi
 
 if [ $stage -le 7 ]; then

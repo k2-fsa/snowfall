@@ -58,11 +58,16 @@ fi
 if [ $stage -le 6 ]; then
   # python3 ./train.py # ctc training
   # python3 ./mmi_bigram_train.py # ctc training + bigram phone LM
-  python3 ./mmi_mbr_train.py
+  #  python3 ./mmi_mbr_train.py
+
+  # Single node, multi-GPU training
+  # Adapting to a multi-node scenario should be straightforward.
+  ngpus=2
+  python3 -m torch.distributed.launch --nproc_per_node=$ngpus ./mmi_bigram_train.py --world_size $ngpus
 fi
 
 if [ $stage -le 7 ]; then
   # python3 ./decode.py # ctc decoding
-  # python3 ./mmi_bigram_decode.py
-  python3 ./mmi_mbr_decode.py
+  python3 ./mmi_bigram_decode.py --epoch 9
+  #  python3 ./mmi_mbr_decode.py
 fi
