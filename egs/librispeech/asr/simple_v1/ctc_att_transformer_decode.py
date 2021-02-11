@@ -4,19 +4,21 @@
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
+import k2
 import logging
 import os
-from pathlib import Path
-from typing import List, Optional, Union
 import argparse
-
-import k2
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
-from lhotse import CutSet
-from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
+from pathlib import Path
+from typing import List
+from typing import Optional
+from typing import Union
 
+from lhotse import CutSet
+from lhotse.dataset import K2SpeechRecognitionDataset
+from lhotse.dataset import SingleCutSampler
 from snowfall.common import get_phone_symbols
 from snowfall.common import load_checkpoint
 from snowfall.common import average_checkpoint
@@ -161,12 +163,10 @@ def main():
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
     print("About to create test dataset")
-    test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=max_frames,
-                                              shuffle=False,
-                                              concat_cuts=False)
+    test = K2SpeechRecognitionDataset(cuts_test)
+    sampler = SingleCutSampler(cuts_test, max_frames=max_frames)
     print("About to create test dataloader")
-    test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
+    test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
     #  if not torch.cuda.is_available():
     #  logging.error('No GPU detected!')

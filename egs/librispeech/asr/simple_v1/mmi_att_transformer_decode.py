@@ -4,20 +4,21 @@
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
-import logging
-import os
-from pathlib import Path
-from typing import List, Optional, Union
-import argparse
-
 import k2
+import logging
 import numpy as np
+import os
+import argparse
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
-from lhotse import CutSet
-from lhotse.dataset.speech_recognition import K2SpeechRecognitionIterableDataset
+from pathlib import Path
+from typing import List
+from typing import Optional
+from typing import Union
 
+from lhotse import CutSet
+from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import load_checkpoint
 from snowfall.common import average_checkpoint
 from snowfall.common import setup_logger
@@ -27,8 +28,8 @@ from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.training.ctc_graph import build_ctc_topo
-from snowfall.training.mmi_graph import get_phone_symbols
 from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import get_phone_symbols
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -262,17 +263,14 @@ def main():
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
 
     logging.debug("About to create test dataset")
-    test = K2SpeechRecognitionIterableDataset(cuts_test,
-                                              max_frames=max_frames,
-                                              shuffle=False,
-                                              concat_cuts=False)
+    test = K2SpeechRecognitionDataset(cuts_test)
+    sampler = SingleCutSampler(cuts_test, max_frames=max_frames)
     logging.debug("About to create test dataloader")
-    test_dl = torch.utils.data.DataLoader(test, batch_size=None, num_workers=1)
+    test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
     #  if not torch.cuda.is_available():
     #  logging.error('No GPU detected!')
     #  sys.exit(-1)
-
 
     logging.debug("convert LG to device")
     LG = LG.to(device)
