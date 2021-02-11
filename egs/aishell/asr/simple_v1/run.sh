@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang)
+#           2021 Pingfeng Luo
 # Apache 2.0
 
 # Example of how to build L and G FST for K2. Most scripts of this example are copied from Kaldi.
@@ -30,13 +31,26 @@ fi
 
 if [ $stage -le 4 ]; then
   local2/aishell_train_lms.sh
-  gunzip -c data/local/lm/3gram-mincount/lm_unpruned.gz >data/local/lm/3gram-mincount.arpa
+  gunzip -c data/local/lm/3gram-mincount/lm_unpruned.gz >data/local/lm/lm_tgmed.arpa
   # Build G
-  local/arpa2fst.py data/local/lm/3gram-mincount.arpa |
-    local/sym2int.pl -f 3 data/lang_nosp/words.txt >data/lang_nosp/G.fsa.txt
+  python3 -m kaldilm \
+    --read-symbol-table="data/lang_nosp/words.txt" \
+    --disambig-symbol='#0' \
+    --max-order=1 \
+    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G_uni.fst.txt
 
+  python3 -m kaldilm \
+    --read-symbol-table="data/lang_nosp/words.txt" \
+    --disambig-symbol='#0' \
+    --max-order=3 \
+    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fst.txt
+
+  echo ""
   echo "To load G:"
-  echo "    Gfsa = k2.Fsa.from_openfst(<string of data/lang_nosp/G.fsa.txt>, acceptor=True)"
+  echo "Use::"
+  echo "  with open('data/lang_nosp/G.fst.txt') as f:"
+  echo "    G = k2.Fsa.from_openfst(f.read(), acceptor=False)"
+  echo ""
 fi
 
 if [ $stage -le 5 ]; then
