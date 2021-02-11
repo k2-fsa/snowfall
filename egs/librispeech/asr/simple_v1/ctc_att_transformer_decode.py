@@ -97,7 +97,7 @@ def get_parser():
     parser.add_argument(
         '--epoch',
         type=int,
-        default=30,
+        default=20,
         help="Decoding epoch.")
     parser.add_argument(
         '--max-frames',
@@ -113,7 +113,7 @@ def get_parser():
     parser.add_argument(
         '--att-rate',
         type=float,
-        default=0.7,
+        default=0.0,
         help="Attention loss rate.")
     return parser
 

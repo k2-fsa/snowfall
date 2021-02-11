@@ -285,7 +285,7 @@ def get_parser():
     parser.add_argument(
         '--num-epochs',
         type=int,
-        default=30,
+        default=20,
         help="Number of traning epochs.")
     parser.add_argument(
         '--start-epoch',
@@ -295,7 +295,7 @@ def get_parser():
     parser.add_argument(
         '--max-frames',
         type=int,
-        default=45000,
+        default=60000,
         help="Maximum number of feature frames in a single batch.") 
     parser.add_argument(
         '--accum-grad',
@@ -305,7 +305,7 @@ def get_parser():
     parser.add_argument(
         '--att-rate',
         type=float,
-        default=0.7,
+        default=0.0,
         help="Attention loss rate.")
     return parser
 
@@ -430,7 +430,7 @@ def main():
 
     optimizer = Noam(model.parameters(),
             model_size=256,
-            factor=10.0,
+            factor=5.0,
             warm_step=25000)
 
     for epoch in range(start_epoch, num_epochs):
