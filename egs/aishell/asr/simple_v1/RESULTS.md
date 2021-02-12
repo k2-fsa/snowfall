@@ -9,7 +9,8 @@
 
 (Fangjun): Results of <https://github.com/k2-fsa/snowfall/pull/99>
 
-TensorBoard log is available at <https://tensorboard.dev/experiment/5bMFoRjVT7OMRWVFd3qVAA/#scalars>.
+TensorBoard log is available at <https://tensorboard.dev/experiment/5bMFoRjVT7OMRWVFd3qVAA/#scalars>
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5971503/log-train-2021-02-12-14-19-11.txt>.
 
 Decoding results of each epoch (the first line is WER and the second CER) are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-12).
