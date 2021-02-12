@@ -23,7 +23,11 @@ kaldi_lm=`which train_lm.sh`
 if [ -z $kaldi_lm ]; then
   echo "$0: train_lm.sh is not found. That might mean it's not installed"
   echo "$0: or it is not added to PATH"
-  echo "$0: Use the script tools/extras/install_kaldi_lm.sh to install it"
+  echo "$0: Please use the following commands to install it"
+  echo "  git clone https://github.com/danpovey/kaldi_lm.git"
+  echo "  cd kaldi_lm"
+  echo "  make -j"
+  echo "Then add the path of kaldi_lm to PATH and rerun $0"
   exit 1
 fi
 
