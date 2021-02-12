@@ -33,7 +33,7 @@ from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
                                 frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
+                                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     ''' Figures out the total score(log-prob) over all successful supervision segments
     (i.e. those for which the total score wasn't -infinity), and the corresponding
     number of frames of neural net output
