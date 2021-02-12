@@ -66,6 +66,7 @@ def locate_corpus(corpus_dirs, msg):
 def main():
     corpus_dir = locate_corpus(
         (Path('/mnt/cfs2/asr/database/AM/aishell'),
+         Path('/root/fangjun/data/aishell'),
          Path(
              '/home/storage04/zhuangweiji/data/open-source-data/SLR33-aishell/data'
          )),

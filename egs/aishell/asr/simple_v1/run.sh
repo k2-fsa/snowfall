@@ -10,6 +10,7 @@ set -eou pipefail
 
 dataset_path=(
 /mnt/cfs2/asr/database/AM/aishell
+/root/fangjun/data/aishell
 /home/storage04/zhuangweiji/data/open-source-data/SLR33-aishell/data
 )
 
