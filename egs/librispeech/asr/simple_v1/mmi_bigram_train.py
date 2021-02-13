@@ -13,7 +13,6 @@ import sys
 import torch
 import torch.optim as optim
 from datetime import datetime
-from distributed.utils_test import cleanup
 from pathlib import Path
 from torch import distributed as dist
 from torch import nn
@@ -28,7 +27,7 @@ from lhotse.utils import fix_random_seed
 from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.dist import setup_dist
+from snowfall.dist import cleanup_dist, setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
@@ -37,6 +36,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
+
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -175,7 +175,7 @@ def get_objf(batch: Dict,
         else:
             optimizer.step()
 
-    ans = -tot_score.detach(), tot_frames.to(device), all_frames.to(device)
+    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
 
 
@@ -240,12 +240,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             optimizer=optimizer
         )
 
-        # Synchronize the loss to the master node so that we display it correctly.
-        # dist.reduce performs sum reduction by default.
-        dist.reduce(curr_batch_objf, dst=0)
-        dist.reduce(curr_batch_frames, dst=0)
-        dist.reduce(curr_batch_all_frames, dst=0)
-
         total_objf += curr_batch_objf
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
@@ -281,8 +275,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 graph_compiler=graph_compiler)
             # Synchronize the loss to the master node so that we display it correctly.
             # dist.reduce performs sum reduction by default.
-            dist.reduce(total_valid_objf, dst=0)
-            dist.reduce(total_valid_frames, dst=0)
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             if dist.get_rank() == 0:
@@ -405,7 +397,14 @@ def main():
     )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000)
+    # Note: we explicitly set world_size to 1 to disable the auto-detection of
+    #       distributed training inside the sampler. This way, every GPU will
+    #       perform the computation on the full dev set. It is a bit wasteful,
+    #       but unfortunately loss aggregation between multiple processes with
+    #       torch.distributed.all_reduce() tends to hang indefinitely inside
+    #       NCCL after ~3000 steps. With the current approach, we can still report
+    #       the loss on the full validation set.
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000, world_size=1, rank=0)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
@@ -446,9 +445,12 @@ def main():
 
     model.to(device)
     if args.world_size > 1:
-        # Piotr: I am disabling sync batchnorm since I observed the training can sometimes
-        #        hang inside of this function...
-        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        logging.info('Using DistributedDataParallel in training. '
+                     'The reported loss, num_frames, etc. for training steps include '
+                     'only the batches seen in the master process (the actual loss '
+                     'includes batches from all GPUs, and the actual num_frames is '
+                     f'approx. {args.world_size}x larger.')
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     describe(model)
 
@@ -553,7 +555,7 @@ def main():
         lr_scheduler.step()
 
     logging.warning('Done')
-    cleanup()
+    cleanup_dist()
 
 
 torch.set_num_threads(1)
