@@ -108,7 +108,7 @@ class MmiTrainingGraphCompiler(object):
         num_graphs = k2.create_fsa_vec(
             [self.compile_one_and_cache(text) for text in texts])
 
-        num = k2.compose(ctc_topo_P, num_graphs)
+        num = k2.compose(ctc_topo_P, num_graphs, inner_labels='phones')
         num = k2.connect(num)
         num = k2.arc_sort(num)
 

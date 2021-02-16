@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Tuple
 
 from torch import Tensor
 from torch import nn
@@ -182,3 +182,38 @@ class TdnnLstm1b(AcousticModel):
             measure_weight_norms(self, norm='linf'),
             global_step=global_step
         )
+
+class TdnnLstm1c(TdnnLstm1b):
+    """
+    Args:
+        num_features (int): Number of input features
+        num_classes (int): Number of output classes
+    """
+
+    def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3) -> None:
+        super().__init__(num_features, num_classes, subsampling_factor)
+        self.linear = nn.Linear(in_features=500, out_features=self.num_classes * 2)
+
+    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Args:
+            x (torch.Tensor): Tensor of dimension (batch_size, num_features, input_length).
+
+        Returns:
+            Tensor: Predictor tensor of dimension (batch_size, number_of_classes, input_length).
+        """
+        x = self.tdnn(x)
+        x = x.permute(2, 0, 1)  # (B, F, T) -> (T, B, F) -> how LSTM expects it
+        for lstm, bnorm in zip(self.lstms, self.lstm_bnorms):
+            x_new, _ = lstm(x)
+            x_new = bnorm(x_new.permute(1, 2, 0)).permute(2, 0, 1)  # (T, B, F) -> (B, F, T) -> (T, B, F)
+            x_new = self.dropout(x_new)
+            x = x_new + x  # skip connections
+        x = x.transpose(1, 0)  # (T, B, F) -> (B, T, F) -> linear expects "features" in the last dim
+        x = self.linear(x)
+        x = x.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
+        x1 = x[:, :self.num_classes, :]
+        x2 = x[:, self.num_classes:, :]
+        x1 = nn.functional.log_softmax(x1, dim=1)
+        x2 = nn.functional.log_softmax(x2, dim=1)
+        return x1, x2
