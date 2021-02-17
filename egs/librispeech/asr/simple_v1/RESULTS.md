@@ -13,7 +13,7 @@ First try of MMI+MBR training. The following result using
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/101>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/l3dVVLgBRIOqBY4u3e4dbA/#scalars>
-and the training log can be downloaded using .
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995756/log-train-2021-02-16-12-36-09.txt>.
 
 Decoding results (WER) of each epoch are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-17).
@@ -50,7 +50,7 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/101>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/hPLbUWUwT06fljbvKGnlUA/#scalars>
-and the training log can be downloaded using .
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995759/log-train-2021-02-16-12-36-23.txt>.
 
 Decoding results (WER) of each epoch are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-17).
@@ -94,7 +94,7 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/101>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/fYDCXr2iQWOwZQYQXTOZLQ/#scalars>
-and the training log can be downloaded using .
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995761/log-train-2021-02-17-01-10-23.txt>.
 
 Decoding results (WER) of each epoch are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-17).
@@ -138,7 +138,7 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/101>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/SO24KcJ6RsONmPTjaNbHgQ/#scalars>
-and the training log can be downloaded using .
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995766/log-train-2021-02-16-02-27-50.txt>.
 
 Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-17).
@@ -215,7 +215,7 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/101>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/KnOfJepMTKyYcy1c3ziMgQ/#scalars>
-and the training log can be downloaded using .
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995771/log-train-2021-02-17-01-45-18.txt>.
 
 Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are listed below.
 They are obtained using the latest k2 and lhotse as of today (2021-02-17).
