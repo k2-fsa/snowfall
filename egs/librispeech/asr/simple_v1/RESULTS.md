@@ -84,12 +84,38 @@ Decoding results (WER) of each epoch are listed below. They are obtained using t
 2021-02-17 09:49:08,283 INFO [mmi_bigram_decode.py:252] %WER 10.38% [5460 / 52576, 745 ins, 496 del, 4219 sub ]
 ```
 
-## 2021-02-18 (with BucketingSampler and max_frames=30000)
+## 2021-02-18 (with BucketingSampler)
+
+On GTX2080Ti with max_frames=30000 (could go up to as much as 45000 I think)
 
 ```
 Epoch 9:
 %WER 10.50% [5523 / 52576, 775 ins, 487 del, 4261 sub ]
-epoch=9, learning_rate=0.0005120000000000001, objf=0.153648, valid_objf=0.159445
+```
+
+On Tesla V100 with max_frames=130000 (max GPU memory usage), one epoch takes ~13min.
+
+```
+Epoch 0:
+2021-02-18 16:08:14,155 INFO [mmi_bigram_decode.py:259] %WER 18.75% [9858 / 52576, 1324 ins, 1207 del, 7327 sub ]
+Epoch 1:
+2021-02-18 16:09:24,417 INFO [mmi_bigram_decode.py:259] %WER 13.77% [7238 / 52576, 962 ins, 765 del, 5511 sub ]
+Epoch 2:
+2021-02-18 16:10:22,321 INFO [mmi_bigram_decode.py:259] %WER 12.78% [6717 / 52576, 816 ins, 786 del, 5115 sub ]
+Epoch 3:
+2021-02-18 16:11:20,510 INFO [mmi_bigram_decode.py:259] %WER 12.53% [6587 / 52576, 819 ins, 745 del, 5023 sub ]
+Epoch 4:
+2021-02-18 16:12:35,212 INFO [mmi_bigram_decode.py:259] %WER 11.77% [6190 / 52576, 770 ins, 748 del, 4672 sub ]
+Epoch 5:
+2021-02-18 16:13:35,180 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5857 / 52576, 830 ins, 564 del, 4463 sub ]
+Epoch 6:
+2021-02-18 16:14:34,464 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5859 / 52576, 838 ins, 506 del, 4515 sub ]
+Epoch 7:
+2021-02-18 16:15:34,764 INFO [mmi_bigram_decode.py:259] %WER 10.80% [5678 / 52576, 790 ins, 569 del, 4319 sub ]
+Epoch 8:
+2021-02-18 16:16:32,359 INFO [mmi_bigram_decode.py:259] %WER 10.81% [5683 / 52576, 800 ins, 511 del, 4372 sub ]
+Epoch 9:
+2021-02-18 16:17:57,772 INFO [mmi_bigram_decode.py:259] %WER 10.62% [5584 / 52576, 819 ins, 488 del, 4277 sub ]
 ```
 
 # LibriSpeech MMI+MBR training results (TDNN-LSTM)
