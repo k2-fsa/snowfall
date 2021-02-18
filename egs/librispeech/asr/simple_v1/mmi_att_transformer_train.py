@@ -359,6 +359,12 @@ def get_parser():
         default=50000,
         help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
+        '--warm-step',
+        type=int,
+        default=25000,
+        help='The number of warm-up steps for Noam optimizer.'
+    )
+    parser.add_argument(
         '--accum-grad',
         type=int,
         default=1,
@@ -521,7 +527,7 @@ def main():
     optimizer = Noam(model.parameters(),
                      model_size=256,
                      factor=1.0,
-                     warm_step=25000)
+                     warm_step=args.warm_step)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
