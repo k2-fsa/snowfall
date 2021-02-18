@@ -22,9 +22,9 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
-from snowfall.common import describe
+from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
@@ -373,6 +373,18 @@ def get_parser():
         type=float,
         default=0.0,
         help="Attention loss rate.")
+    parser.add_argument(
+        '--bucketing_sampler',
+        type=str2bool,
+        default=False,
+        help='When enabled, the batches will come from buckets of '
+             'similar duration (saves padding frames).')
+    parser.add_argument(
+        '--num-buckets',
+        type=int,
+        default=30,
+        help='The number of buckets for the BucketingSampler'
+             '(you might want to increase it for larger datasets).')
     return parser
 
 
@@ -426,22 +438,29 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=[
-            CutConcatenate(),
-            CutMix(
-                cuts=cuts_musan,
-                prob=0.5,
-                snr=(10, 20)
-            )
-        ]
-    )
-    train_sampler = SingleCutSampler(
-        cuts_train,
-        max_frames=max_frames,
-        shuffle=True,
-    )
+    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
+    if not args.bucketing_sampler:
+        # We don't mix concatenating the cuts and bucketing
+        # Here we insert concatenation before mixing so that the
+        # noises from Musan are mixed onto almost-zero-energy
+        # padding frames.
+        transforms = [CutConcatenate()] + transforms
+    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+    if args.bucketing_sampler:
+        logging.info('Using BucketingSampler.')
+        train_sampler = BucketingSampler(
+            cuts_train,
+            max_frames=max_frames,
+            shuffle=True,
+            num_buckets=args.num_buckets
+        )
+    else:
+        logging.info('Using regular sampler with cut concatenation.')
+        train_sampler = SingleCutSampler(
+            cuts_train,
+            max_frames=max_frames,
+            shuffle=True,
+        )
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,

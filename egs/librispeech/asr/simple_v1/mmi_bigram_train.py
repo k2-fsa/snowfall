@@ -349,17 +349,14 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=[
-            CutConcatenate(),
-            CutMix(
-                cuts=cuts_musan,
-                prob=0.5,
-                snr=(10, 20)
-            )
-        ]
-    )
+    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
+    if not args.bucketing_sampler:
+        # We don't mix concatenating the cuts and bucketing
+        # Here we insert concatenation before mixing so that the
+        # noises from Musan are mixed onto almost-zero-energy
+        # padding frames.
+        transforms = [CutConcatenate()] + transforms
+    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
