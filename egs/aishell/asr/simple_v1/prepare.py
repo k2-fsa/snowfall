@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 
+from concurrent.futures import ProcessPoolExecutor
+
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
 #                2021  Pingfeng Luo
 # Apache 2.0
 import multiprocessing
 import os
-import sys
 import subprocess
-from concurrent.futures import ProcessPoolExecutor
+import sys
+import torch
 from contextlib import contextmanager
 from pathlib import Path
 
-import torch
 from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
 from lhotse.recipes import prepare_aishell, prepare_musan
 
@@ -53,19 +54,31 @@ def get_executor():
     if sys.version_info < (3, 7, 9):
         yield ProcessPoolExecutor(num_jobs)
     else:
-        yield ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context("spawn"))
+        yield ProcessPoolExecutor(num_jobs, mp_context=multiprocessing.get_context('spawn'))
+
+
+def locate_corpus(corpus_dirs, msg):
+    for d in corpus_dirs:
+        if os.path.exists(str(d)):
+            return d
+    print(msg)
+    sys.exit(1)
 
 
 def main():
-    corpus_dirs = [Path('/mnt/cfs2/asr/database/AM/aishell')]
-    corpus_dir = None
-    for d in corpus_dirs:
-        if os.path.exists(d):
-            corpus_dir = d
-    if corpus_dir is None:
-        print("Please create a place on your system to put the downloaded Aishell data "
-              "and add it to `corpus_dirs`")
-        sys.exit(1)
+    corpus_dir = locate_corpus(
+        (Path('/mnt/cfs2/asr/database/AM/aishell'),
+         Path('/root/fangjun/data/aishell'),
+         Path(
+             '/home/storage04/zhuangweiji/data/open-source-data/SLR33-aishell/data'
+         )),
+        msg='Please specify the directory to the AIShell dataset')
+
+    musan_dir = locate_corpus(
+        (Path('/export/corpora5/JHU/musan'),
+         Path('/export/common/data/corpora/MUSAN/musan'),
+         Path('/root/fangjun/data/musan')),
+        msg='Please specify the directory to the MUSAN dataset')
 
     output_dir = Path('exp/data')
     print('aishell manifest preparation:')
@@ -77,7 +90,7 @@ def main():
     print('Musan manifest preparation:')
     musan_cuts_path = output_dir / 'cuts_musan.json.gz'
     musan_manifests = prepare_musan(
-        corpus_dir='/export/corpora5/JHU/musan',
+        corpus_dir=musan_dir,
         output_dir=output_dir,
         parts=('music', 'speech', 'noise')
     )

@@ -11,7 +11,7 @@ import torch
 from datetime import datetime
 from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from snowfall.models import AcousticModel
 
@@ -46,6 +46,60 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
+
+    keys = [
+        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
+        'num_features', 'num_classes', 'subsampling_factor',
+        'global_batch_idx_train'
+    ]
+    missing_keys = set(keys) - set(checkpoint.keys())
+    if missing_keys:
+        raise ValueError(f"Missing keys in checkpoint: {missing_keys}")
+
+    if not list(model.state_dict().keys())[0].startswith('module.') \
+            and list(checkpoint['state_dict'])[0].startswith('module.'):
+        # the checkpoint was saved by DDP
+        logging.info('load checkpoint from DDP')
+        dst_state_dict = model.state_dict()
+        src_state_dict = checkpoint['state_dict']
+        for key in dst_state_dict.keys():
+            src_key = '{}.{}'.format('module', key)
+            dst_state_dict[key] = src_state_dict.pop(src_key)
+        assert len(src_state_dict) == 0
+        model.load_state_dict(dst_state_dict)
+    else:
+        model.load_state_dict(checkpoint['state_dict'])
+
+    model.num_features = checkpoint['num_features']
+    model.num_classes = checkpoint['num_classes']
+    model.subsampling_factor = checkpoint['subsampling_factor']
+
+    return checkpoint
+
+
+def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[str, Any]:
+    logging.info('average over checkpoints {}'.format(filenames))
+
+    avg_model = None
+
+    # sum
+    for filename in filenames:
+        checkpoint = torch.load(filename, map_location='cpu')
+        checkpoint_model = checkpoint['state_dict']
+        if avg_model is None:
+            avg_model = checkpoint_model
+        else:
+            for k in avg_model.keys():
+                avg_model[k] += checkpoint_model[k]
+    # average
+    for k in avg_model.keys():
+        if avg_model[k] is not None:
+            if avg_model[k].is_floating_point():
+                avg_model[k] /= len(filenames)
+            else:
+                avg_model[k] //= len(filenames)
+
+    checkpoint['state_dict'] = avg_model
 
     keys = [
         'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
@@ -190,3 +244,59 @@ def str2bool(v):
         return False
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+def describe(model: torch.nn.Module):
+    logging.info('=' * 80)
+    logging.info('Model parameters summary:')
+    logging.info('=' * 80)
+    total = 0
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total += num_params
+        logging.info(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    logging.info('=' * 80)
+    logging.info(f'Total: {total}')
+    logging.info('=' * 80)
+
+
+def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> List[List[int]]:
+    '''Extract the texts from the best-path FSAs, in the original order (before
+       the permutation given by `indices`).
+       Args:
+           best_paths:  a k2.Fsa with best_paths.arcs.num_axes() == 3, i.e.
+                    containing multiple FSAs, which is expected to be the result
+                    of k2.shortest_path (otherwise the returned values won't
+                    be meaningful).  Must have the 'aux_labels' attribute, as
+                  a ragged tensor.
+           indices: possibly a torch.Tensor giving the permutation that we used
+                    on the supervisions of this minibatch to put them in decreasing
+                    order of num-frames.  We'll apply the inverse permutation.
+                    Doesn't have to be on the same device as `best_paths`
+      Return:
+          Returns a list of lists of int, containing the label sequences we
+          decoded.
+    '''
+    # remove any 0's or -1's (there should be no 0's left but may be -1's.)
+    aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
+    aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
+                                                aux_labels.shape())
+    # remove the states and arcs axes.
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+    aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
+    assert (aux_labels.num_axes() == 2)
+    aux_labels, _ = k2.ragged.index(aux_labels,
+                                    invert_permutation(indices).to(dtype=torch.int32,
+                                                                   device=best_paths.device))
+    return k2.ragged.to_list(aux_labels)
+
+
+def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
+    ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
+    ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
+    return ans
+
+
+def find_first_disambig_symbol(symbols: k2.SymbolTable) -> int:
+    return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
