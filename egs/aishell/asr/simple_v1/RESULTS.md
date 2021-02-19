@@ -1,4 +1,4 @@
-# AIShell mmi-bigram training results
+# AIShell MMI training results
 (Pingfeng Luo): This CER is obtained using the latest k2 and lhotse as of today (2021-02-10).
 
 ## 2021-02-10
