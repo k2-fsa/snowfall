@@ -1,6 +1,9 @@
-# Note: The following initial result is obtained by Pingfeng Luo.
+# AIShell mmi-bigram training results
+(Pingfeng Luo): This CER is obtained using the latest k2 and lhotse as of today (2021-02-10).
 
+## 2021-02-10
 ```
+# epoch 7
 2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ] exp-lstm-adam-mmi-bigram-musan
 ```
 
