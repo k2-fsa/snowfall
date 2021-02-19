@@ -12,15 +12,14 @@ from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
 from pathlib import Path
 from typing import List
-from typing import Optional
 from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
+from snowfall.common import find_first_disambig_symbol
+from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
-from snowfall.common import get_texts
-from snowfall.common import find_first_disambig_symbol
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
@@ -108,7 +107,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
     num_phones = len(phone_ids)
     table = np.zeros((num_phones + 1, num_phones + 2))
     table[:, 0] = 0
-    table[0, -1] = 0 # the start state has no arcs to the final state
+    table[0, -1] = 0  # the start state has no arcs to the final state
     assert P.arcs.dim0() == num_phones + 2
     arcs = P.arcs.values()[:, :3]
     probability = P.scores.exp().tolist()

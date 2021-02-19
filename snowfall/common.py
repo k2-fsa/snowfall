@@ -2,23 +2,23 @@
 
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
-
+import argparse
+import k2
 import logging
 import os
+import re
+import torch
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union, Optional
-import re
-
-import k2
-import torch
+from torch.nn.parallel import DistributedDataParallel
+from typing import Any, Dict, List, Optional, Union
 
 from snowfall.models import AcousticModel
 
 Pathlike = Union[str, Path]
 
 
-def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
+def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: bool = True) -> None:
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
@@ -35,10 +35,11 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info') -> None:
                         format=formatter,
                         level=level,
                         filemode='w')
-    console = logging.StreamHandler()
-    console.setLevel(level)
-    console.setFormatter(logging.Formatter(formatter))
-    logging.getLogger('').addHandler(console)
+    if use_console:
+        console = logging.StreamHandler()
+        console.setLevel(level)
+        console.setFormatter(logging.Formatter(formatter))
+        logging.getLogger('').addHandler(console)
 
 
 def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
@@ -97,7 +98,7 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
                 avg_model[k] /= len(filenames)
             else:
                 avg_model[k] //= len(filenames)
-    
+
     checkpoint['state_dict'] = avg_model
 
     keys = [
@@ -132,7 +133,7 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
 
 def save_checkpoint(
         filename: Pathlike,
-        model: AcousticModel,
+        model: Union[AcousticModel, DistributedDataParallel],
         epoch: int,
         learning_rate: float,
         objf: float,
@@ -142,18 +143,20 @@ def save_checkpoint(
 ) -> None:
     if local_rank is not None and local_rank != 0:
         return
+    if isinstance(model, DistributedDataParallel):
+        model = model.module
     logging.info(f'Save checkpoint to {filename}: epoch={epoch}, '
                  f'learning_rate={learning_rate}, objf={objf}, valid_objf={valid_objf}')
     checkpoint = {
         'state_dict': model.state_dict(),
-        'num_features': model.num_features,
-        'num_classes': model.num_classes,
-        'subsampling_factor': model.subsampling_factor,
         'epoch': epoch,
         'learning_rate': learning_rate,
         'objf': objf,
         'valid_objf': valid_objf,
         'global_batch_idx_train': global_batch_idx_train,
+        'num_features': model.num_features,
+        'num_classes': model.num_classes,
+        'subsampling_factor': model.subsampling_factor,
     }
     torch.save(checkpoint, filename)
 
@@ -213,18 +216,48 @@ def get_phone_symbols(symbol_table: k2.SymbolTable,
     return ans
 
 
+def cut_id_dumper(dataloader, path: Path):
+    """
+    Debugging utility. Writes processed cut IDs to a file.
+    Expects ``return_cuts=True`` to be passed to the Dataset class.
+
+    Example::
+
+        >>> for batch in cut_id_dumper(dataloader):
+        ...     pass
+    """
+    if not dataloader.dataset.return_cuts:
+        return dataloader  # do nothing, "return_cuts=True" was not set
+    with path.open('w') as f:
+        for batch in dataloader:
+            for cut in batch['supervisions']['cut']:
+                print(cut.id, file=f)
+            yield batch
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
 def describe(model: torch.nn.Module):
-    print('=' * 80)
-    print('Model parameters summary:')
-    print('=' * 80)
+    logging.info('=' * 80)
+    logging.info('Model parameters summary:')
+    logging.info('=' * 80)
     total = 0
     for name, param in model.named_parameters():
         num_params = param.numel()
         total += num_params
-        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
-    print('=' * 80)
-    print('Total:', total)
-    print('=' * 80)
+        logging.info(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    logging.info('=' * 80)
+    logging.info(f'Total: {total}')
+    logging.info('=' * 80)
 
 
 def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> List[List[int]]:
@@ -252,7 +285,7 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_shape = k2.ragged.remove_axis(aux_shape, 1)
     aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
-    assert(aux_labels.num_axes() == 2)
+    assert (aux_labels.num_axes() == 2)
     aux_labels, _ = k2.ragged.index(aux_labels,
                                     invert_permutation(indices).to(dtype=torch.int32,
                                                                    device=best_paths.device))

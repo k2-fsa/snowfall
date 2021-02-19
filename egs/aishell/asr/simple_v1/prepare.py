@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 
+from concurrent.futures import ProcessPoolExecutor
+
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
 #                2021  Pingfeng Luo
 # Apache 2.0
 import multiprocessing
 import os
-import sys
 import subprocess
-from concurrent.futures import ProcessPoolExecutor
+import sys
+import torch
 from contextlib import contextmanager
 from pathlib import Path
 
-import torch
 from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
 from lhotse.recipes import prepare_aishell, prepare_musan
 
@@ -62,6 +63,7 @@ def locate_corpus(corpus_dirs, msg):
             return d
     print(msg)
     sys.exit(1)
+
 
 def main():
     corpus_dir = locate_corpus(

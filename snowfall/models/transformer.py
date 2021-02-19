@@ -3,15 +3,14 @@
 # Copyright (c)  2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
+import k2
 import math
-from typing import Dict, Optional, List
-
 import torch
 from torch import Tensor, nn
+from typing import Dict, List, Optional
 
-import k2
-from snowfall.models import AcousticModel
 from snowfall.common import get_texts
+from snowfall.models import AcousticModel
 
 
 class Transformer(AcousticModel):
@@ -30,7 +29,7 @@ class Transformer(AcousticModel):
     """
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
-                 d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048, 
+                 d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, normalize_before: bool = True) -> None:
         super().__init__()
@@ -39,7 +38,7 @@ class Transformer(AcousticModel):
         self.subsampling_factor = subsampling_factor
         if subsampling_factor != 4:
             raise NotImplementedError("Support only 'subsampling_factor=4'.")
-        
+
         self.encoder_embed = Conv2dSubsampling(num_features, d_model)
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
@@ -58,7 +57,7 @@ class Transformer(AcousticModel):
         )
 
         if num_decoder_layers > 0:
-            self.decoder_num_class = self.num_classes + 1 # +1 for the sos/eos symbol
+            self.decoder_num_class = self.num_classes + 1  # +1 for the sos/eos symbol
 
             self.decoder_embed = nn.Embedding(self.decoder_num_class, d_model)
             self.decoder_pos = PositionalEncoding(d_model, dropout)
@@ -77,7 +76,7 @@ class Transformer(AcousticModel):
             self.decoder_criterion = LabelSmoothingLoss(self.decoder_num_class)
         else:
             self.decoder_criterion = None
-        
+
     def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tensor:
         """
         Args:
@@ -105,17 +104,17 @@ class Transformer(AcousticModel):
             Tensor: Predictor tensor of dimension (input_length, batch_size, d_model).
             Tensor: Mask tensor of dimension (batch_size, input_length)
         """
-        x = x.permute(0, 2, 1) # (B, F, T) -> (B, T, F)
-        
+        x = x.permute(0, 2, 1)  # (B, F, T) -> (B, T, F)
+
         x = self.encoder_embed(x)
         x = self.encoder_pos(x)
-        x = x.permute(1, 0, 2) # (B, T, F) -> (T, B, F)
+        x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
         mask = encoder_padding_mask(supervision_segments)
         mask = mask.to(x.device) if mask != None else None
-        x = self.encoder(x, src_key_padding_mask = mask) # (T, B, F)
-        
+        x = self.encoder(x, src_key_padding_mask=mask)  # (T, B, F)
+
         return x, mask
-    
+
     def encoder_output(self, x: Tensor) -> Tensor:
         """
         Args:
@@ -124,8 +123,8 @@ class Transformer(AcousticModel):
         Returns:
             Tensor: After log-softmax tensor of dimension (batch_size, number_of_classes, input_length).
         """
-        x = self.encoder_output_layer(x).permute(1, 2, 0) # (T, B, F) ->(B, F, T)
-        x = nn.functional.log_softmax(x, dim=1) # (B, F, T)
+        x = self.encoder_output_layer(x).permute(1, 2, 0)  # (T, B, F) ->(B, F, T)
+        x = nn.functional.log_softmax(x, dim=1)  # (B, F, T)
         return x
 
     def decoder_forward(self, x: Tensor, encoder_mask: Tensor, supervision: Dict, graph_compiler: object) -> Tensor:
@@ -141,7 +140,8 @@ class Transformer(AcousticModel):
             Tensor: Decoder loss.
         """
         batch_text = get_normal_transcripts(supervision, graph_compiler.words, graph_compiler.oov)
-        ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class-1, self.decoder_num_class-1)
+        ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
+                                            self.decoder_num_class - 1)
         ys_in_pad = ys_in_pad.to(x.device)
         ys_out_pad = ys_out_pad.to(x.device)
 
@@ -149,22 +149,22 @@ class Transformer(AcousticModel):
 
         tgt_key_padding_mask = decoder_padding_mask(ys_in_pad)
 
-        tgt = self.decoder_embed(ys_in_pad) # (B, T) -> (B, T, F)
-        tgt = self.decoder_pos(tgt) 
-        tgt = tgt.permute(1, 0, 2) # (B, T, F) -> (T, B, F)
+        tgt = self.decoder_embed(ys_in_pad)  # (B, T) -> (B, T, F)
+        tgt = self.decoder_pos(tgt)
+        tgt = tgt.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
         pred_pad = self.decoder(tgt=tgt,
                                 memory=x,
                                 tgt_mask=tgt_mask,
                                 tgt_key_padding_mask=tgt_key_padding_mask,
-                                memory_key_padding_mask=encoder_mask) # (T, B, F)
-        pred_pad = pred_pad.permute(1, 0, 2) # (T, B, F) -> (B, T, F)
-        pred_pad = self.decoder_output_layer(pred_pad) # (B, T, F)
+                                memory_key_padding_mask=encoder_mask)  # (T, B, F)
+        pred_pad = pred_pad.permute(1, 0, 2)  # (T, B, F) -> (B, T, F)
+        pred_pad = self.decoder_output_layer(pred_pad)  # (B, T, F)
 
         decoder_loss = self.decoder_criterion(pred_pad, ys_out_pad)
 
         return decoder_loss
-     
-    
+
+
 class TransformerEncoderLayer(nn.Module):
     """
     Modified from torch.nn.TransformerEncoderLayer. Add support of normalize_before, 
@@ -185,7 +185,7 @@ class TransformerEncoderLayer(nn.Module):
     """
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-        activation: str = "relu", normalize_before: bool = True) -> None:
+                 activation: str = "relu", normalize_before: bool = True) -> None:
         super(TransformerEncoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
         # Implementation of Feedforward model
@@ -207,7 +207,8 @@ class TransformerEncoderLayer(nn.Module):
             state['activation'] = nn.functional.relu
         super(TransformerEncoderLayer, self).__setstate__(state)
 
-    def forward(self, src: Tensor, src_mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, src: Tensor, src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None) -> Tensor:
         """
         Pass the input through the encoder layer.
 
@@ -230,7 +231,7 @@ class TransformerEncoderLayer(nn.Module):
         src = residual + self.dropout1(src2)
         if not self.normalize_before:
             src = self.norm1(src)
-        
+
         residual = src
         if self.normalize_before:
             src = self.norm2(src)
@@ -261,7 +262,7 @@ class TransformerDecoderLayer(nn.Module):
     """
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-        activation: str = "relu", normalize_before: bool = True) -> None:
+                 activation: str = "relu", normalize_before: bool = True) -> None:
         super(TransformerDecoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
         self.src_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
@@ -286,8 +287,10 @@ class TransformerDecoderLayer(nn.Module):
             state['activation'] = nn.functional.relu
         super(TransformerDecoderLayer, self).__setstate__(state)
 
-    def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None, memory_mask: Optional[Tensor] = None,
-                tgt_key_padding_mask: Optional[Tensor] = None, memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, tgt: Tensor, memory: Tensor, tgt_mask: Optional[Tensor] = None,
+                memory_mask: Optional[Tensor] = None,
+                tgt_key_padding_mask: Optional[Tensor] = None,
+                memory_key_padding_mask: Optional[Tensor] = None) -> Tensor:
         """Pass the inputs (and mask) through the decoder layer.
 
         Args:
@@ -320,7 +323,7 @@ class TransformerDecoderLayer(nn.Module):
         if self.normalize_before:
             tgt = self.norm2(tgt)
         tgt2 = self.src_attn(tgt, memory, memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                             key_padding_mask=memory_key_padding_mask)[0]
         tgt = residual + self.dropout2(tgt2)
         if not self.normalize_before:
             tgt = self.norm2(tgt)
@@ -364,7 +367,7 @@ class Conv2dSubsampling(nn.Module):
             nn.ReLU(),
         )
         self.out = nn.Linear(odim * (((idim - 1) // 2 - 1) // 2), odim)
-    
+
     def forward(self, x: Tensor) -> Tensor:
         """Subsample x.
 
@@ -465,7 +468,7 @@ class Noam(object):
 
     def step(self):
         """Update parameters and rate."""
-        self._step += 1 
+        self._step += 1
         rate = self.rate()
         for p in self.optimizer.param_groups:
             p["lr"] = rate
@@ -477,9 +480,9 @@ class Noam(object):
         if step is None:
             step = self._step
         return (
-            self.factor
-            * self.model_size ** (-0.5)
-            * min(step ** (-0.5), step * self.warmup ** (-1.5))
+                self.factor
+                * self.model_size ** (-0.5)
+                * min(step ** (-0.5), step * self.warmup ** (-1.5))
         )
 
     def zero_grad(self):
@@ -521,12 +524,12 @@ class LabelSmoothingLoss(nn.Module):
     """
 
     def __init__(
-        self,
-        size: int,
-        padding_idx: int = -1,
-        smoothing: float = 0.1,
-        normalize_length: bool = False,
-        criterion: nn.Module = nn.KLDivLoss(reduction="none"),
+            self,
+            size: int,
+            padding_idx: int = -1,
+            smoothing: float = 0.1,
+            normalize_length: bool = False,
+            criterion: nn.Module = nn.KLDivLoss(reduction="none"),
     ) -> None:
         """Construct an LabelSmoothingLoss object."""
         super(LabelSmoothingLoss, self).__init__()
@@ -633,21 +636,20 @@ def get_normal_transcripts(supervision: Dict, words: k2.SymbolTable, oov: str = 
     Returns:
         List[List[int]]: List of concatenated transcripts, length is batch_size
     """
-    
+
     texts = [[token if token in words else oov
-                  for token in text.split(' ')] for text in supervision['text']]
+              for token in text.split(' ')] for text in supervision['text']]
     texts_ids = [[words[token] for token in text] for text in texts]
 
-
     supervision_segments = [supervision['sequence_idx'], supervision['start_frame']]
-    
+
     indices = torch.argsort(supervision_segments[1], descending=False)
     supervision_segments = [z[indices] for z in supervision_segments]
     texts_ids = [texts_ids[indice] for indice in indices]
     indices = torch.argsort(supervision_segments[0], descending=False)
     supervision_segments = [z[indices] for z in supervision_segments]
     texts_ids = [texts_ids[indice] for indice in indices]
-    
+
     previous_idx = -1
     batch_text = []
     for sequence_idx, text in zip(supervision_segments[0], texts_ids):

@@ -6,15 +6,14 @@
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
+import argparse
 import k2
 import logging
 import math
 import numpy as np
 import os
 import sys
-import argparse
 import torch
-import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
 from torch import nn
@@ -23,14 +22,14 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
+from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.common import describe
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Transformer, Noam
+from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -155,8 +154,9 @@ def get_objf(batch: Dict,
                     measure_gradient_norms(model, norm='l1'),
                     global_step=global_batch_idx_train
                 )
+
         if att_rate != 0.0:
-            loss = ( - (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
+            loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-tot_score) / (len(texts) * accum_grad)
         loss.backward()
@@ -164,7 +164,7 @@ def get_objf(batch: Dict,
             maybe_log_gradients('train/grad_norms')
             clip_grad_value_(model.parameters(), 5.0)
             maybe_log_gradients('train/clipped_grad_norms')
-            if (global_batch_idx_train //accum_grad) % 200 == 0:
+            if (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
                 # to check the relative parameter change per minibatch.
                 deltas = optim_step_and_measure_param_change(model, optimizer)
@@ -203,7 +203,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=False,
-            is_update=False, 
+            is_update=False,
             den_scale=den_scale
         )
         total_objf += objf
@@ -281,8 +281,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
-            is_update=is_update, 
-            accum_grad=accum_grad, 
+            is_update=is_update,
+            accum_grad=accum_grad,
             den_scale=den_scale,
             att_rate=att_rate,
             tb_writer=tb_writer,
@@ -357,12 +357,18 @@ def get_parser():
         '--max-frames',
         type=int,
         default=50000,
-        help="Maximum number of feature frames in a single batch.") 
+        help="Maximum number of feature frames in a single batch.")
+    parser.add_argument(
+        '--warm-step',
+        type=int,
+        default=25000,
+        help='The number of warm-up steps for Noam optimizer.'
+    )
     parser.add_argument(
         '--accum-grad',
         type=int,
         default=1,
-        help="Number of gradient accumulation.") 
+        help="Number of gradient accumulation.")
     parser.add_argument(
         '--den-scale',
         type=float,
@@ -373,6 +379,18 @@ def get_parser():
         type=float,
         default=0.0,
         help="Attention loss rate.")
+    parser.add_argument(
+        '--bucketing_sampler',
+        type=str2bool,
+        default=False,
+        help='When enabled, the batches will come from buckets of '
+             'similar duration (saves padding frames).')
+    parser.add_argument(
+        '--num-buckets',
+        type=int,
+        default=30,
+        help='The number of buckets for the BucketingSampler'
+             '(you might want to increase it for larger datasets).')
     return parser
 
 
@@ -426,22 +444,29 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=[
-            CutConcatenate(),
-            CutMix(
-                cuts=cuts_musan,
-                prob=0.5,
-                snr=(10, 20)
-            )
-        ]
-    )
-    train_sampler = SingleCutSampler(
-        cuts_train,
-        max_frames=max_frames,
-        shuffle=True,
-    )
+    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
+    if not args.bucketing_sampler:
+        # We don't mix concatenating the cuts and bucketing
+        # Here we insert concatenation before mixing so that the
+        # noises from Musan are mixed onto almost-zero-energy
+        # padding frames.
+        transforms = [CutConcatenate()] + transforms
+    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+    if args.bucketing_sampler:
+        logging.info('Using BucketingSampler.')
+        train_sampler = BucketingSampler(
+            cuts_train,
+            max_frames=max_frames,
+            shuffle=True,
+            num_buckets=args.num_buckets
+        )
+    else:
+        logging.info('Using regular sampler with cut concatenation.')
+        train_sampler = SingleCutSampler(
+            cuts_train,
+            max_frames=max_frames,
+            shuffle=True,
+        )
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,
@@ -472,12 +497,12 @@ def main():
         num_decoder_layers = 6
     else:
         num_decoder_layers = 0
-        
+
     model = Transformer(
-            num_features=40,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-            subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+        num_features=40,
+        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+        subsampling_factor=4,
+        num_decoder_layers=num_decoder_layers)
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
@@ -500,9 +525,9 @@ def main():
     describe(model)
 
     optimizer = Noam(model.parameters(),
-            model_size=256,
-            factor=1.0,
-            warm_step=25000)
+                     model_size=256,
+                     factor=1.0,
+                     warm_step=args.warm_step)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)

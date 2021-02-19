@@ -1,10 +1,4 @@
-## MMI+MBR training
-First try of MMI+MBR training. The following result using
-`epoch-9.pt` is obtained by Fangjun.
-
-```
-2021-02-01 08:09:31,706 INFO [mmi_mbr_decode.py:295] %WER 11.04% [5805 / 52576, 802 ins, 535 del, 4468 sub ]
-```
+# Results
 
 # LibriSpeech CTC training results (TDNN-LSTM)
 
@@ -13,10 +7,12 @@ First try of MMI+MBR training. The following result using
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/l3dVVLgBRIOqBY4u3e4dbA/#scalars>
-and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995756/log-train-2021-02-16-12-36-09.txt>.
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/5995756/log-train-2021-02-16-12-36-09.txt>.
 
-Decoding results (WER) of each epoch are listed below.
-They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of each epoch are listed below. They are obtained using the latest k2 and lhotse as of today (
+2021-02-17).
+
 ```
 # epoch 0
 2021-02-17 09:52:22,159 INFO [ctc_decode.py:176] %WER 18.86% [9914 / 52576, 1012 ins, 1317 del, 7585 sub ]
@@ -50,10 +46,11 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/hPLbUWUwT06fljbvKGnlUA/#scalars>
-and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995759/log-train-2021-02-16-12-36-23.txt>.
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/5995759/log-train-2021-02-16-12-36-23.txt>.
 
-Decoding results (WER) of each epoch are listed below.
-They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of each epoch are listed below. They are obtained using the latest k2 and lhotse as of today (
+2021-02-17).
 
 ```
 # epoch 0
@@ -87,6 +84,40 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 2021-02-17 09:49:08,283 INFO [mmi_bigram_decode.py:252] %WER 10.38% [5460 / 52576, 745 ins, 496 del, 4219 sub ]
 ```
 
+## 2021-02-18 (with BucketingSampler)
+
+On GTX2080Ti with max_frames=30000 (could go up to as much as 45000 I think)
+
+```
+Epoch 9:
+%WER 10.50% [5523 / 52576, 775 ins, 487 del, 4261 sub ]
+```
+
+On Tesla V100 with max_frames=130000 (max GPU memory usage), one epoch takes ~13min.
+
+```
+Epoch 0:
+2021-02-18 16:08:14,155 INFO [mmi_bigram_decode.py:259] %WER 18.75% [9858 / 52576, 1324 ins, 1207 del, 7327 sub ]
+Epoch 1:
+2021-02-18 16:09:24,417 INFO [mmi_bigram_decode.py:259] %WER 13.77% [7238 / 52576, 962 ins, 765 del, 5511 sub ]
+Epoch 2:
+2021-02-18 16:10:22,321 INFO [mmi_bigram_decode.py:259] %WER 12.78% [6717 / 52576, 816 ins, 786 del, 5115 sub ]
+Epoch 3:
+2021-02-18 16:11:20,510 INFO [mmi_bigram_decode.py:259] %WER 12.53% [6587 / 52576, 819 ins, 745 del, 5023 sub ]
+Epoch 4:
+2021-02-18 16:12:35,212 INFO [mmi_bigram_decode.py:259] %WER 11.77% [6190 / 52576, 770 ins, 748 del, 4672 sub ]
+Epoch 5:
+2021-02-18 16:13:35,180 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5857 / 52576, 830 ins, 564 del, 4463 sub ]
+Epoch 6:
+2021-02-18 16:14:34,464 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5859 / 52576, 838 ins, 506 del, 4515 sub ]
+Epoch 7:
+2021-02-18 16:15:34,764 INFO [mmi_bigram_decode.py:259] %WER 10.80% [5678 / 52576, 790 ins, 569 del, 4319 sub ]
+Epoch 8:
+2021-02-18 16:16:32,359 INFO [mmi_bigram_decode.py:259] %WER 10.81% [5683 / 52576, 800 ins, 511 del, 4372 sub ]
+Epoch 9:
+2021-02-18 16:17:57,772 INFO [mmi_bigram_decode.py:259] %WER 10.62% [5584 / 52576, 819 ins, 488 del, 4277 sub ]
+```
+
 # LibriSpeech MMI+MBR training results (TDNN-LSTM)
 
 ## 2021-02-17
@@ -94,10 +125,11 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/fYDCXr2iQWOwZQYQXTOZLQ/#scalars>
-and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995761/log-train-2021-02-17-01-10-23.txt>.
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/5995761/log-train-2021-02-17-01-10-23.txt>.
 
-Decoding results (WER) of each epoch are listed below.
-They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of each epoch are listed below. They are obtained using the latest k2 and lhotse as of today (
+2021-02-17).
 
 ```
 # epoch 0
@@ -138,10 +170,11 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/SO24KcJ6RsONmPTjaNbHgQ/#scalars>
-and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995766/log-train-2021-02-16-02-27-50.txt>.
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/5995766/log-train-2021-02-16-02-27-50.txt>.
 
-Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are listed below.
-They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are
+listed below. They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 
 ```
 # average over last 5 epochs
@@ -215,10 +248,11 @@ They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
 TensorBoard log is available at <https://tensorboard.dev/experiment/KnOfJepMTKyYcy1c3ziMgQ/#scalars>
-and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/5995771/log-train-2021-02-17-01-45-18.txt>.
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/5995771/log-train-2021-02-17-01-45-18.txt>.
 
-Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are listed below.
-They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are
+listed below. They are obtained using the latest k2 and lhotse as of today (2021-02-17).
 
 ```
 # average over last 5 epochs

@@ -4,27 +4,25 @@
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
+import argparse
 import k2
 import logging
 import os
-import argparse
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
 from pathlib import Path
-from typing import List
-from typing import Optional
 from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset
 from lhotse.dataset import SingleCutSampler
-from snowfall.common import get_phone_symbols
-from snowfall.common import load_checkpoint
 from snowfall.common import average_checkpoint
-from snowfall.common import setup_logger
-from snowfall.common import get_texts
 from snowfall.common import find_first_disambig_symbol
+from snowfall.common import get_phone_symbols
+from snowfall.common import get_texts
+from snowfall.common import load_checkpoint
+from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
@@ -103,7 +101,7 @@ def get_parser():
         '--max-frames',
         type=int,
         default=100000,
-        help="Maximum number of feature frames in a single batch.") 
+        help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
         '--avg',
         type=int,
@@ -183,16 +181,17 @@ def main():
         num_decoder_layers = 0
 
     model = Transformer(
-            num_features=40,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-            subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+        num_features=40,
+        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+        subsampling_factor=4,
+        num_decoder_layers=num_decoder_layers)
 
     if avg == 1:
         checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')
         load_checkpoint(checkpoint, model)
     else:
-        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in range(epoch - avg, epoch)]
+        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
+                       range(epoch - avg, epoch)]
         average_checkpoint(checkpoints, model)
 
     model.to(device)

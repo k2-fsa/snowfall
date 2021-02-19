@@ -13,7 +13,6 @@ import torch
 import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
-from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
@@ -21,11 +20,11 @@ from typing import Dict, Optional, Tuple
 from lhotse import CutSet
 from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
+from snowfall.common import describe
 from snowfall.common import get_phone_symbols
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.common import describe
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
@@ -214,8 +213,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                             valid_average_objf,
-                             global_batch_idx_train)
+                                 valid_average_objf,
+                                 global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -346,15 +345,15 @@ def main():
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train = train_one_epoch(dataloader=train_dl,
-                               valid_dataloader=valid_dl,
-                               model=model,
-                               device=device,
-                               graph_compiler=graph_compiler,
-                               optimizer=optimizer,
-                               current_epoch=epoch,
-                               tb_writer=tb_writer,
-                               num_epochs=num_epochs,
-                               global_batch_idx_train=global_batch_idx_train)
+                                                                   valid_dataloader=valid_dl,
+                                                                   model=model,
+                                                                   device=device,
+                                                                   graph_compiler=graph_compiler,
+                                                                   optimizer=optimizer,
+                                                                   current_epoch=epoch,
+                                                                   tb_writer=tb_writer,
+                                                                   num_epochs=num_epochs,
+                                                                   global_batch_idx_train=global_batch_idx_train)
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf

@@ -12,15 +12,14 @@ from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
 from pathlib import Path
 from typing import List
-from typing import Optional
 from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
+from snowfall.common import find_first_disambig_symbol
+from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
-from snowfall.common import get_texts
-from snowfall.common import find_first_disambig_symbol
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
@@ -153,8 +152,16 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
         f.write(str(x))
 
 
+def get_parser():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epoch', default=0, type=int)
+    return parser
+
+
 def main():
-    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan')
+    args = get_parser().parse_args()
+    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan-bucket')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -177,7 +184,7 @@ def main():
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
+    checkpoint = os.path.join(exp_dir, f'epoch-{args.epoch}.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -216,7 +223,7 @@ def main():
 
     logging.info("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=100000)
+    sampler = SingleCutSampler(cuts_test, max_frames=40000)
     logging.info("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 

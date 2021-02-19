@@ -14,18 +14,21 @@ import torch
 import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
+from torch import distributed as dist
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
-from snowfall.common import load_checkpoint, save_checkpoint
+from snowfall.common import describe
+from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.common import describe
+from snowfall.dist import cleanup_dist, setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
@@ -34,6 +37,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
+
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -80,12 +84,15 @@ def get_objf(batch: Dict,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['features']
     supervisions = batch['supervisions']
+    subsampling_factor = model.module.subsampling_factor if isinstance(model, DDP) else model.subsampling_factor
     supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         torch.floor_divide(supervisions['start_frame'],
-                            model.subsampling_factor),
-         torch.floor_divide(supervisions['num_frames'],
-                            model.subsampling_factor)), 1).to(torch.int32)
+        (
+            supervisions['sequence_idx'],
+            torch.floor_divide(supervisions['start_frame'], subsampling_factor),
+            torch.floor_divide(supervisions['num_frames'], subsampling_factor)
+        ),
+        1
+    ).to(torch.int32)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -141,7 +148,11 @@ def get_objf(batch: Dict,
 
     if is_training:
         def maybe_log_gradients(tag: str):
-            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 200 == 0:
+            if (
+                    tb_writer is not None
+                    and global_batch_idx_train is not None
+                    and global_batch_idx_train % 200 == 0
+            ):
                 tb_writer.add_scalars(
                     tag,
                     measure_gradient_norms(model, norm='l1'),
@@ -153,7 +164,7 @@ def get_objf(batch: Dict,
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
-        if global_batch_idx_train % 200 == 0:
+        if tb_writer is not None and global_batch_idx_train % 200 == 0:
             # Once in a time we will perform a more costly diagnostic
             # to check the relative parameter change per minibatch.
             deltas = optim_step_and_measure_param_change(model, optimizer)
@@ -165,8 +176,7 @@ def get_objf(batch: Dict,
         else:
             optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
-    ), all_frames.cpu().item()
+    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
 
 
@@ -198,7 +208,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     current_epoch: int,
-                    tb_writer: SummaryWriter,
+                    tb_writer: Optional[SummaryWriter],
                     num_epochs: int,
                     global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
@@ -212,7 +222,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        P.set_scores_stochastic_(model.P_scores)
+        if isinstance(model, DDP):
+            P.set_scores_stochastic_(model.module.P_scores)
+        else:
+            P.set_scores_stochastic_(model.P_scores)
         assert P.is_cpu
         assert P.requires_grad is True
 
@@ -232,7 +245,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0:
+        if batch_idx % 10 == 0 and dist.get_rank() == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -245,10 +258,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
-
             tb_writer.add_scalar('train/global_average_objf',
                                  total_objf / total_frames, global_batch_idx_train)
-
             tb_writer.add_scalar('train/current_batch_average_objf',
                                  curr_batch_objf / (curr_batch_frames + 0.001),
                                  global_batch_idx_train)
@@ -256,35 +267,53 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        if batch_idx > 0 and batch_idx % 200 == 0:
+        if batch_idx > 0 and batch_idx % 1000 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
+            # Synchronize the loss to the master node so that we display it correctly.
+            # dist.reduce performs sum reduction by default.
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
-            logging.info(
-                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(valid_average_objf,
-                            total_valid_frames,
-                            100.0 * total_valid_frames / total_valid_all_frames))
-
-            tb_writer.add_scalar('train/global_valid_average_objf',
-                                 valid_average_objf,
-                                 global_batch_idx_train)
-            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+            if dist.get_rank() == 0:
+                logging.info(
+                    'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
+                        .format(valid_average_objf,
+                                total_valid_frames,
+                                100.0 * total_valid_frames / total_valid_all_frames))
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_valid_average_objf',
+                                     valid_average_objf,
+                                     global_batch_idx_train)
+                (model.module if isinstance(model, DDP) else model).write_tensorboard_diagnostics(
+                    tb_writer,
+                    global_step=global_batch_idx_train
+                )
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
+def get_parser():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--world_size', default=1, type=int)
+    parser.add_argument('--local_rank', default=0, type=int)
+    parser.add_argument('--bucketing_sampler', type=str2bool, default=True)
+    return parser
+
+
 def main():
+    args = get_parser().parse_args()
+    print('World size:', args.world_size, 'Rank:', args.local_rank)
+    setup_dist(rank=args.local_rank, world_size=args.world_size)
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
+    setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -320,22 +349,29 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=[
-            CutConcatenate(),
-            CutMix(
-                cuts=cuts_musan,
-                prob=0.5,
-                snr=(10, 20)
-            )
-        ]
-    )
-    train_sampler = SingleCutSampler(
-        cuts_train,
-        max_frames=90000,
-        shuffle=True,
-    )
+    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
+    if not args.bucketing_sampler:
+        # We don't mix concatenating the cuts and bucketing
+        # Here we insert concatenation before mixing so that the
+        # noises from Musan are mixed onto almost-zero-energy
+        # padding frames.
+        transforms = [CutConcatenate()] + transforms
+    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+    if args.bucketing_sampler:
+        logging.info('Using BucketingSampler.')
+        train_sampler = BucketingSampler(
+            cuts_train,
+            max_frames=40000,
+            shuffle=True,
+            num_buckets=30
+        )
+    else:
+        logging.info('Using regular sampler with cut concatenation.')
+        train_sampler = SingleCutSampler(
+            cuts_train,
+            max_frames=30000,
+            shuffle=True,
+        )
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,
@@ -345,7 +381,14 @@ def main():
     )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000)
+    # Note: we explicitly set world_size to 1 to disable the auto-detection of
+    #       distributed training inside the sampler. This way, every GPU will
+    #       perform the computation on the full dev set. It is a bit wasteful,
+    #       but unfortunately loss aggregation between multiple processes with
+    #       torch.distributed.all_reduce() tends to hang indefinitely inside
+    #       NCCL after ~3000 steps. With the current approach, we can still report
+    #       the loss on the full validation set.
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000, world_size=1, rank=0)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
@@ -359,7 +402,7 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = 0
+    device_id = args.local_rank
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -385,6 +428,15 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
+    if args.world_size > 1:
+        logging.info('Using DistributedDataParallel in training. '
+                     'The reported loss, num_frames, etc. for training steps include '
+                     'only the batches seen in the master process (the actual loss '
+                     'includes batches from all GPUs, and the actual num_frames is '
+                     f'approx. {args.world_size}x larger.')
+        # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     describe(model)
 
     if use_adam:
@@ -419,11 +471,13 @@ def main():
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
+
         # LR scheduler can hold multiple learning rates for multiple parameter groups;
         # For now we report just the first LR which we assume concerns most of the parameters.
         curr_learning_rate = lr_scheduler.get_last_lr()[0]
-        tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
-        tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
+        if tb_writer is not None:
+            tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+            tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train = train_one_epoch(
@@ -449,6 +503,7 @@ def main():
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
+                            local_rank=args.local_rank,
                             valid_objf=valid_objf,
                             global_batch_idx_train=global_batch_idx_train)
             save_training_info(filename=best_epoch_info_filename,
@@ -468,6 +523,7 @@ def main():
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
+                        local_rank=args.local_rank,
                         valid_objf=valid_objf,
                         global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
@@ -484,6 +540,7 @@ def main():
         lr_scheduler.step()
 
     logging.warning('Done')
+    cleanup_dist()
 
 
 torch.set_num_threads(1)

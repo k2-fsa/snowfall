@@ -4,18 +4,16 @@
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
+import argparse
 import k2
 import logging
 import math
 import numpy as np
 import os
 import sys
-import argparse
 import torch
-import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
-from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
@@ -23,13 +21,13 @@ from typing import Dict, Optional, Tuple
 from lhotse import CutSet
 from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
+from snowfall.common import describe
 from snowfall.common import get_phone_symbols
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.common import describe
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Transformer, Noam
+from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 
 
@@ -129,7 +127,7 @@ def get_objf(batch: Dict,
 
     if is_training:
         if att_rate != 0.0:
-            loss = ( - (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
+            loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-tot_score) / (len(texts) * accum_grad)
         loss.backward()
@@ -159,7 +157,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=False,
-            is_update=False, 
+            is_update=False,
         )
         total_objf += objf
         total_frames += frames
@@ -225,8 +223,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
-            is_update=is_update, 
-            accum_grad=accum_grad, 
+            is_update=is_update,
+            accum_grad=accum_grad,
             att_rate=att_rate,
             optimizer=optimizer
         )
@@ -274,8 +272,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
             tb_writer.add_scalar('train/global_valid_average_objf',
-                             valid_average_objf,
-                             global_batch_idx_train)
+                                 valid_average_objf,
+                                 global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -296,12 +294,12 @@ def get_parser():
         '--max-frames',
         type=int,
         default=60000,
-        help="Maximum number of feature frames in a single batch.") 
+        help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
         '--accum-grad',
         type=int,
         default=1,
-        help="Number of gradient accumulation.") 
+        help="Number of gradient accumulation.")
     parser.add_argument(
         '--att-rate',
         type=float,
@@ -403,12 +401,12 @@ def main():
         num_decoder_layers = 6
     else:
         num_decoder_layers = 0
-        
+
     model = Transformer(
-            num_features=40,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-            subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+        num_features=40,
+        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+        subsampling_factor=4,
+        num_decoder_layers=num_decoder_layers)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -429,9 +427,9 @@ def main():
     describe(model)
 
     optimizer = Noam(model.parameters(),
-            model_size=256,
-            factor=5.0,
-            warm_step=25000)
+                     model_size=256,
+                     factor=5.0,
+                     warm_step=25000)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -442,17 +440,17 @@ def main():
         logging.info('epoch {}, learning rate {}'.format(
             epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train = train_one_epoch(dataloader=train_dl,
-                               valid_dataloader=valid_dl,
-                               model=model,
-                               device=device,
-                               graph_compiler=graph_compiler,
-                               optimizer=optimizer,
-                               accum_grad=accum_grad,
-                               att_rate=att_rate,
-                               current_epoch=epoch,
-                               tb_writer=tb_writer,
-                               num_epochs=num_epochs,
-                               global_batch_idx_train=global_batch_idx_train)
+                                                                   valid_dataloader=valid_dl,
+                                                                   model=model,
+                                                                   device=device,
+                                                                   graph_compiler=graph_compiler,
+                                                                   optimizer=optimizer,
+                                                                   accum_grad=accum_grad,
+                                                                   att_rate=att_rate,
+                                                                   current_epoch=epoch,
+                                                                   tb_writer=tb_writer,
+                                                                   num_epochs=num_epochs,
+                                                                   global_batch_idx_train=global_batch_idx_train)
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf

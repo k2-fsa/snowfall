@@ -10,18 +10,16 @@ import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
 from pathlib import Path
-from typing import List
-from typing import Optional
 from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset
 from lhotse.dataset import SingleCutSampler
+from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_phone_symbols
+from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
-from snowfall.common import get_texts
-from snowfall.common import find_first_disambig_symbol
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
