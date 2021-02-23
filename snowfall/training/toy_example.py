@@ -78,6 +78,12 @@ def main():
                       inner_labels='phones')
     print('num2.phones\n', num2.phones)
 
+    decoding_graph = k2.compose(ctc_topo,
+                                num_graphs,
+                                treat_epsilons_specially=True,
+                                inner_labels='phones')
+    print('decoding_graph.phones\n', decoding_graph.phones)
+
 
 if __name__ == '__main__':
     main()
