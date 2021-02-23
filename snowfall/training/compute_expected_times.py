@@ -141,4 +141,10 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
         pathframe_to_pathphone.t(),
         frame_idx.unsqueeze(-1).to(pathframe_to_pathphone.dtype))
 
-    return weighted_occupation.squeeze()
+    # sum over columns to get the total occupation
+    # Use `to_dense()` here because PyTorch does not
+    # support div(dense_matrix, sparse_matrix)
+    total_occupation = torch.sparse.sum(pathframe_to_pathphone,
+                                        dim=0).to_dense()
+
+    return weighted_occupation.squeeze() / total_occupation
