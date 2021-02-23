@@ -134,9 +134,10 @@ class MmiMbrTrainingGraphCompiler(object):
         assert P.device == self.device
         P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
-                                  P_with_self_loops,
-                                  treat_epsilons_specially=False).invert()
+        ctc_topo_P = k2.compose(self.ctc_topo,
+                                P_with_self_loops,
+                                treat_epsilons_specially=False,
+                                inner_labels='phones')
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
 
         num_graphs = self.build_num_graphs(texts)

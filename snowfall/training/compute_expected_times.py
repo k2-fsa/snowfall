@@ -131,6 +131,11 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
                                                   True, True).exp(),
                                               min_col_index=0)
 
+    # TODO(fangjun): this check is for test, will remove it
+    sum_per_row = torch.sparse.sum(pathframe_to_pathphone, dim=1).to_dense()
+    expected_sum_per_row = torch.ones_like(sum_per_row)
+    assert torch.allclose(sum_per_row, expected_sum_per_row)
+
     frame_idx = torch.arange(paths_shape.num_elements()) - k2.index(
         path_starts, paths_shape.row_ids(1))
 
