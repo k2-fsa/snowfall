@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 #
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 #
@@ -60,6 +59,8 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     # phone_seqs will be k2.RaggedInt like paths, but containing phones
     # (and final -1's, and 0's for epsilon)
     phone_seqs = k2.index(lats.phones, paths)
+    print('lats.phones', lats.phones[:1000])
+    print(phone_seqs)
 
     # Remove epsilons from `phone_seqs`
     print('before removing 0', phone_seqs.shape().row_splits(2))
@@ -89,7 +90,8 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     # Each phone has an index but there are blanks between them and at the start
     # and end.
     phone_fsas.pathphone_idx = torch.arange(phone_fsas.arcs.num_elements(),
-                                            dtype=torch.int32)
+                                            dtype=torch.int32,
+                                            device=lats.device)
 
     # Now extract the sets of paths from the lattices corresponding to each of
     # those n-best phone sequences; these will effectively be lattices with one
@@ -139,8 +141,9 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     expected_sum_per_row = torch.ones_like(sum_per_row)
     assert torch.allclose(sum_per_row, expected_sum_per_row)
 
-    frame_idx = torch.arange(paths_shape.num_elements()) - k2.index(
-        path_starts, paths_shape.row_ids(1))
+    frame_idx = torch.arange(paths_shape.num_elements(),
+                             device=lats.device) - k2.index(
+                                 path_starts, paths_shape.row_ids(1))
 
     # TODO(fangjun): we can swap `rows` and `cols`
     # while creating `pathframe_to_pathphone` so that

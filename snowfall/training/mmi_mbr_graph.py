@@ -84,6 +84,7 @@ class MmiMbrTrainingGraphCompiler(object):
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
 
         lang_dir = Path('data/lang_nosp')
+        lang_dir.mkdir(parents=True, exist_ok=True)
         if not (lang_dir / 'ctc_topo_LG_uni.pt').exists():
             logging.info("Composing (ctc_topo, L_disambig, G)")
             first_phone_disambig_id = find_first_disambig_symbol(phones)
@@ -159,6 +160,11 @@ class MmiMbrTrainingGraphCompiler(object):
                               dtype=torch.int32,
                               device=self.device)
         den = k2.index_fsa(ctc_topo_P_vec, indexes)
+        print('den.phones', den.phones.shape, 'nnz',
+              torch.count_nonzero(den.phones))
+
+        print('den.labels', den.labels.shape, 'nnz',
+              torch.count_nonzero(den.labels))
 
         return num, den, self.decoding_graph
 
