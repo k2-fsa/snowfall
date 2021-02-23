@@ -51,7 +51,8 @@ def main():
                                                  words=word_symbol_table)
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids).to(device)
-    P.scores = torch.zeros_like(P.scores)
+    scores = torch.randn_like(P.scores)
+    P.set_scores_stochastic_(scores)
 
     texts = ['HELLO', 'PEOPLE']
     num_graph, den_graph, decoding_graph = graph_compiler.compile(texts, P)

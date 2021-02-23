@@ -55,6 +55,7 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     paths = k2.random_paths(lats,
                             use_double_scores=use_double_scores,
                             num_paths=num_paths)
+    print('paths', paths)
 
     # phone_seqs will be k2.RaggedInt like paths, but containing phones
     # (and final -1's, and 0's for epsilon)
