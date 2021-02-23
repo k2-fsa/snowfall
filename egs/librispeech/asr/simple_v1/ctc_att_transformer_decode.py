@@ -39,9 +39,9 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],
-             torch.floor_divide(supervisions['start_frame'],
-                                model.subsampling_factor),
+             (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
              (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
+        supervision_segments = torch.clamp(supervision_segments, min=0)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
