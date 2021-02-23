@@ -62,7 +62,9 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     phone_seqs = k2.index(lats.phones, paths)
 
     # Remove epsilons from `phone_seqs`
+    print('before removing 0', phone_seqs.shape().row_splits(2))
     phone_seqs = k2.ragged.remove_values_eq(phone_seqs, 0)
+    print('after removing 0', phone_seqs.shape().row_splits(2))
 
     # Remove repeated sequences from `phone_seqs`
     #
@@ -130,6 +132,7 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
                                               values=paths_lats.get_arc_post(
                                                   True, True).exp(),
                                               min_col_index=0)
+    print('paths_lats.pathphone_idx[:100]\n', paths_lats.pathphone_idx[:100])
 
     # TODO(fangjun): this check is for test, will remove it
     sum_per_row = torch.sparse.sum(pathframe_to_pathphone, dim=1).to_dense()
