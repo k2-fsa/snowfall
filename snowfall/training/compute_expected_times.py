@@ -152,4 +152,23 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     total_occupation = torch.sparse.sum(pathframe_to_pathphone,
                                         dim=0).to_dense()
 
-    return weighted_occupation.squeeze() / total_occupation
+    expected_times = weighted_occupation.squeeze() / total_occupation
+
+    # Number of `pathphone_idx`'s should be even
+    assert expected_times.shape[0] & 1 == 0
+
+    # Replace the expected_times for `pathphone_idx`'s which are even with
+    # the average expected times of two neighboring phones
+    #
+    # Even `pathphone_idx`'s belong to epsilon self-loops.
+    #
+    # Note that the every first `pathphone_idx` has no left neighbor
+    # and it is left unchanged.
+    expected_times[2::2] = (expected_times[1:-1:2] +
+                            expected_times[3::2]) * 0.5
+
+    # TODO(fangjun): we can remove the columns of even pathphone_idx
+    # while constructing `pathframe_to_pathphone`, which can save about
+    # half computation time in `torch.sparse.mm`.
+
+    return expected_times
