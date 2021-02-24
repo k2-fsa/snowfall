@@ -60,8 +60,8 @@ def main():
     N = 2
     T = 1000
     C = len(phone_ids) + 1
-    nnet_output = torch.rand(N, T, C, dtype=torch.float32,
-                             device=device).softmax(-1).log()
+    nnet_output = torch.rand(N, T, C,
+                             dtype=torch.float32).softmax(-1).log().to(device)
 
     supervision_segments = torch.tensor([[0, 0, T], [1, 0, T]],
                                         dtype=torch.int32)
@@ -87,11 +87,13 @@ def main():
     den_expected_times = compute_expected_times_per_phone(
         den_lats, graph_compiler.ctc_topo, dense_fsa_vec, num_paths=2)
     print(den_expected_times[:50])
+    print(den_expected_times[-50:])
 
     print('-' * 10, 'mbr_lats', '-' * 10)
     mbr_expected_times = compute_expected_times_per_phone(
         mbr_lats, graph_compiler.ctc_topo, dense_fsa_vec, num_paths=2)
     print(mbr_expected_times[:50])
+    print(mbr_expected_times[-50:])
 
 
 if __name__ == '__main__':

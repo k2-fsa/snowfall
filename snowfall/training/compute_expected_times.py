@@ -94,6 +94,11 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
                                             dtype=torch.int32,
                                             device=lats.device)
 
+    pathphone_idx_to_path = k2.index(phone_fsas.arcs.row_ids(1),
+                                     phone_fsas.arcs.row_ids(2))
+
+    pathphone_idx_to_seq = k2.index(path_to_seq_map, pathphone_idx_to_path)
+
     # Now extract the sets of paths from the lattices corresponding to each of
     # those n-best phone sequences; these will effectively be lattices with one
     # path but alternative alignments.
@@ -171,14 +176,32 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     # the average expected times of two neighboring phones
     #
     # Even `pathphone_idx`'s belong to epsilon self-loops.
-    #
-    # Note that the every first `pathphone_idx` has no left neighbor
-    # and it is left unchanged.
     expected_times[2::2] = (expected_times[1:-1:2] +
                             expected_times[3::2]) * 0.5
+    expected_times[0] = 0
 
     # TODO(fangjun): we can remove the columns of even pathphone_idx
     # while constructing `pathframe_to_pathphone`, which can save about
     # half computation time in `torch.sparse.mm`.
+
+    frame_idx_low = torch.floor(expected_times)
+    frame_idx_high = torch.ceil(expected_times)
+
+    low_scale = frame_idx_high - expected_times
+    high_scale = 1 - low_scale
+    offset = k2.index(seq_starts, pathphone_idx_to_seq)
+
+    low = frame_idx_low + offset
+    high = frame_idx_high + offset
+
+    low_scores = k2.index(dense_fsa_vec.scores, low.to(torch.int32))
+    high_scores = k2.index(dense_fsa_vec.scores, high.to(torch.int32))
+
+    embedding_scores = low_scores * low_scale.unsqueeze(
+        -1) + high_scores * high_scale.unsqueeze(-1)
+
+    # TODO(fangjun):
+    # Append 1-hot encoding of phones and expected times to the embedding
+    # vector
 
     return expected_times
