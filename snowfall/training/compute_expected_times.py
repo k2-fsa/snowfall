@@ -167,7 +167,8 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     # TODO(fangjun): remove print
     print('total_occupation[:50]\n', total_occupation[:50])
 
-    expected_times = weighted_occupation.squeeze() / total_occupation
+    eps = torch.finfo(total_occupation.dtype).eps
+    expected_times = weighted_occupation.squeeze() / (total_occupation + eps)
 
     # Number of `pathphone_idx`'s should be even
     assert expected_times.shape[0] & 1 == 0
