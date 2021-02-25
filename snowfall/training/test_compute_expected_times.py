@@ -85,13 +85,21 @@ def main():
 
     print('-' * 10, 'den_lats', '-' * 10)
     den_expected_times = compute_expected_times_per_phone(
-        den_lats, graph_compiler.ctc_topo, dense_fsa_vec, num_paths=2)
+        den_lats,
+        graph_compiler.ctc_topo,
+        dense_fsa_vec,
+        max_phone_id=graph_compiler.max_phone_id,
+        num_paths=2)
     print(den_expected_times[:50])
     print(den_expected_times[-50:])
 
     print('-' * 10, 'mbr_lats', '-' * 10)
     mbr_expected_times = compute_expected_times_per_phone(
-        mbr_lats, graph_compiler.ctc_topo, dense_fsa_vec, num_paths=2)
+        mbr_lats,
+        graph_compiler.ctc_topo,
+        dense_fsa_vec,
+        max_phone_id=graph_compiler.max_phone_id,
+        num_paths=2)
     print(mbr_expected_times[:50])
     print(mbr_expected_times[-50:])
 

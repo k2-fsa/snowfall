@@ -75,6 +75,7 @@ class MmiMbrTrainingGraphCompiler(object):
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
+        self.max_phone_id = max(phone_symbols)
 
         ctc_topo = k2.arc_sort(
             build_ctc_topo(phone_symbols_with_blank).to(device))
@@ -160,11 +161,6 @@ class MmiMbrTrainingGraphCompiler(object):
                               dtype=torch.int32,
                               device=self.device)
         den = k2.index_fsa(ctc_topo_P_vec, indexes)
-        print('den.phones', den.phones.shape, 'nnz',
-              torch.count_nonzero(den.phones))
-
-        print('den.labels', den.labels.shape, 'nnz',
-              torch.count_nonzero(den.labels))
 
         return num, den, self.decoding_graph
 

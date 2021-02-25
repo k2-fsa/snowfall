@@ -23,6 +23,7 @@ def _create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
 def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
                                      ctc_topo: k2.Fsa,
                                      dense_fsa_vec: k2.DenseFsaVec,
+                                     max_phone_id: int,
                                      use_double_scores=True,
                                      num_paths=100) -> torch.Tensor:
     '''Compute expected times per phone in a n-best list.
@@ -39,6 +40,8 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
         The return value of :func:`build_ctc_topo`.
       dense_fsa_vec:
         It contains nnet_output.
+      max_phone_id:
+        The maximum phone ID. Used for one-hot encoding.
       use_double_scores:
         True to use `double` in :func:`k2.random_paths`; false to use `float`.
       num_paths:
@@ -47,6 +50,7 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
       A 1-D torch.Tensor contains the expected times per pathphone_idx.
     '''
     lats = mbr_lats
+    device = lats.device
     assert len(lats.shape) == 3
     assert hasattr(lats, 'phones')
 
@@ -92,7 +96,9 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     # and end.
     phone_fsas.pathphone_idx = torch.arange(phone_fsas.arcs.num_elements(),
                                             dtype=torch.int32,
-                                            device=lats.device)
+                                            device=device)
+    # phone_fsas is an acceptor, so its `labels` are `phones`
+    pathphones = phone_fsas.labels.clone()
 
     pathphone_idx_to_path = k2.index(phone_fsas.arcs.row_ids(1),
                                      phone_fsas.arcs.row_ids(2))
@@ -148,8 +154,8 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     assert torch.allclose(sum_per_row, expected_sum_per_row)
 
     frame_idx = torch.arange(paths_shape.num_elements(),
-                             device=lats.device) - k2.index(
-                                 path_starts, paths_shape.row_ids(1))
+                             device=device) - k2.index(path_starts,
+                                                       paths_shape.row_ids(1))
 
     # TODO(fangjun): we can swap `rows` and `cols`
     # while creating `pathframe_to_pathphone` so that
@@ -201,8 +207,25 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     embedding_scores = low_scores * low_scale.unsqueeze(
         -1) + high_scores * high_scale.unsqueeze(-1)
 
-    # TODO(fangjun):
-    # Append 1-hot encoding of phones and expected times to the embedding
-    # vector
+    # arc entering the final state have phone == -1.
+    # Increment it so that 0 represents EOS
+    pathphones += 1
+    num_classes = max_phone_id + 2  # +1 for the epsilon, +1 for EOS
+    print(pathphones.max(), pathphones.min(), num_classes)
+
+    # TODO(fangjun): do we need to build our own one_hot
+    # that supports dtype == torch.int32
+    embedding_phones = torch.nn.functional.one_hot(
+        pathphones.long(), num_classes=num_classes).to(device)
+
+    print(embedding_scores.shape)
+    print(embedding_phones.shape)
+    print(expected_times.unsqueeze(-1).shape)
+    embeddings = torch.cat(
+        (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
+        dim=1)
+    print(embeddings.shape)
+
+    # TODO(fangjun): how to use embeddings?
 
     return expected_times
