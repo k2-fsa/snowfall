@@ -506,6 +506,14 @@ def main():
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
+    model.to(device)
+    describe(model)
+
+    optimizer = Noam(model.parameters(),
+                     model_size=256,
+                     factor=1.0,
+                     warm_step=args.warm_step)
+
     best_objf = np.inf
     best_valid_objf = np.inf
     best_epoch = start_epoch
@@ -515,19 +523,11 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
-    model.to(device)
-    describe(model)
-
-    optimizer = Noam(model.parameters(),
-                     model_size=256,
-                     factor=1.0,
-                     warm_step=args.warm_step)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -558,6 +558,8 @@ def main():
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
+                            optimizer=None,
+                            scheduler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
@@ -577,6 +579,8 @@ def main():
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
+                        optimizer=optimizer,
+                        scheduler=None,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,

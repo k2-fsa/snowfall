@@ -311,6 +311,10 @@ def main():
     setup_dist(rank=args.local_rank, world_size=args.world_size)
     fix_random_seed(42)
 
+    start_epoch = 0
+    num_epochs = 10
+    use_adam = True
+
     exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
     setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
@@ -409,34 +413,7 @@ def main():
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
-    start_epoch = 0
-    num_epochs = 10
-    best_objf = np.inf
-    best_valid_objf = np.inf
-    best_epoch = start_epoch
-    best_model_path = os.path.join(exp_dir, 'best_model.pt')
-    best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0  # for logging only
-    use_adam = True
-
-    if start_epoch > 0:
-        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
-        best_objf = ckpt['objf']
-        best_valid_objf = ckpt['valid_objf']
-        global_batch_idx_train = ckpt['global_batch_idx_train']
-        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
     model.to(device)
-    if args.world_size > 1:
-        logging.info('Using DistributedDataParallel in training. '
-                     'The reported loss, num_frames, etc. for training steps include '
-                     'only the batches seen in the master process (the actual loss '
-                     'includes batches from all GPUs, and the actual num_frames is '
-                     f'approx. {args.world_size}x larger.')
-        # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
-        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
     describe(model)
 
     if use_adam:
@@ -465,9 +442,33 @@ def main():
         )
         lr_scheduler = optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            gamma=lr_schedule_gamma,
-            last_epoch=start_epoch - 1
+            gamma=lr_schedule_gamma
         )
+    
+    best_objf = np.inf
+    best_valid_objf = np.inf
+    best_epoch = start_epoch
+    best_model_path = os.path.join(exp_dir, 'best_model.pt')
+    best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
+    global_batch_idx_train = 0  # for logging only
+
+    if start_epoch > 0:
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scheduler=lr_scheduler)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
+
+    if args.world_size > 1:
+        logging.info('Using DistributedDataParallel in training. '
+                     'The reported loss, num_frames, etc. for training steps include '
+                     'only the batches seen in the master process (the actual loss '
+                     'includes batches from all GPUs, and the actual num_frames is '
+                     f'approx. {args.world_size}x larger.')
+        # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -493,6 +494,9 @@ def main():
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
         )
+
+        lr_scheduler.step()
+
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf
@@ -500,6 +504,8 @@ def main():
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
+                            optimizer=None,
+                            scheduler=None,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
@@ -520,6 +526,8 @@ def main():
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
                         model=model,
+                        optimizer=optimizer,
+                        scheduler=lr_scheduler,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
@@ -536,8 +544,6 @@ def main():
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
                            best_epoch=best_epoch)
-
-        lr_scheduler.step()
 
     logging.warning('Done')
     cleanup_dist()
