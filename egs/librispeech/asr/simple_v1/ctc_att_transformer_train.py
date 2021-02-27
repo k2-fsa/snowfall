@@ -92,12 +92,12 @@ def get_objf(batch: Dict,
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
     if is_training:
-        nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+        nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
     else:
         with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
             if att_rate != 0.0:
                 att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
