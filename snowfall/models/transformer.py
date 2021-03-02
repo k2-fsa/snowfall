@@ -108,7 +108,7 @@ class Transformer(AcousticModel):
         x = self.encoder_embed(x)
         x = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
-        mask = encoder_padding_mask(supervisions)
+        mask = encoder_padding_mask(x.size(0), supervisions)
         mask = mask.to(x.device) if mask != None else None
         x = self.encoder(x, src_key_padding_mask=mask)  # (T, B, F)
 
@@ -568,10 +568,11 @@ class LabelSmoothingLoss(nn.Module):
         return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
 
 
-def encoder_padding_mask(supervisions: Optional[Dict] = None) -> Optional[Tensor]:
+def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> Optional[Tensor]:
     """Make mask tensor containing indices of padded part.
 
     Args:
+        max_len: maximum length of input features
         supervisions : Supervison in lhotse format, i.e., batch['supervisions']
 
     Returns:
@@ -591,9 +592,8 @@ def encoder_padding_mask(supervisions: Optional[Dict] = None) -> Optional[Tensor
     
     lengths = [((i -1) // 2 - 1) // 2 for i in lengths]
     bs = int(len(lengths))
-    maxlen = int(max(lengths))
-    seq_range = torch.arange(0, maxlen, dtype=torch.int64)
-    seq_range_expand = seq_range.unsqueeze(0).expand(bs, maxlen)
+    seq_range = torch.arange(0, max_len, dtype=torch.int64)
+    seq_range_expand = seq_range.unsqueeze(0).expand(bs, max_len)
     seq_length_expand = seq_range_expand.new(lengths).unsqueeze(-1)
     mask = seq_range_expand >= seq_length_expand
 
