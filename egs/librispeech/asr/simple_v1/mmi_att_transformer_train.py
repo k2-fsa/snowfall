@@ -406,7 +406,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-transformer-noam-mmi-att-musan-bucket-cat')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -445,12 +445,12 @@ def main():
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if not args.bucketing_sampler:
+    #if not args.bucketing_sampler:
         # We don't mix concatenating the cuts and bucketing
         # Here we insert concatenation before mixing so that the
         # noises from Musan are mixed onto almost-zero-energy
         # padding frames.
-        transforms = [CutConcatenate()] + transforms
+    transforms = [CutConcatenate(duration_factor=1)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
@@ -472,7 +472,7 @@ def main():
         train,
         sampler=train_sampler,
         batch_size=None,
-        num_workers=4
+        num_workers=4,
     )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionDataset(cuts_dev)
