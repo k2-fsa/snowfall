@@ -409,7 +409,8 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
+    # exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -437,7 +438,8 @@ def main():
     P.scores = torch.zeros_like(P.scores)
 
     # load dataset
-    feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
+    # feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
+    feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
     cuts_train = CutSet.from_json(feature_dir /
                                   'cuts_train.json.gz')

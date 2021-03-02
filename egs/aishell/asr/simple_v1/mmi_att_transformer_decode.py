@@ -188,7 +188,8 @@ def main():
     avg = args.avg
     att_rate = args.att_rate
 
-    exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
+    # exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -258,7 +259,8 @@ def main():
         LG = k2.Fsa.from_dict(d)
 
     # load dataset
-    feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
+    # feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
+    feature_dir = Path('exp/data')
     logging.debug("About to get test cuts")
     cuts_test = CutSet.from_json(feature_dir / 'cuts_test.json.gz')
 
