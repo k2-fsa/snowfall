@@ -113,11 +113,9 @@ def get_objf(batch: Dict,
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
+    num, den = batch['mmi_numerator'], batch['mmi_denominator']
     if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
+        num.requires_grad = True
 
     assert num.requires_grad == is_training
     assert den.requires_grad is False
@@ -427,7 +425,9 @@ def main():
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        # No need for cache since we'll compile graphs in DataLoader processes
+        use_cache=False
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -451,7 +451,24 @@ def main():
         # noises from Musan are mixed onto almost-zero-energy
         # padding frames.
         transforms = [CutConcatenate()] + transforms
-    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+
+    def make_graph_supervisions(cuts: CutSet):
+        texts = [
+            sup.text
+            for cut in cuts
+            for sup in cut.supervisions
+        ]
+        num, den = graph_compiler.compile(texts, P)
+        return {
+            'mmi_numerator': num,
+            'mmi_denominator': den
+        }
+
+    train = K2SpeechRecognitionDataset(
+        cuts_train,
+        cut_transforms=transforms,
+        extra_supervision_fn=make_graph_supervisions
+    )
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
@@ -475,7 +492,10 @@ def main():
         num_workers=4
     )
     logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionDataset(cuts_dev)
+    validate = K2SpeechRecognitionDataset(
+        cuts_dev,
+        extra_supervision_fn=make_graph_supervisions
+    )
     valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(

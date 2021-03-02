@@ -47,7 +47,8 @@ class MmiTrainingGraphCompiler(object):
                  L_inv: k2.Fsa,
                  phones: k2.SymbolTable,
                  words: k2.SymbolTable,
-                 oov: str = '<UNK>'):
+                 oov: str = '<UNK>',
+                 use_cache: bool = True):
         '''
         Args:
           L_inv:
@@ -79,6 +80,9 @@ class MmiTrainingGraphCompiler(object):
         assert ctc_topo.requires_grad is False
 
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
+
+        if use_cache:
+            self.compile_one_and_cache = lru_cache(maxsize=100000)(self.compile_one_and_cache)
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
@@ -116,7 +120,6 @@ class MmiTrainingGraphCompiler(object):
 
         return num, den
 
-    @lru_cache(maxsize=100000)
     def compile_one_and_cache(self, text: str) -> k2.Fsa:
         '''Convert transcript to an Fsa with the help of lexicon
         and word symbol table.
