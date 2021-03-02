@@ -585,23 +585,10 @@ def encoder_padding_mask(supervisions: Optional[Dict] = None) -> Optional[Tensor
          supervisions['start_frame'],
          supervisions['num_frames']), 1).to(torch.int32)
 
-    indices = torch.argsort(supervision_segments[:, 1], descending=False)
-    supervision_segments = supervision_segments[indices]
-
-    indices = torch.argsort(supervision_segments[:, 0], descending=False)
-    supervision_segments = supervision_segments[indices]
-
-    previous_idx = -1
-    cur_length = 0
-    lengths = []
+    lengths = [0 for _ in range(int(max(supervision_segments[:, 0])) + 1)]
     for sequence_idx, start_frame, num_frames in supervision_segments:
-        cur_length = start_frame + num_frames
-        if sequence_idx == previous_idx:
-            lengths[-1] = cur_length
-        else:
-            lengths.append(cur_length)
-        previous_idx = sequence_idx
-
+        lengths[sequence_idx] = start_frame + num_frames
+    
     lengths = [((i -1) // 2 - 1) // 2 for i in lengths]
     bs = int(len(lengths))
     maxlen = int(max(lengths))
@@ -645,23 +632,9 @@ def get_normal_transcripts(supervision: Dict, words: k2.SymbolTable, oov: str = 
               for token in text.split(' ')] for text in supervision['text']]
     texts_ids = [[words[token] for token in text] for text in texts]
 
-    supervision_segments = [supervision['sequence_idx'], supervision['start_frame']]
-
-    indices = torch.argsort(supervision_segments[1], descending=False)
-    supervision_segments = [z[indices] for z in supervision_segments]
-    texts_ids = [texts_ids[indice] for indice in indices]
-    indices = torch.argsort(supervision_segments[0], descending=False)
-    supervision_segments = [z[indices] for z in supervision_segments]
-    texts_ids = [texts_ids[indice] for indice in indices]
-
-    previous_idx = -1
-    batch_text = []
-    for sequence_idx, text in zip(supervision_segments[0], texts_ids):
-        if sequence_idx == previous_idx:
-            batch_text[-1] = batch_text[-1] + text
-        else:
-            batch_text.append(text)
-        previous_idx = sequence_idx
+    batch_text = [[] for _ in range(int(max(supervision['sequence_idx'])) + 1)]
+    for sequence_idx, text in zip(supervision['sequence_idx'], texts_ids):
+        batch_text[sequence_idx] = batch_text[sequence_idx] + text
     return batch_text
 
 
