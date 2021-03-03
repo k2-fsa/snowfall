@@ -87,26 +87,33 @@ def main():
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     print('-' * 10, 'den_lats', '-' * 10)
-    den_expected_times = compute_embeddings(
+    den_padded_embeddings, den_len_per_path = compute_embeddings(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
         num_paths=2,
         debug=True)
-    print(den_expected_times[:50])
-    print(den_expected_times[-50:])
+    assert den_padded_embeddings.ndim == 3
+    assert den_padded_embeddings.shape[1] == den_len_per_path.max()
+    assert den_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
+                                              graph_compiler.max_phone_id + 2 +
+                                              1)
 
     print('-' * 10, 'mbr_lats', '-' * 10)
-    mbr_expected_times = compute_embeddings(
+    mbr_padded_embeddings, mbr_len_per_path = compute_embeddings(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
         num_paths=2,
         debug=True)
-    print(mbr_expected_times[:50])
-    print(mbr_expected_times[-50:])
+
+    assert mbr_padded_embeddings.ndim == 3
+    assert mbr_padded_embeddings.shape[1] == mbr_len_per_path.max()
+    assert mbr_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
+                                              graph_compiler.max_phone_id + 2 +
+                                              1)
 
 
 if __name__ == '__main__':

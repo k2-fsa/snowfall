@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#
+# Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
+#
 
 from pathlib import Path
 

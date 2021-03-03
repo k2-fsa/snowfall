@@ -2,8 +2,11 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 #
 
-import k2
+from typing import Tuple
+
 import torch
+
+import k2
 
 
 def _create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
@@ -26,7 +29,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
                        max_phone_id: int,
                        use_double_scores=True,
                        num_paths=100,
-                       debug=False) -> torch.Tensor:
+                       debug=False) -> Tuple[torch.Tensor, torch.Tensor]:
     '''Compute embeddings for an n-best list.
 
     See the following comments for more information:
@@ -47,8 +50,12 @@ def compute_embeddings(mbr_lats: k2.Fsa,
         True to use `double` in :func:`k2.random_paths`; false to use `float`.
       num_paths:
         Number of random paths to draw in :func:`k2.random_paths`.
+      debug:
+        Some checks are enabled if `debug` is True.
     Returns:
-      A 1-D torch.Tensor contains the expected times per pathphone_idx.
+      Return a tuple with two tensors:
+        - padded_embeddings, its shape is (num_paths, max_phone_seq_len, feature_dim)
+        - len_per_path, its shape is (num_paths,) containing the phone_seq_len before padding
     '''
     lats = mbr_lats
     device = lats.device
@@ -203,10 +210,10 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     # self-loop of the phone_fsas. The following statement assigns 0
     # to the first epsilon self-loop of every phone_fsa
     first_epsilon_offset = k2.index(phone_fsas.arcs.row_splits(2),
-                                    phone_fsas.arcs.row_splits(1)[:-1])
+                                    phone_fsas.arcs.row_splits(1))
 
     # TODO(fangjun): do we need to support `torch.int32` for the indexing
-    expected_times[first_epsilon_offset.long()] = 0
+    expected_times[first_epsilon_offset[:-1].long()] = 0
 
     if debug:
         # expected_times within a phone_fsa should be monotonic increasing
@@ -237,7 +244,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     # linear interpolation
     #
     #                            y
-    #    x-----------------------|-------------------x
+    #    |-----------------------|-------------------|
     #   low   high_scale             low_scale      high
     #
     #  y = low * low_scale  + high * high_scale
@@ -275,8 +282,33 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     embeddings = torch.cat(
         (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
         dim=1)
-    print(embeddings.shape)
 
-    # TODO(fangjun): how to use embeddings?
+    if debug:
+        assert embeddings.ndim == 2
+        assert embeddings.shape[0] == pathphones.shape[0]
+        assert embeddings.shape[1] == (dense_fsa_vec.scores.shape[1] +
+                                       num_classes + 1)
+        assert embeddings.shape[0] == phone_fsas.arcs.row_splits(2)[-1]
 
-    return expected_times
+    embeddings_per_path = []
+    num_paths = phone_fsas.arcs.dim0()
+    for i in range(num_paths - 1):
+        start = first_epsilon_offset[i]
+        end = first_epsilon_offset[i + 1]
+        embeddings_per_path.append(embeddings[start:end])
+
+    start = first_epsilon_offset[num_paths - 1]
+    embeddings_per_path.append(embeddings[start:])
+    len_per_path = first_epsilon_offset[1:] - first_epsilon_offset[0:-1]
+
+    padded_embeddings = torch.nn.utils.rnn.pad_sequence(embeddings_per_path,
+                                                        batch_first=True)
+
+    if debug:
+        s = 0
+        for p in embeddings_per_path:
+            s += p.shape[0]
+        assert s == len_per_path.sum().item()
+        assert s == embeddings.shape[0]
+
+    return padded_embeddings, len_per_path
