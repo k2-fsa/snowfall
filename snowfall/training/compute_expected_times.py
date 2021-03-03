@@ -20,13 +20,14 @@ def _create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
     return k2.linear_fsa(phone_seqs)
 
 
-def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
-                                     ctc_topo: k2.Fsa,
-                                     dense_fsa_vec: k2.DenseFsaVec,
-                                     max_phone_id: int,
-                                     use_double_scores=True,
-                                     num_paths=100) -> torch.Tensor:
-    '''Compute expected times per phone in a n-best list.
+def compute_embeddings(mbr_lats: k2.Fsa,
+                       ctc_topo: k2.Fsa,
+                       dense_fsa_vec: k2.DenseFsaVec,
+                       max_phone_id: int,
+                       use_double_scores=True,
+                       num_paths=100,
+                       debug=False) -> torch.Tensor:
+    '''Compute embeddings for an n-best list.
 
     See the following comments for more information:
 
@@ -59,18 +60,26 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     paths = k2.random_paths(lats,
                             use_double_scores=use_double_scores,
                             num_paths=num_paths)
-    print('paths', paths)
+    if debug:
+        assert paths.num_axes() == 3
+        assert paths.num_elements() > 0
+
+    #  print('paths', paths)
 
     # phone_seqs will be k2.RaggedInt like paths, but containing phones
     # (and final -1's, and 0's for epsilon)
     phone_seqs = k2.index(lats.phones, paths)
-    print('lats.phones', lats.phones[:1000])
-    print(phone_seqs)
+    if debug:
+        assert phone_seqs.num_axes() == 3
+        assert phone_seqs.num_elements() > 0
+
+    #  print('lats.phones', lats.phones[:1000])
+    #  print(phone_seqs)
 
     # Remove epsilons from `phone_seqs`
-    print('before removing 0', phone_seqs.shape().row_splits(2))
+    #  print('before removing 0', phone_seqs.shape().row_splits(2))
     phone_seqs = k2.ragged.remove_values_eq(phone_seqs, 0)
-    print('after removing 0', phone_seqs.shape().row_splits(2))
+    #  print('after removing 0', phone_seqs.shape().row_splits(2))
 
     # Remove repeated sequences from `phone_seqs`
     #
@@ -83,12 +92,17 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     path_to_seq_map = seq_to_path_shape.row_ids(1)
 
     phone_seqs = k2.ragged.remove_axis(phone_seqs, 0)
+    if debug:
+        assert phone_seqs.num_axes() == 2
 
     # now compile decoding graphs corresponding to `phone_seqs` by constructing
     # fsas from them (remember we already have the final -1's!) and composing
     # with ctc_topo.
     phone_fsas = _create_phone_fsas(phone_seqs)
     phone_fsas = k2.add_epsilon_self_loops(phone_fsas)
+    if debug:
+        assert phone_fsas.arcs.num_axes() == 3
+        assert phone_fsas.arcs.num_elements() & 1 == 0
 
     # Set an attribute called pathphone_idx, which corresponds to the arc-index
     # in `phone_fsas` with self-loops.
@@ -146,12 +160,12 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
                                               values=paths_lats.get_arc_post(
                                                   True, True).exp(),
                                               min_col_index=0)
-    print('paths_lats.pathphone_idx[:100]\n', paths_lats.pathphone_idx[:100])
 
-    # TODO(fangjun): this check is for test, will remove it
-    sum_per_row = torch.sparse.sum(pathframe_to_pathphone, dim=1).to_dense()
-    expected_sum_per_row = torch.ones_like(sum_per_row)
-    assert torch.allclose(sum_per_row, expected_sum_per_row)
+    if debug:
+        sum_per_row = torch.sparse.sum(pathframe_to_pathphone,
+                                       dim=1).to_dense()
+        expected_sum_per_row = torch.ones_like(sum_per_row)
+        assert torch.allclose(sum_per_row, expected_sum_per_row)
 
     frame_idx = torch.arange(paths_shape.num_elements(),
                              device=device) - k2.index(path_starts,
@@ -163,33 +177,70 @@ def compute_expected_times_per_phone(mbr_lats: k2.Fsa,
     weighted_occupation = torch.sparse.mm(
         pathframe_to_pathphone.t(),
         frame_idx.unsqueeze(-1).to(pathframe_to_pathphone.dtype))
+    # weighted_occupation has shape (num_pathphones, 1)
 
     # sum over columns to get the total occupation
     # Use `to_dense()` here because PyTorch does not
     # support div(dense_matrix, sparse_matrix)
     total_occupation = torch.sparse.sum(pathframe_to_pathphone,
                                         dim=0).to_dense()
-
-    # TODO(fangjun): remove print
-    print('total_occupation[:50]\n', total_occupation[:50])
+    # total_occupation has shape (num_pathphone_idx, )
 
     eps = torch.finfo(total_occupation.dtype).eps
     expected_times = weighted_occupation.squeeze() / (total_occupation + eps)
+    # expected_times has shape (num_pathphone_idx,)
 
     # Number of `pathphone_idx`'s should be even
     assert expected_times.shape[0] & 1 == 0
 
-    # Replace the expected_times for `pathphone_idx`'s which are even with
+    # Replace the expected_times for even `pathphone_idx`'s with
     # the average expected times of two neighboring phones
     #
     # Even `pathphone_idx`'s belong to epsilon self-loops.
     expected_times[2::2] = (expected_times[1:-1:2] +
                             expected_times[3::2]) * 0.5
-    expected_times[0] = 0
+    # CAUTION: the above assignment is incorrect for the first epsilon
+    # self-loop of the phone_fsas. The following statement assigns 0
+    # to the first epsilon self-loop of every phone_fsa
+    first_epsilon_offset = k2.index(phone_fsas.arcs.row_splits(2),
+                                    phone_fsas.arcs.row_splits(1)[:-1])
+
+    # TODO(fangjun): do we need to support `torch.int32` for the indexing
+    expected_times[first_epsilon_offset.long()] = 0
+
+    if debug:
+        # expected_times within an phone_fsa should be monotonic increasing
+        assert expected_times.shape[0] == pathphone_idx_to_path.shape[0]
+
+        for n in range(1, expected_times.shape[0]):
+            if pathphone_idx_to_path[n] == pathphone_idx_to_path[n - 1]:
+                assert expected_times[n] > expected_times[
+                    n - 1], f'{expected_times[n]}, {expected_times[n-1]}, {n}'
+            else:
+                # n is the first pathphone_idx of this fsa
+                seq = pathphone_idx_to_seq[n - 1]
+                seq_len = seqs_shape.row_splits(1)[
+                    seq + 1] - seqs_shape.row_splits(1)[seq]
+
+                assert pathphone_idx_to_path[n - 1] <= seq_len
+
+        n = expected_times.shape[0] - 1
+        seq = pathphone_idx_to_seq[n]
+        seq_len = seqs_shape.row_splits(1)[seq +
+                                           1] - seqs_shape.row_splits(1)[seq]
+        assert pathphone_idx_to_path[n] <= seq_len
 
     # TODO(fangjun): we can remove the columns of even pathphone_idx
     # while constructing `pathframe_to_pathphone`, which can save about
     # half computation time in `torch.sparse.mm`.
+
+    # linear interpolation
+    #
+    #                            y
+    #    x-----------------------|-------------------x
+    #   low   high_scale             low_scale      high
+    #
+    #  y = low * low_scale  + high * high_scale
 
     frame_idx_low = torch.floor(expected_times)
     frame_idx_high = torch.ceil(expected_times)

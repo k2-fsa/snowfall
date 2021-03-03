@@ -10,7 +10,7 @@ sys.path.insert(0, '/root/fangjun/open-source/snowfall/snowfall')
 sys.path.insert(0, '/root/fangjun/open-source/k2/build/lib')
 sys.path.insert(0, '/root/fangjun/open-source/k2/k2/python')
 
-from snowfall.training.compute_expected_times import compute_expected_times_per_phone
+from snowfall.training.compute_expected_times import compute_embeddings
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -22,8 +22,8 @@ import k2
 
 def main():
     torch.manual_seed(20210220)
-    #  device = torch.device('cuda', 0)
-    device = torch.device('cpu')
+    device = torch.device('cuda', 0)
+    #  device = torch.device('cpu')
 
     d = '/root/fangjun/open-source/snowfall/egs/librispeech/asr/simple_v1'
     lang_dir = Path(f'{d}/data/lang_nosp')
@@ -63,7 +63,7 @@ def main():
     nnet_output = torch.rand(N, T, C,
                              dtype=torch.float32).softmax(-1).log().to(device)
 
-    supervision_segments = torch.tensor([[0, 0, T], [1, 0, T]],
+    supervision_segments = torch.tensor([[0, 0, T], [1, 0, T - 10]],
                                         dtype=torch.int32)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
@@ -84,22 +84,24 @@ def main():
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     print('-' * 10, 'den_lats', '-' * 10)
-    den_expected_times = compute_expected_times_per_phone(
+    den_expected_times = compute_embeddings(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
-        num_paths=2)
+        num_paths=2,
+        debug=True)
     print(den_expected_times[:50])
     print(den_expected_times[-50:])
 
     print('-' * 10, 'mbr_lats', '-' * 10)
-    mbr_expected_times = compute_expected_times_per_phone(
+    mbr_expected_times = compute_embeddings(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
-        num_paths=2)
+        num_paths=2,
+        debug=True)
     print(mbr_expected_times[:50])
     print(mbr_expected_times[-50:])
 
