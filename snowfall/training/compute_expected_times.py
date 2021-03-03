@@ -209,7 +209,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     expected_times[first_epsilon_offset.long()] = 0
 
     if debug:
-        # expected_times within an phone_fsa should be monotonic increasing
+        # expected_times within a phone_fsa should be monotonic increasing
         assert expected_times.shape[0] == pathphone_idx_to_path.shape[0]
 
         for n in range(1, expected_times.shape[0]):

@@ -5,8 +5,11 @@
 
 from pathlib import Path
 
+cur_dir = Path(__file__).resolve().parent
+snowfall_dir = cur_dir.parent.parent
+
 import sys
-sys.path.insert(0, '/root/fangjun/open-source/snowfall/snowfall')
+sys.path.insert(0, f'{snowfall_dir}')
 sys.path.insert(0, '/root/fangjun/open-source/k2/build/lib')
 sys.path.insert(0, '/root/fangjun/open-source/k2/k2/python')
 
