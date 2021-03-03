@@ -87,7 +87,7 @@ def main():
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     print('-' * 10, 'den_lats', '-' * 10)
-    den_padded_embeddings, den_len_per_path = compute_embeddings(
+    den_padded_embeddings, den_len_per_path, den_path_to_seq = compute_embeddings(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -99,9 +99,12 @@ def main():
     assert den_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
                                               graph_compiler.max_phone_id + 2 +
                                               1)
+    assert den_padded_embeddings.shape[0] == den_len_per_path.shape[0]
+    assert den_padded_embeddings.shape[0] == den_path_to_seq.shape[0]
+    assert 0 <= den_path_to_seq.max() < supervision_segments.shape[0]
 
     print('-' * 10, 'mbr_lats', '-' * 10)
-    mbr_padded_embeddings, mbr_len_per_path = compute_embeddings(
+    mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq = compute_embeddings(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -114,6 +117,10 @@ def main():
     assert mbr_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
                                               graph_compiler.max_phone_id + 2 +
                                               1)
+
+    assert mbr_padded_embeddings.shape[0] == mbr_len_per_path.shape[0]
+    assert mbr_padded_embeddings.shape[0] == mbr_path_to_seq.shape[0]
+    assert 0 <= mbr_path_to_seq.max() < supervision_segments.shape[0]
 
 
 if __name__ == '__main__':

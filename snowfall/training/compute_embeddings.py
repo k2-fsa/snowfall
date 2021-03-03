@@ -29,7 +29,8 @@ def compute_embeddings(mbr_lats: k2.Fsa,
                        max_phone_id: int,
                        use_double_scores=True,
                        num_paths=100,
-                       debug=False) -> Tuple[torch.Tensor, torch.Tensor]:
+                       debug=False
+                      ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''Compute embeddings for an n-best list.
 
     See the following comments for more information:
@@ -56,6 +57,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
       Return a tuple with two tensors:
         - padded_embeddings, its shape is (num_paths, max_phone_seq_len, feature_dim)
         - len_per_path, its shape is (num_paths,) containing the phone_seq_len before padding
+        - path_to_seq_map, its shape is (num_paths,)
     '''
     lats = mbr_lats
     device = lats.device
@@ -311,4 +313,4 @@ def compute_embeddings(mbr_lats: k2.Fsa,
         assert s == len_per_path.sum().item()
         assert s == embeddings.shape[0]
 
-    return padded_embeddings, len_per_path
+    return padded_embeddings, len_per_path, path_to_seq_map
