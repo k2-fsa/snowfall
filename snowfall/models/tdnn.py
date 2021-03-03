@@ -134,7 +134,7 @@ class Tdnn1a(AcousticModel):
                               global_step=global_step)
 
 
-class Tdnn2aEmbedding(nn.Module):
+class Tdnn2aEmbedding(AcousticModel):
 
     def __init__(self, num_features: int, num_classes: int) -> None:
         super().__init__()

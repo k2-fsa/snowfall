@@ -74,6 +74,7 @@ class MmiTrainingGraphCompiler(object):
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
+        self.max_phone_id = max(phone_symbols)
 
         ctc_topo = build_ctc_topo(phone_symbols_with_blank)
         assert ctc_topo.requires_grad is False
