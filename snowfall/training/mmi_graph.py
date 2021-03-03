@@ -1,6 +1,5 @@
 # Copyright (c)  2020  Xiaomi Corp.       (author: Fangjun Kuang)
 
-from functools import lru_cache
 from typing import Iterable
 from typing import List
 from typing import Tuple
@@ -47,6 +46,7 @@ class MmiTrainingGraphCompiler(object):
                  L_inv: k2.Fsa,
                  phones: k2.SymbolTable,
                  words: k2.SymbolTable,
+                 device: torch.device,
                  oov: str = '<UNK>'):
         '''
         Args:
@@ -60,6 +60,8 @@ class MmiTrainingGraphCompiler(object):
           Out of vocabulary word.
         '''
 
+        L_inv = L_inv.to(device)
+
         if L_inv.properties & k2.fsa_properties.ARC_SORTED != 0:
             L_inv = k2.arc_sort(L_inv)
 
@@ -70,12 +72,13 @@ class MmiTrainingGraphCompiler(object):
         self.L_inv = L_inv
         self.phones = phones
         self.words = words
-        self.oov = oov
+        self.oov_id = self.words[oov]
+        self.device = device
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
 
-        ctc_topo = build_ctc_topo(phone_symbols_with_blank)
+        ctc_topo = build_ctc_topo(phone_symbols_with_blank).to(device)
         assert ctc_topo.requires_grad is False
 
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
@@ -100,39 +103,63 @@ class MmiTrainingGraphCompiler(object):
             - `den_graph` is the denominator graph. It is an FsaVec with the same
               shape of the `num_graph`.
         '''
-        assert P.is_cpu()
+        assert P.device == self.device
+        P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv, P).invert_()
-        ctc_topo_P = k2.connect(ctc_topo_P)
+        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
+                                  P_with_self_loops,
+                                  treat_epsilons_specially=False).invert()
 
-        num_graphs = k2.create_fsa_vec(
-            [self.compile_one_and_cache(text) for text in texts])
+        ctc_topo_P = k2.arc_sort(ctc_topo_P)
 
-        num = k2.compose(ctc_topo_P, num_graphs)
-        num = k2.connect(num)
+        num_graphs = self.build_num_graphs(texts)
+        num_graphs_with_self_loops = k2.remove_epsilon_and_add_self_loops(
+            num_graphs)
+
+        num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
+
+        num = k2.compose(ctc_topo_P,
+                         num_graphs_with_self_loops,
+                         treat_epsilons_specially=False)
         num = k2.arc_sort(num)
 
-        den = k2.create_fsa_vec([ctc_topo_P.detach()] * len(texts))
+        ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
+        indexes = torch.zeros(len(texts),
+                              dtype=torch.int32,
+                              device=self.device)
+        den = k2.index_fsa(ctc_topo_P_vec, indexes)
 
         return num, den
 
-    @lru_cache(maxsize=100000)
-    def compile_one_and_cache(self, text: str) -> k2.Fsa:
+    def build_num_graphs(self, texts: List[str]) -> k2.Fsa:
         '''Convert transcript to an Fsa with the help of lexicon
         and word symbol table.
 
         Args:
-          text:
-            The transcript containing words separated by spaces.
+          texts:
+            Each element is a transcript containing words separated by spaces.
+            For instance, it may be 'HELLO SNOWFALL', which contains
+            two words.
 
         Returns:
-          Return an FST corresponding to the transcript. Its `labels` are
+          Return an FST (FsaVec) corresponding to the transcript. Its `labels` are
           phone IDs and `aux_labels` are word IDs.
         '''
-        tokens = (token if token in self.words else self.oov
-                  for token in text.split(' '))
-        word_ids = [self.words[token] for token in tokens]
-        fsa = k2.linear_fsa(word_ids)
-        num_graph = k2.connect(k2.intersect(fsa, self.L_inv)).invert_()
-        num_graph = k2.arc_sort(num_graph)
-        return num_graph
+        word_ids_list = []
+        for text in texts:
+            word_ids = []
+            for word in text.split(' '):
+                if word in self.words:
+                    word_ids.append(self.words[word])
+                else:
+                    word_ids.append(self.oov_id)
+            word_ids_list.append(word_ids)
+
+        fsa = k2.linear_fsa(word_ids_list, self.device)
+        fsa = k2.add_epsilon_self_loops(fsa)
+        assert fsa.device == self.device
+        num_graphs = k2.intersect(self.L_inv,
+                                  fsa,
+                                  treat_epsilons_specially=False).invert_()
+        num_graphs = k2.arc_sort(num_graphs)
+        return num_graphs

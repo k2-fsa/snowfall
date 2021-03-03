@@ -101,12 +101,12 @@ def get_objf(batch: Dict,
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
     if is_training:
-        nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+        nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
     else:
         with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
             if att_rate != 0.0:
                 att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
@@ -132,11 +132,13 @@ def get_objf(batch: Dict,
     assert nnet_output.device == device
 
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
+
     den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
 
     num_tot_scores = num.get_tot_scores(
         log_semiring=True,
         use_double_scores=True)
+
     den_tot_scores = den.get_tot_scores(
         log_semiring=True,
         use_double_scores=True)
@@ -271,7 +273,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
         if forward_count == 1 or accum_grad == 1:
             P.set_scores_stochastic_(model.P_scores)
-            assert P.is_cpu
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -359,7 +360,7 @@ def get_parser():
     parser.add_argument(
         '--max-frames',
         type=int,
-        default=20000,
+        default=10000,
         help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
         '--warm-step',
@@ -400,6 +401,13 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
+    if not torch.cuda.is_available():
+        logging.error('No GPU detected!')
+        sys.exit(-1)
+
+    device_id = 0
+    device = torch.device('cuda', device_id)
+
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
     max_frames = args.max_frames
@@ -431,7 +439,8 @@ def main():
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -490,13 +499,7 @@ def main():
         num_workers=1
     )
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
-
     logging.info("About to create model")
-    device_id = 0
-    device = torch.device('cuda', device_id)
 
     if att_rate != 0.0:
         num_decoder_layers = 6
@@ -512,6 +515,7 @@ def main():
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)
+    P = P.to(device)
     describe(model)
 
     optimizer = Noam(model.parameters(),
@@ -535,7 +539,6 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     for epoch in range(start_epoch, num_epochs):
-        torch.cuda.empty_cache()
         train_sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
         tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)

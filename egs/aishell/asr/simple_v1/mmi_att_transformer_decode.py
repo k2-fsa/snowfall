@@ -53,7 +53,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
         with torch.no_grad():
-            nnet_output, _, _ = model(feature, supervision_segments)
+            nnet_output, _, _ = model(feature, supervisions)
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
