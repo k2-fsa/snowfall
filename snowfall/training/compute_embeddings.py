@@ -23,14 +23,15 @@ def _create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
     return k2.linear_fsa(phone_seqs)
 
 
-def compute_embeddings(mbr_lats: k2.Fsa,
-                       ctc_topo: k2.Fsa,
-                       dense_fsa_vec: k2.DenseFsaVec,
-                       max_phone_id: int,
-                       use_double_scores=True,
-                       num_paths=100,
-                       debug=False
-                      ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def compute_embeddings(
+        lats: k2.Fsa,
+        ctc_topo: k2.Fsa,
+        dense_fsa_vec: k2.DenseFsaVec,
+        max_phone_id: int,
+        use_double_scores=True,
+        num_paths=100,
+        debug=False
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
     '''Compute embeddings for an n-best list.
 
     See the following comments for more information:
@@ -39,7 +40,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
         - `<https://github.com/k2-fsa/k2/issues/641>`_
 
     Args:
-      mbr_lats:
+      lats:
         An FsaVec.
       ctc_topo:
         The return value of :func:`build_ctc_topo`.
@@ -54,12 +55,12 @@ def compute_embeddings(mbr_lats: k2.Fsa,
       debug:
         Some checks are enabled if `debug` is True.
     Returns:
-      Return a tuple with two tensors:
-        - padded_embeddings, its shape is (num_paths, max_phone_seq_len, feature_dim)
+      Return a tuple with four tensors:
+        - padded_embeddings, its shape is (num_paths, max_phone_seq_len, num_features)
         - len_per_path, its shape is (num_paths,) containing the phone_seq_len before padding
         - path_to_seq_map, its shape is (num_paths,)
+        - num_repeats (k2.RaggedInt)
     '''
-    lats = mbr_lats
     device = lats.device
     assert len(lats.shape) == 3
     assert hasattr(lats, 'phones')
@@ -92,7 +93,6 @@ def compute_embeddings(mbr_lats: k2.Fsa,
 
     # Remove repeated sequences from `phone_seqs`
     #
-    # TODO(fangjun): `num_repeats` is currently not used
     phone_seqs, num_repeats = k2.ragged.unique_sequences(phone_seqs, True)
 
     # Remove the 1st axis from `phone_seqs` (that corresponds to `seq`) and
@@ -261,26 +261,29 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     low = frame_idx_low + offset
     high = frame_idx_high + offset
 
-    low_scores = k2.index(dense_fsa_vec.scores, low.to(torch.int32))
-    high_scores = k2.index(dense_fsa_vec.scores, high.to(torch.int32))
+    # the first column is not from the nnet_output and contains lots of -inf
+    # so it is removed here
+    scores = dense_fsa_vec.scores[:, 1:]
+    low_scores = k2.index(scores, low.to(torch.int32))
+    high_scores = k2.index(scores, high.to(torch.int32))
 
     embedding_scores = low_scores * low_scale.unsqueeze(
         -1) + high_scores * high_scale.unsqueeze(-1)
 
-    # arc entering the final state have phone == -1.
+    # arcs entering the final state have phone == -1.
     # Increment it so that 0 represents EOS
     pathphones += 1
     num_classes = max_phone_id + 2  # +1 for the epsilon, +1 for EOS
-    print(pathphones.max(), pathphones.min(), num_classes)
+    #  print(pathphones.max(), pathphones.min(), num_classes)
 
     # TODO(fangjun): do we need to build our own one_hot
     # that supports dtype == torch.int32
     embedding_phones = torch.nn.functional.one_hot(
         pathphones.long(), num_classes=num_classes).to(device)
 
-    print(embedding_scores.shape)
-    print(embedding_phones.shape)
-    print(expected_times.unsqueeze(-1).shape)
+    #  print(embedding_scores.shape)
+    #  print(embedding_phones.shape)
+    #  print(expected_times.unsqueeze(-1).shape)
     embeddings = torch.cat(
         (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
         dim=1)
@@ -288,7 +291,7 @@ def compute_embeddings(mbr_lats: k2.Fsa,
     if debug:
         assert embeddings.ndim == 2
         assert embeddings.shape[0] == pathphones.shape[0]
-        assert embeddings.shape[1] == (dense_fsa_vec.scores.shape[1] +
+        assert embeddings.shape[1] == (dense_fsa_vec.scores.shape[1] - 1 +
                                        num_classes + 1)
         assert embeddings.shape[0] == phone_fsas.arcs.row_splits(2)[-1]
 
@@ -313,4 +316,6 @@ def compute_embeddings(mbr_lats: k2.Fsa,
         assert s == len_per_path.sum().item()
         assert s == embeddings.shape[0]
 
-    return padded_embeddings, len_per_path, path_to_seq_map
+    # It used `double` for `get_arc_post`, but the network input requires torch.float32
+    return padded_embeddings.to(
+        torch.float32), len_per_path.cpu(), path_to_seq_map, num_repeats

@@ -32,7 +32,7 @@ from snowfall.dist import cleanup_dist, setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models import Tdnn2aEmbedding
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.training.compute_expected_times import compute_embeddings
+from snowfall.training.compute_embeddings import compute_embeddings
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -77,6 +77,7 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
 
 def get_objf(batch: Dict,
              model: AcousticModel,
+             second_pass_model: AcousticModel,
              P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
@@ -106,25 +107,23 @@ def get_objf(batch: Dict,
     feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+
+    with torch.set_grad_enabled(is_training):
         nnet_output = model(feature)
-    else:
-        with torch.no_grad():
-            nnet_output = model(feature)
+
+    assert nnet_output.requires_grad == is_training
 
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
+    with torch.set_grad_enabled(is_training):
+        num_graph, den_graph = graph_compiler.compile(texts, P)
 
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
+    assert num_graph.requires_grad == is_training
+    assert den_graph.requires_grad is False
+
+    num_graph = num_graph.to(device)
+    den_graph = den_graph.to(device)
 
     # nnet_output2 = nnet_output.clone()
     # blank_bias = -7.0
@@ -133,20 +132,86 @@ def get_objf(batch: Dict,
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    num_lats = k2.intersect_dense(num_graph, dense_fsa_vec, 10.0)
+    den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
-    num_tot_scores = num.get_tot_scores(
+    num_tot_scores = num_lats.get_tot_scores(
         log_semiring=True,
         use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
+
+    den_tot_scores = den_lats.get_tot_scores(
         log_semiring=True,
         use_double_scores=True)
+
     tot_scores = num_tot_scores - den_scale * den_tot_scores
 
     (tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
+
+    # Now compute the tot_scores for the second pass
+    #
+    # TODO(fangjun): We probably need to split it into a separate function
+    padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings(
+        den_lats,
+        graph_compiler.ctc_topo,
+        dense_fsa_vec,
+        max_phone_id=graph_compiler.max_phone_id,
+        num_paths=2,
+        debug=True)
+
+    # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
+    # i.e., [N, T, C]
+    padded_embeddings = padded_embeddings.permute(0, 2, 1)
+    # now padded_embeddings is [N, C, T]
+
+    with torch.set_grad_enabled(is_training):
+        second_pass_out = second_pass_model(padded_embeddings)
+
+    assert second_pass_out.requires_grad == is_training
+
+    # second_pass_out is of shape [N, C, T]
+    second_pass_out = second_pass_out.permute(0, 2, 1)
+    # now second_pass_out is of shape [N, T, C]
+
+    assert second_pass_out.shape[0] == padded_embeddings.shape[0]
+    assert second_pass_out.shape[1] == padded_embeddings.shape[2]
+    assert second_pass_out.shape[2] == nnet_output.shape[2]
+
+    # FIXME(fangjun): sort `len_per_path` in descending order
+    # and modify `second_pass_out`, `path_to_seq`, and `num_repeats`
+    # accordingly
+    assert False
+    second_pass_supervision_segments = torch.stack(
+        (torch.arange(len_per_path.numel(), dtype=torch.int32),
+         torch.zeros_like(len_per_path), len_per_path),
+        dim=1)
+
+    second_pass_dense_fsa_vec = k2.DenseFsaVec(
+        second_pass_out, second_pass_supervision_segments)
+
+    second_pass_num_graph = k2.index(num_graph, path_to_seq)
+
+    second_pass_num_lats = k2.intersect_dense(second_pass_num_graph, second_pass_dense_fsa_vec, 10.0)
+    second_pass_den_lats = k2.intersect_dense(den_graph, second_pass_dense_fsa_vec, 10.0)
+
+    second_pass_num_tot_scores = second_pass_num_lats.get_tot_scores(
+        log_semiring=True,
+        use_double_scores=True)
+
+    second_pass_den_tot_scores = second_pass_den_lats.get_tot_scores(
+        log_semiring=True,
+        use_double_scores=True)
+    print('secodn pass num scores', second_pass_num_tot_scores.shape, second_pass_num_tot_scores.requires_grad)
+    print('secodn pass den scores', second_pass_den_tot_scores.shape, second_pass_den_tot_scores.requires_grad)
+
+
+    print('second', second_pass_out.requires_grad)
+    print('second', second_pass_out.shape)
+    import sys
+    sys.exit(0)
+
+
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -184,6 +249,7 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
+                        second_pass_model: AcousticModel,
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler):
@@ -192,9 +258,10 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     total_all_frames = 0.  # all frames including those seqs that failed.
 
     model.eval()
+    second_pass_model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, P, device,
+        objf, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
                                             graph_compiler, False)
         total_objf += objf
         total_frames += frames
@@ -205,7 +272,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
+                    second_pass_model: AcousticModel,
+                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -219,6 +288,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
     prev_timestamp = datetime.now()
 
     model.train()
+    second_pass_model.train()
     for batch_idx, batch in enumerate(dataloader):
         global_batch_idx_train += 1
         timestamp = datetime.now()
@@ -228,12 +298,12 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             P.set_scores_stochastic_(model.module.P_scores)
         else:
             P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
         assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
+            second_pass_model=second_pass_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -273,6 +343,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                second_pass_model=second_pass_model,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
@@ -280,6 +351,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             # dist.reduce performs sum reduction by default.
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
+            second_pass_model.train()
             if dist.get_rank() == 0:
                 logging.info(
                     'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
@@ -294,6 +366,11 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer,
                     global_step=global_batch_idx_train
                 )
+                (second_pass_model.module if isinstance(
+                    second_pass_model, DDP) else
+                 second_pass_model).write_tensorboard_diagnostics(
+                     tb_writer, global_step=global_batch_idx_train)
+
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -313,7 +390,14 @@ def main():
     setup_dist(rank=args.local_rank, world_size=args.world_size)
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
+    if not torch.cuda.is_available():
+        logging.error('No GPU detected!')
+        sys.exit(-1)
+
+    device_id = args.local_rank
+    device = torch.device('cuda', device_id)
+
+    exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist'
     setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
 
@@ -334,7 +418,8 @@ def main():
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -399,13 +484,7 @@ def main():
         num_workers=1
     )
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
-
     logging.info("About to create model")
-    device_id = args.local_rank
-    device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
@@ -440,6 +519,7 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
+        # TODO(fangjun): load second pass model
         ckpt = load_checkpoint(filename=model_path, model=model)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
@@ -447,6 +527,8 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
+    P = P.to(device)
+    second_pass_model.to(device)
     if args.world_size > 1:
         logging.info('Using DistributedDataParallel in training. '
                      'The reported loss, num_frames, etc. for training steps include '
@@ -456,12 +538,18 @@ def main():
         # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
         # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        # TODO(fangjun): wrap second pass model for DDP
     describe(model)
+    describe(second_pass_model, 'Second pass')
 
     if use_adam:
         learning_rate = 1e-3
         weight_decay = 5e-4
-        optimizer = optim.AdamW(model.parameters(),
+        optimizer = optim.AdamW([{
+            'params': model.parameters()
+        }, {
+            'params': second_pass_model.parameters()
+        }],
                                 lr=learning_rate,
                                 weight_decay=weight_decay)
         # Equivalent to the following in the epoch loop:
@@ -476,12 +564,14 @@ def main():
         weight_decay = 1e-5
         momentum = 0.9
         lr_schedule_gamma = 0.7
-        optimizer = optim.SGD(
-            model.parameters(),
-            lr=learning_rate,
-            momentum=momentum,
-            weight_decay=weight_decay
-        )
+        optimizer = optim.SGD([{
+            'params': model.parameters()
+        }, {
+            'params': second_pass_model.parameters()
+        }],
+                              lr=learning_rate,
+                              momentum=momentum,
+                              weight_decay=weight_decay)
         lr_scheduler = optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
             gamma=lr_schedule_gamma,
@@ -503,6 +593,7 @@ def main():
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
+            second_pass_model=second_pass_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -517,6 +608,7 @@ def main():
             best_valid_objf = valid_objf
             best_objf = objf
             best_epoch = epoch
+            # TODO(fangjun): save second pass model
             save_checkpoint(filename=best_model_path,
                             model=model,
                             epoch=epoch,

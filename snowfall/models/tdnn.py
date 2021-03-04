@@ -189,9 +189,9 @@ class Tdnn2aEmbedding(AcousticModel):
         '''
         Args:
           x:
-            A tensor of shape (N, num_features, T)
+            A tensor of shape (N, num_features, T), i.e., (N, C, T)
         Returns:
-          Return a tensor of shape (N, num_classes, T)
+          Return a tensor of shape (N, num_classes, T), i.e., (N, C, T)
         '''
         x = self.tdnn(x)
         x = F.log_softmax(x, dim=1)

@@ -13,7 +13,7 @@ sys.path.insert(0, f'{snowfall_dir}')
 sys.path.insert(0, '/root/fangjun/open-source/k2/build/lib')
 sys.path.insert(0, '/root/fangjun/open-source/k2/k2/python')
 
-from snowfall.training.compute_expected_times import compute_embeddings
+from snowfall.training.compute_embeddings import compute_embeddings
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -63,8 +63,9 @@ def main():
     N = 2
     T = 1000
     C = len(phone_ids) + 1
-    nnet_output = torch.rand(N, T, C,
-                             dtype=torch.float32).softmax(-1).log().to(device)
+    nnet_output = torch.rand(
+        N, T, C,
+        dtype=torch.float32).softmax(-1).log().to(device).requires_grad_(True)
 
     supervision_segments = torch.tensor([[0, 0, T], [1, 0, T - 10]],
                                         dtype=torch.int32)
@@ -87,40 +88,62 @@ def main():
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     print('-' * 10, 'den_lats', '-' * 10)
-    den_padded_embeddings, den_len_per_path, den_path_to_seq = compute_embeddings(
+    den_padded_embeddings, den_len_per_path, den_path_to_seq, den_num_repeats = compute_embeddings(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
-        num_paths=2,
+        num_paths=10,
         debug=True)
     assert den_padded_embeddings.ndim == 3
     assert den_padded_embeddings.shape[1] == den_len_per_path.max()
-    assert den_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
-                                              graph_compiler.max_phone_id + 2 +
-                                              1)
+    assert den_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] -
+                                              1 + graph_compiler.max_phone_id +
+                                              2 + 1)
     assert den_padded_embeddings.shape[0] == den_len_per_path.shape[0]
     assert den_padded_embeddings.shape[0] == den_path_to_seq.shape[0]
     assert 0 <= den_path_to_seq.max() < supervision_segments.shape[0]
+    assert den_len_per_path.ndim == 1
+    assert den_len_per_path.dtype == torch.int32
+    assert den_path_to_seq.ndim == 1
+    assert den_path_to_seq.dtype == torch.int32
+    assert den_len_per_path.device.type == 'cpu'
+    assert den_path_to_seq.device == device
+
+    assert den_padded_embeddings.requires_grad is True
+    assert den_padded_embeddings.dtype == torch.float32
+
+    print('den', den_num_repeats)
 
     print('-' * 10, 'mbr_lats', '-' * 10)
-    mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq = compute_embeddings(
+    mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq, mbr_num_repeats = compute_embeddings(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
         max_phone_id=graph_compiler.max_phone_id,
-        num_paths=2,
+        num_paths=10,
         debug=True)
 
     assert mbr_padded_embeddings.ndim == 3
     assert mbr_padded_embeddings.shape[1] == mbr_len_per_path.max()
-    assert mbr_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] +
-                                              graph_compiler.max_phone_id + 2 +
-                                              1)
+    assert mbr_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] -
+                                              1 + graph_compiler.max_phone_id +
+                                              2 + 1)
 
     assert mbr_padded_embeddings.shape[0] == mbr_len_per_path.shape[0]
     assert mbr_padded_embeddings.shape[0] == mbr_path_to_seq.shape[0]
     assert 0 <= mbr_path_to_seq.max() < supervision_segments.shape[0]
+    assert mbr_len_per_path.ndim == 1
+    assert mbr_len_per_path.dtype == torch.int32
+    assert mbr_path_to_seq.ndim == 1
+    assert mbr_path_to_seq.dtype == torch.int32
+    assert mbr_len_per_path.device.type == 'cpu'
+    assert mbr_path_to_seq.device == device
+
+    assert mbr_padded_embeddings.requires_grad is True
+    assert mbr_padded_embeddings.dtype == torch.float32
+
+    print('mbr', mbr_num_repeats)
 
 
 if __name__ == '__main__':

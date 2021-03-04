@@ -226,7 +226,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             P.set_scores_stochastic_(model.module.P_scores)
         else:
             P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
         assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -311,6 +310,13 @@ def main():
     setup_dist(rank=args.local_rank, world_size=args.world_size)
     fix_random_seed(42)
 
+    if not torch.cuda.is_available():
+        logging.error('No GPU detected!')
+        sys.exit(-1)
+
+    device_id = args.local_rank
+    device = torch.device('cuda', device_id)
+
     exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
     setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
@@ -332,7 +338,8 @@ def main():
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -397,13 +404,7 @@ def main():
         num_workers=1
     )
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
-
     logging.info("About to create model")
-    device_id = args.local_rank
-    device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
@@ -428,6 +429,7 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     model.to(device)
+    P = P.to(device)
     if args.world_size > 1:
         logging.info('Using DistributedDataParallel in training. '
                      'The reported loss, num_frames, etc. for training steps include '
