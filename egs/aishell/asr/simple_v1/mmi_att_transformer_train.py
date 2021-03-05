@@ -82,6 +82,7 @@ def get_objf(batch: Dict,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
+
     feature = batch['features']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
@@ -131,9 +132,8 @@ def get_objf(batch: Dict,
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    num = k2.intersect_dense(num, dense_fsa_vec, 6.0)
+    den = k2.intersect_dense(den, dense_fsa_vec, 6.0)
 
     num_tot_scores = num.get_tot_scores(
         log_semiring=True,
@@ -161,6 +161,7 @@ def get_objf(batch: Dict,
             loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-tot_score) / (len(texts) * accum_grad)
+
         loss.backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
@@ -360,7 +361,7 @@ def get_parser():
     parser.add_argument(
         '--max-frames',
         type=int,
-        default=10000,
+        default=25000,
         help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
         '--warm-step',
