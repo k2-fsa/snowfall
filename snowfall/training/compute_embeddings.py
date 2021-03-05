@@ -223,21 +223,23 @@ def compute_embeddings(
 
         for n in range(1, expected_times.shape[0]):
             if pathphone_idx_to_path[n] == pathphone_idx_to_path[n - 1]:
-                assert expected_times[n] > expected_times[
+                assert expected_times[n] >= expected_times[
                     n - 1], f'{expected_times[n]}, {expected_times[n-1]}, {n}'
-            else:
-                # n is the first pathphone_idx of this fsa
-                seq = pathphone_idx_to_seq[n - 1]
-                seq_len = seqs_shape.row_splits(1)[
-                    seq + 1] - seqs_shape.row_splits(1)[seq]
+            #  else:
+            #      # n is the first pathphone_idx of this fsa
+            #      seq = pathphone_idx_to_seq[n - 1]
+            #      seq_len = seqs_shape.row_splits(1)[
+            #          seq + 1] - seqs_shape.row_splits(1)[seq]
+            #
+            #      assert pathphone_idx_to_path[
+            #          n -
+            #          1] <= seq_len, f'{pathphone_idx_to_path[n - 1]}, {seq_len}, {n}'
 
-                assert pathphone_idx_to_path[n - 1] <= seq_len
-
-        n = expected_times.shape[0] - 1
-        seq = pathphone_idx_to_seq[n]
-        seq_len = seqs_shape.row_splits(1)[seq +
-                                           1] - seqs_shape.row_splits(1)[seq]
-        assert pathphone_idx_to_path[n] <= seq_len
+        #  n = expected_times.shape[0] - 1
+        #  seq = pathphone_idx_to_seq[n]
+        #  seq_len = seqs_shape.row_splits(1)[seq +
+        #                                     1] - seqs_shape.row_splits(1)[seq]
+        #  assert pathphone_idx_to_path[n] <= seq_len
 
     # TODO(fangjun): we can remove the columns of even pathphone_idx
     # while constructing `pathframe_to_pathphone`, which can save about

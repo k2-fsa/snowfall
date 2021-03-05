@@ -132,7 +132,9 @@ def get_objf(batch: Dict,
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
+    logging.info('the following crashes in the second batch (start)')
     num_lats = k2.intersect_dense(num_graph, dense_fsa_vec, 10.0)
+    logging.info('the above crashes in the second batch (end)')
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     num_tot_scores = num_lats.get_tot_scores(
@@ -149,69 +151,80 @@ def get_objf(batch: Dict,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
-    # Now compute the tot_scores for the second pass
-    #
-    # TODO(fangjun): We probably need to split it into a separate function
-    padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings(
-        den_lats,
-        graph_compiler.ctc_topo,
-        dense_fsa_vec,
-        max_phone_id=graph_compiler.max_phone_id,
-        num_paths=2,
-        debug=True)
+    if True:
+        # Now compute the tot_scores for the second pass
+        #
+        # TODO(fangjun): We probably need to split it into a separate function
+        padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings(
+            den_lats,
+            graph_compiler.ctc_topo,
+            dense_fsa_vec,
+            max_phone_id=graph_compiler.max_phone_id,
+            num_paths=5, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
+            debug=True)
 
-    # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
-    # i.e., [N, T, C]
-    padded_embeddings = padded_embeddings.permute(0, 2, 1)
-    # now padded_embeddings is [N, C, T]
+        # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
+        # i.e., [N, T, C]
+        padded_embeddings = padded_embeddings.permute(0, 2, 1)
+        # now padded_embeddings is [N, C, T]
 
-    with torch.set_grad_enabled(is_training):
-        second_pass_out = second_pass_model(padded_embeddings)
+        with torch.set_grad_enabled(is_training):
+            second_pass_out = second_pass_model(padded_embeddings)
 
-    assert second_pass_out.requires_grad == is_training
+        assert second_pass_out.requires_grad == is_training
 
-    # second_pass_out is of shape [N, C, T]
-    second_pass_out = second_pass_out.permute(0, 2, 1)
-    # now second_pass_out is of shape [N, T, C]
+        # second_pass_out is of shape [N, C, T]
+        second_pass_out = second_pass_out.permute(0, 2, 1)
+        # now second_pass_out is of shape [N, T, C]
 
-    assert second_pass_out.shape[0] == padded_embeddings.shape[0]
-    assert second_pass_out.shape[1] == padded_embeddings.shape[2]
-    assert second_pass_out.shape[2] == nnet_output.shape[2]
+        assert second_pass_out.shape[0] == padded_embeddings.shape[0]
+        assert second_pass_out.shape[1] == padded_embeddings.shape[2]
+        assert second_pass_out.shape[2] == nnet_output.shape[2]
 
-    # FIXME(fangjun): sort `len_per_path` in descending order
-    # and modify `second_pass_out`, `path_to_seq`, and `num_repeats`
-    # accordingly
-    assert False
-    second_pass_supervision_segments = torch.stack(
-        (torch.arange(len_per_path.numel(), dtype=torch.int32),
-         torch.zeros_like(len_per_path), len_per_path),
-        dim=1)
+        second_pass_supervision_segments = torch.stack(
+            (torch.arange(len_per_path.numel(), dtype=torch.int32),
+             torch.zeros_like(len_per_path), len_per_path),
+            dim=1)
+        print('second pass sup', second_pass_supervision_segments.shape)
 
-    second_pass_dense_fsa_vec = k2.DenseFsaVec(
-        second_pass_out, second_pass_supervision_segments)
+        indices = torch.argsort(len_per_path, descending=True)
+        assert indices.shape[0] == second_pass_supervision_segments.shape[0]
+        assert indices.shape[0] == path_to_seq.shape[0]
 
-    second_pass_num_graph = k2.index(num_graph, path_to_seq)
+        second_pass_supervision_segments = second_pass_supervision_segments[indices]
+        path_to_seq = path_to_seq[indices]
+        # no need to modify second_pass_out
 
-    second_pass_num_lats = k2.intersect_dense(second_pass_num_graph, second_pass_dense_fsa_vec, 10.0)
-    second_pass_den_lats = k2.intersect_dense(den_graph, second_pass_dense_fsa_vec, 10.0)
+        num_repeats_float = k2.ragged.RaggedFloat(
+            num_repeats.shape(),
+            num_repeats.values().to(torch.float32))
+        path_weight = k2.ragged.normalize_scores(num_repeats_float,
+                                                 use_log=False).values
+        path_weight = path_weight[indices]
 
-    second_pass_num_tot_scores = second_pass_num_lats.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
+        second_pass_dense_fsa_vec = k2.DenseFsaVec(
+            second_pass_out, second_pass_supervision_segments)
 
-    second_pass_den_tot_scores = second_pass_den_lats.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    print('secodn pass num scores', second_pass_num_tot_scores.shape, second_pass_num_tot_scores.requires_grad)
-    print('secodn pass den scores', second_pass_den_tot_scores.shape, second_pass_den_tot_scores.requires_grad)
+        second_pass_num_graph = k2.index(num_graph, path_to_seq)
+        second_pass_den_graph = k2.index(den_graph, path_to_seq)
 
+        second_pass_num_lats = k2.intersect_dense(second_pass_num_graph, second_pass_dense_fsa_vec, 10.0)
+        second_pass_den_lats = k2.intersect_dense(second_pass_den_graph, second_pass_dense_fsa_vec, 10.0)
 
-    print('second', second_pass_out.requires_grad)
-    print('second', second_pass_out.shape)
-    import sys
-    sys.exit(0)
+        second_pass_num_tot_scores = second_pass_num_lats.get_tot_scores(
+            log_semiring=True,
+            use_double_scores=True)
 
+        second_pass_den_tot_scores = second_pass_den_lats.get_tot_scores(
+            log_semiring=True,
+            use_double_scores=True)
 
+        second_pass_tot_scores = (second_pass_num_tot_scores - second_pass_den_tot_scores) * path_weight
+
+        # filter `inf` scores
+        second_pass_tot_score, _, _ = get_tot_objf_and_num_frames(second_pass_tot_scores, second_pass_supervision_segments[:, 2])
+
+        tot_score = tot_score + second_pass_tot_score
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -228,20 +241,24 @@ def get_objf(batch: Dict,
 
         optimizer.zero_grad()
         (-tot_score).backward()
-        maybe_log_gradients('train/grad_norms')
+        #  maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
-        maybe_log_gradients('train/clipped_grad_norms')
-        if tb_writer is not None and global_batch_idx_train % 200 == 0:
-            # Once in a time we will perform a more costly diagnostic
-            # to check the relative parameter change per minibatch.
-            deltas = optim_step_and_measure_param_change(model, optimizer)
-            tb_writer.add_scalars(
-                'train/relative_param_change_per_minibatch',
-                deltas,
-                global_step=global_batch_idx_train
-            )
-        else:
-            optimizer.step()
+        clip_grad_value_(second_pass_model.parameters(), 5.0)
+        #  maybe_log_gradients('train/clipped_grad_norms')
+        optimizer.step()
+
+        if False:
+            if tb_writer is not None and global_batch_idx_train % 200 == 0:
+                # Once in a time we will perform a more costly diagnostic
+                # to check the relative parameter change per minibatch.
+                deltas = optim_step_and_measure_param_change(model, optimizer)
+                tb_writer.add_scalars(
+                    'train/relative_param_change_per_minibatch',
+                    deltas,
+                    global_step=global_batch_idx_train
+                )
+            else:
+                optimizer.step()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
@@ -317,7 +334,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0 and dist.get_rank() == 0:
+        if True or batch_idx % 10 == 0 and dist.get_rank() == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -448,7 +465,7 @@ def main():
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=40000,
+            max_frames=20000,
             shuffle=True,
             num_buckets=30
         )
@@ -456,7 +473,7 @@ def main():
         logging.info('Using regular sampler with cut concatenation.')
         train_sampler = SingleCutSampler(
             cuts_train,
-            max_frames=30000,
+            max_frames=20000,
             shuffle=True,
         )
     logging.info("About to create train dataloader")
