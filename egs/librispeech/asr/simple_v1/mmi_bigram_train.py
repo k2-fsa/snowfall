@@ -354,18 +354,18 @@ def main():
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    #if not args.bucketing_sampler:
+    if not args.bucketing_sampler:
         # We don't mix concatenating the cuts and bucketing
         # Here we insert concatenation before mixing so that the
         # noises from Musan are mixed onto almost-zero-energy
         # padding frames.
-    transforms = [CutConcatenate(duration_factor=2.5)] + transforms
+        transforms = [CutConcatenate(duration_factor=1)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=110000,
+            max_frames=40000,
             shuffle=True,
             num_buckets=30
         )
