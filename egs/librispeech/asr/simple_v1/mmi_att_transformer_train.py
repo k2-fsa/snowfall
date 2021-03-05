@@ -271,7 +271,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
         if forward_count == 1 or accum_grad == 1:
             P.set_scores_stochastic_(model.P_scores)
-            assert P.is_cpu
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
