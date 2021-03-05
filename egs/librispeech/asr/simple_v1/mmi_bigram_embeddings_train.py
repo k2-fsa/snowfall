@@ -162,7 +162,7 @@ def get_objf(batch: Dict,
             graph_compiler.ctc_topo,
             dense_fsa_vec,
             max_phone_id=graph_compiler.max_phone_id,
-            num_paths=10, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
+            num_paths=8, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
             debug=False)
 
         # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
@@ -307,7 +307,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
     for batch_idx, batch in enumerate(dataloader):
         objf, _, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
-                                                              graph_compiler, False)
+                                               graph_compiler, False)
         total_objf += objf
         total_frames += frames
         total_all_frames += all_frames
@@ -391,7 +391,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        if batch_idx > 0 and batch_idx % 1000 == 0:
+        # FIXME(fangjun): disable it for now
+        if False and batch_idx > 0 and batch_idx % 1000 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
