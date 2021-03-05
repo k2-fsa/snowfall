@@ -233,13 +233,14 @@ def compute_embeddings(
             #
             #      assert pathphone_idx_to_path[
             #          n -
-            #          1] <= seq_len, f'{pathphone_idx_to_path[n - 1]}, {seq_len}, {n}'
+            #          1] < seq_len, f'{pathphone_idx_to_path[n - 1]}, {seq_len}, {n}'
 
         #  n = expected_times.shape[0] - 1
         #  seq = pathphone_idx_to_seq[n]
         #  seq_len = seqs_shape.row_splits(1)[seq +
         #                                     1] - seqs_shape.row_splits(1)[seq]
-        #  assert pathphone_idx_to_path[n] <= seq_len
+        #
+        #  assert pathphone_idx_to_path[n] < seq_len
 
     # TODO(fangjun): we can remove the columns of even pathphone_idx
     # while constructing `pathframe_to_pathphone`, which can save about
@@ -269,8 +270,17 @@ def compute_embeddings(
     low_scores = k2.index(scores, low.to(torch.int32))
     high_scores = k2.index(scores, high.to(torch.int32))
 
-    embedding_scores = low_scores * low_scale.unsqueeze(
-        -1) + high_scores * high_scale.unsqueeze(-1)
+    # It can happen that `high_scores` contain fake nnet_output,
+    # i.e., scores for arcs entering the final state are
+    # [0, -inf, -inf, ..., ]
+    #  embedding_scores = low_scores * low_scale.unsqueeze(
+    #      -1) + high_scores * high_scale.unsqueeze(-1)
+
+    # FIXME(fangjun): Use linear interpolation
+    embedding_scores = low_scores
+
+    # set `embedding_scores` of arcs entering final states to 0
+    embedding_scores[(first_epsilon_offset[1:] - 1).long()] = 0
 
     # arcs entering the final state have phone == -1.
     # Increment it so that 0 represents EOS

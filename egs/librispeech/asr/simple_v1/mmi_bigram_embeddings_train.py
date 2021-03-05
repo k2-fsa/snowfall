@@ -132,9 +132,11 @@ def get_objf(batch: Dict,
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
     assert nnet_output.device == device
 
-    logging.info('the following crashes in the second batch (start)')
+    #  logging.info(f'sum, {nnet_output.sum()}')
+
+    #  logging.info('the following crashes in the second batch (start)')
     num_lats = k2.intersect_dense(num_graph, dense_fsa_vec, 10.0)
-    logging.info('the above crashes in the second batch (end)')
+    #  logging.info('the above crashes in the second batch (end)')
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     num_tot_scores = num_lats.get_tot_scores(
@@ -160,13 +162,15 @@ def get_objf(batch: Dict,
             graph_compiler.ctc_topo,
             dense_fsa_vec,
             max_phone_id=graph_compiler.max_phone_id,
-            num_paths=5, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
-            debug=True)
+            num_paths=10, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
+            debug=False)
 
         # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
         # i.e., [N, T, C]
         padded_embeddings = padded_embeddings.permute(0, 2, 1)
         # now padded_embeddings is [N, C, T]
+
+        #  logging.info(f'padded_embeddings {padded_embeddings.sum()}')
 
         with torch.set_grad_enabled(is_training):
             second_pass_out = second_pass_model(padded_embeddings)
@@ -177,6 +181,8 @@ def get_objf(batch: Dict,
         second_pass_out = second_pass_out.permute(0, 2, 1)
         # now second_pass_out is of shape [N, T, C]
 
+        #  logging.info(f'sum, {second_pass_out.sum()}')
+
         assert second_pass_out.shape[0] == padded_embeddings.shape[0]
         assert second_pass_out.shape[1] == padded_embeddings.shape[2]
         assert second_pass_out.shape[2] == nnet_output.shape[2]
@@ -185,7 +191,6 @@ def get_objf(batch: Dict,
             (torch.arange(len_per_path.numel(), dtype=torch.int32),
              torch.zeros_like(len_per_path), len_per_path),
             dim=1)
-        print('second pass sup', second_pass_supervision_segments.shape)
 
         indices = torch.argsort(len_per_path, descending=True)
         assert indices.shape[0] == second_pass_supervision_segments.shape[0]
@@ -240,12 +245,32 @@ def get_objf(batch: Dict,
                 )
 
         optimizer.zero_grad()
+        #  for n, p in model.named_parameters():
+        #      p.grad = None
+        #
+        #  for n, p in second_pass_model.named_parameters():
+        #      p.grad = None
+
         (-tot_score).backward()
         #  maybe_log_gradients('train/grad_norms')
+        #  for n, p in model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max()}')
+        #
+        #  for n, p in second_pass_model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max()}')
+
         clip_grad_value_(model.parameters(), 5.0)
         clip_grad_value_(second_pass_model.parameters(), 5.0)
+
         #  maybe_log_gradients('train/clipped_grad_norms')
         optimizer.step()
+        #  logging.info('after step')
+        #
+        #  for n, p in model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()} {p.grad.max()}')
+        #
+        #  for n, p in second_pass_model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max}')
 
         if False:
             if tb_writer is not None and global_batch_idx_train % 200 == 0:
@@ -260,7 +285,10 @@ def get_objf(batch: Dict,
             else:
                 optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
+    ans = (-tot_score.detach().cpu().item(),
+            -second_pass_tot_score.detach().cpu().item(),
+            tot_frames.cpu().item(),
+            all_frames.cpu().item())
     return ans
 
 
@@ -278,8 +306,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     second_pass_model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
-                                            graph_compiler, False)
+        objf, _, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
+                                                              graph_compiler, False)
         total_objf += objf
         total_frames += frames
         total_all_frames += all_frames
@@ -300,6 +328,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     num_epochs: int,
                     global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
+    total_second_pass_objf = 0.
     valid_average_objf = float('inf')
     time_waiting_for_batch = 0
     prev_timestamp = datetime.now()
@@ -317,7 +346,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             P.set_scores_stochastic_(model.P_scores)
         assert P.requires_grad is True
 
-        curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
+        curr_batch_objf, curr_batch_second_pass_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
             second_pass_model=second_pass_model,
@@ -331,6 +360,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         )
 
         total_objf += curr_batch_objf
+        total_second_pass_objf += curr_batch_second_pass_objf
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
@@ -338,14 +368,19 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
+                'global average second_pass objf: {:.6f} over {} '
                 'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
+                'current batch average second_pass objf: {:.6f}) '
                 'avg time waiting for batch {:.3f}s'.format(
                     batch_idx, current_epoch, num_epochs,
                     total_objf / total_frames, total_frames,
+                    total_second_pass_objf / total_frames,
+                    total_frames,
                     100.0 * total_frames / total_all_frames,
                     curr_batch_objf / (curr_batch_frames + 0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
+                    curr_batch_second_pass_objf / (curr_batch_frames + 0.001),  # FIXME(fangjun)
                     time_waiting_for_batch / max(1, batch_idx)))
             tb_writer.add_scalar('train/global_average_objf',
                                  total_objf / total_frames, global_batch_idx_train)
@@ -465,7 +500,7 @@ def main():
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=20000,
+            max_frames=10000,
             shuffle=True,
             num_buckets=30
         )
@@ -473,7 +508,7 @@ def main():
         logging.info('Using regular sampler with cut concatenation.')
         train_sampler = SingleCutSampler(
             cuts_train,
-            max_frames=20000,
+            max_frames=10000,
             shuffle=True,
         )
     logging.info("About to create train dataloader")

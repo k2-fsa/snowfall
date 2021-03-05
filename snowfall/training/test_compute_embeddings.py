@@ -144,6 +144,7 @@ def main():
     assert mbr_padded_embeddings.dtype == torch.float32
 
     print('mbr', mbr_num_repeats)
+    print(mbr_padded_embeddings.sum())
 
 
 if __name__ == '__main__':

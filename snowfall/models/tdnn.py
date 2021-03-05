@@ -143,7 +143,7 @@ class Tdnn2aEmbedding(AcousticModel):
         self.subsampling_factor = 1
         # left context: 1 + 1 + 3 + 3 = 8
         # right context: 1 + 1 + 3 + 3 = 8
-        self.tdnn = nn.Sequential(
+        self.tdnn2 = nn.Sequential(
             nn.Conv1d(in_channels=num_features,
                       out_channels=500,
                       kernel_size=3,
@@ -193,7 +193,7 @@ class Tdnn2aEmbedding(AcousticModel):
         Returns:
           Return a tensor of shape (N, num_classes, T), i.e., (N, C, T)
         '''
-        x = self.tdnn(x)
+        x = self.tdnn2(x)
         x = F.log_softmax(x, dim=1)
         return x
 
