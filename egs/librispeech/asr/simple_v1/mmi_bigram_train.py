@@ -359,7 +359,7 @@ def main():
         # Here we insert concatenation before mixing so that the
         # noises from Musan are mixed onto almost-zero-energy
         # padding frames.
-        transforms = [CutConcatenate()] + transforms
+        transforms = [CutConcatenate(duration_factor=1)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')

@@ -380,6 +380,16 @@ def get_parser():
         default=0.0,
         help="Attention loss rate.")
     parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
+    parser.add_argument(
         '--bucketing_sampler',
         type=str2bool,
         default=False,
@@ -391,6 +401,29 @@ def get_parser():
         default=30,
         help='The number of buckets for the BucketingSampler'
              '(you might want to increase it for larger datasets).')
+    parser.add_argument(
+        '--concatenate-cuts',
+        type=str2bool,
+        default=True,
+        help='When enabled, utterances (cuts) will be concatenated '
+             'to minimize the amount of padding.')
+    parser.add_argument(
+        '--duration-factor',
+        type=float,
+        default=1.0,
+        help='Determines the maximum duration of a concatenated cut '
+             'relative to the duration of the longest cut in a batch.')
+    parser.add_argument(
+        '--gap',
+        type=float,
+        default=1.0,
+        help='The amount of padding (in seconds) inserted between concatenated cuts. '
+             'This padding is filled with noise when noise augmentation is used.')
+    parser.add_argument(
+        '--full-libri',
+        type=str2bool,
+        default=False,
+        help='When enabled, use 960h LibriSpeech.')
     return parser
 
 
@@ -436,8 +469,13 @@ def main():
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir /
-                                  'cuts_train-clean-100.json.gz')
+    cuts_train = CutSet.from_json(feature_dir / 'cuts_train-clean-100.json.gz')
+    if args.full_libri:
+        cuts_train = (
+            cuts_train + 
+            CutSet.from_json(feature_dir / 'cuts_train-clean-360.json.gz') + 
+            CutSet.from_json(feature_dir / 'cuts_train-other-500.json.gz')
+        )
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
     logging.info("About to get Musan cuts")
@@ -445,12 +483,11 @@ def main():
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if not args.bucketing_sampler:
-        # We don't mix concatenating the cuts and bucketing
-        # Here we insert concatenation before mixing so that the
-        # noises from Musan are mixed onto almost-zero-energy
-        # padding frames.
-        transforms = [CutConcatenate()] + transforms
+    if args.concatenate_cuts:
+        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
+        # Cut concatenation should be the first transform in the list,
+        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
+        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
@@ -461,7 +498,7 @@ def main():
             num_buckets=args.num_buckets
         )
     else:
-        logging.info('Using regular sampler with cut concatenation.')
+        logging.info('Using SingleCutSampler.')
         train_sampler = SingleCutSampler(
             cuts_train,
             max_frames=max_frames,
@@ -472,7 +509,7 @@ def main():
         train,
         sampler=train_sampler,
         batch_size=None,
-        num_workers=4
+        num_workers=4,
     )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionDataset(cuts_dev)
@@ -500,6 +537,8 @@ def main():
 
     model = Transformer(
         num_features=40,
+        nhead=args.nhead,
+        d_model=args.attention_dim,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
         subsampling_factor=4,
         num_decoder_layers=num_decoder_layers)
@@ -510,7 +549,7 @@ def main():
     describe(model)
 
     optimizer = Noam(model.parameters(),
-                     model_size=256,
+                     model_size=args.attention_dim,
                      factor=1.0,
                      warm_step=args.warm_step)
 

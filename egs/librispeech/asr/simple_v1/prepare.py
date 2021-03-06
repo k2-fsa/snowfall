@@ -12,13 +12,13 @@ import torch
 from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
 from lhotse.recipes import prepare_librispeech, prepare_musan
 
+from snowfall.common import str2bool
+
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() in case it needs to take effect
 # even when we are not invoking the main (e.g. when spawning subprocesses).
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
-num_jobs = min(15, os.cpu_count())
-full_libri = False
 
 
 @contextmanager
@@ -60,8 +60,25 @@ def locate_corpus(*corpus_dirs):
     sys.exit(1)
 
 
+def get_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--num-jobs',
+        type=int,
+        default=min(15, os.cpu_count()),
+        help='When enabled, use 960h LibriSpeech.')
+    parser.add_argument(
+        '--full-libri',
+        type=str2bool,
+        default=False,
+        help='When enabled, use 960h LibriSpeech.')
+    return parser
+
+
+
 def main():
-    if full_libri:
+    args = get_parser().parse_args()
+    if args.full_libri:
         dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100', 'train-clean-360', 'train-other-500')
     else:
         dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
@@ -85,7 +102,7 @@ def main():
         corpus_dir=corpus_dir,
         dataset_parts=dataset_parts,
         output_dir=output_dir,
-        num_jobs=num_jobs
+        num_jobs=args.num_jobs
     )
 
     print('Musan manifest preparation:')
@@ -113,7 +130,7 @@ def main():
                 extractor=Fbank(),
                 storage_path=f'{output_dir}/feats_{partition}',
                 # when an executor is specified, make more partitions
-                num_jobs=num_jobs if ex is None else 80,
+                num_jobs=args.num_jobs if ex is None else 80,
                 executor=ex,
                 storage_type=LilcomHdf5Writer
             )
@@ -128,7 +145,7 @@ def main():
             ).cut_into_windows(10.0).filter(lambda c: c.duration > 5).compute_and_store_features(
                 extractor=Fbank(),
                 storage_path=f'{output_dir}/feats_musan',
-                num_jobs=num_jobs if ex is None else 80,
+                num_jobs=args.num_jobs if ex is None else 80,
                 executor=ex,
                 storage_type=LilcomHdf5Writer
             )

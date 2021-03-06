@@ -177,6 +177,16 @@ def get_parser():
         type=float,
         default=0.0,
         help="Attention loss rate.")
+    parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
     return parser
 
 
@@ -216,6 +226,8 @@ def main():
         num_features=40,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
         subsampling_factor=4,
+        nhead=args.nhead,
+        d_model=args.attention_dim,
         num_decoder_layers=num_decoder_layers)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
