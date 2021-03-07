@@ -7,6 +7,15 @@
 2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ] exp-lstm-adam-mmi-bigram-musan
 ```
 
+# AIShell MMI+transformer training results
+(dan povey: following is average over last 5 epochs, i.e. epochs 15 to 19.)
+
+WER then CER below:
+2021-03-07 13:48:29,659 INFO [mmi_att_transformer_decode.py:309] %WER 15.02% [9677 / 64428, 1046 ins, 1169 del, 7462 sub ]
+2021-03-07 13:48:29,659 INFO [mmi_att_transformer_decode.py:313] %WER 6.94% [7268 / 104765, 348 ins, 171 del, 6749 sub ]
+
+
+
 # AIShell CTC training results
 
 ## 2021-02-12

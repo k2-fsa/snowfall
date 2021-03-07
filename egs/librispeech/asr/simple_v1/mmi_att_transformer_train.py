@@ -271,7 +271,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
         if forward_count == 1 or accum_grad == 1:
             P.set_scores_stochastic_(model.P_scores)
-            assert P.is_cpu
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -457,14 +456,19 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
+    device_id = 0
+    device = torch.device('cuda', device_id)
+
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device,
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
+    P = P.to(device)
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -527,8 +531,6 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = 0
-    device = torch.device('cuda', device_id)
 
     if att_rate != 0.0:
         num_decoder_layers = 6
