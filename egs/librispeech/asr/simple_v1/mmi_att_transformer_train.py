@@ -30,6 +30,7 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.models.conformer import Conformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -343,9 +344,15 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--model-type',
+        type=str,
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
+    parser.add_argument(
         '--num-epochs',
         type=int,
-        default=20,
+        default=10,
         help="Number of traning epochs.")
     parser.add_argument(
         '--start-epoch',
@@ -360,7 +367,7 @@ def get_parser():
     parser.add_argument(
         '--warm-step',
         type=int,
-        default=25000,
+        default=5000,
         help='The number of warm-up steps for Noam optimizer.'
     )
     parser.add_argument(
@@ -429,6 +436,7 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
 
+    model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
     max_frames = args.max_frames
@@ -438,7 +446,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -537,14 +545,23 @@ def main():
     else:
         num_decoder_layers = 0
 
-    model = Transformer(
-        num_features=40,
-        nhead=args.nhead,
-        d_model=args.attention_dim,
-        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=4,
-        num_decoder_layers=num_decoder_layers)
-
+    if model_type == "transformer":
+        model = Transformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+    else:
+        model = Conformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+            
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)

@@ -243,78 +243,88 @@ listed below. They are obtained using the latest k2 and lhotse as of today (2021
 
 # LibriSpeech MMI training results (Transformer)
 
-## 2021-02-17
+## 2021-03-08
 
-(Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
+(Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/119>
 
-TensorBoard log is available at <https://tensorboard.dev/experiment/KnOfJepMTKyYcy1c3ziMgQ/#scalars>
-and the training log can be downloaded
-using <https://github.com/k2-fsa/snowfall/files/5995771/log-train-2021-02-17-01-45-18.txt>.
-
-Decoding results (WER) of final model averaged over last 5 epochs and each epoch model without model averaging are
-listed below. They are obtained using the latest k2 and lhotse as of today (2021-02-17).
+Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.) and each epoch model without model averaging are
+listed below.
 
 ```
 # average over last 5 epochs
-2021-02-17 09:38:03,597 INFO [mmi_att_transformer_decode.py:300] %WER 8.05% [4230 / 52576, 610 ins, 367 del, 3253 sub ]
+2021-03-07 11:20:39,733 INFO [mmi_att_transformer_decode.py:312] %WER 7.72% [4057 / 52576, 578 ins, 350 del, 3129 sub ]
 
 # epoch 0
-2021-02-17 09:19:40,795 INFO [mmi_att_transformer_decode.py:300] %WER 66.80% [35122 / 52576, 2335 ins, 8193 del, 24594 sub ]
+2021-03-07 10:55:45,002 INFO [mmi_att_transformer_decode.py:312] %WER 28.36% [14909 / 52576, 1454 ins, 2461 del, 10994 sub ]
 
 # epoch 1
-2021-02-17 09:20:39,043 INFO [mmi_att_transformer_decode.py:300] %WER 34.26% [18010 / 52576, 1964 ins, 2690 del, 13356 sub ]
+2021-03-07 10:56:40,550 INFO [mmi_att_transformer_decode.py:312] %WER 14.25% [7494 / 52576, 694 ins, 1185 del, 5615 sub ]
 
 # epoch 2
-2021-02-17 09:21:35,649 INFO [mmi_att_transformer_decode.py:300] %WER 24.32% [12786 / 52576, 1482 ins, 1734 del, 9570 sub ]
+2021-03-07 10:57:33,340 INFO [mmi_att_transformer_decode.py:312] %WER 10.16% [5341 / 52576, 588 ins, 689 del, 4064 sub ]
 
 # epoch 3
-2021-02-17 09:22:31,828 INFO [mmi_att_transformer_decode.py:300] %WER 19.61% [10309 / 52576, 1270 ins, 1330 del, 7709 sub ]
+2021-03-07 10:58:22,864 INFO [mmi_att_transformer_decode.py:312] %WER 9.27% [4875 / 52576, 542 ins, 642 del, 3691 sub ]
 
 # epoch 4
-2021-02-17 09:23:26,471 INFO [mmi_att_transformer_decode.py:300] %WER 16.28% [8560 / 52576, 955 ins, 1191 del, 6414 sub ]
+2021-03-07 10:59:11,151 INFO [mmi_att_transformer_decode.py:312] %WER 9.05% [4758 / 52576, 479 ins, 701 del, 3578 sub ]
 
 # epoch 5
-2021-02-17 09:24:19,785 INFO [mmi_att_transformer_decode.py:300] %WER 12.54% [6595 / 52576, 723 ins, 814 del, 5058 sub ]
+2021-03-07 10:59:59,171 INFO [mmi_att_transformer_decode.py:312] %WER 8.46% [4448 / 52576, 565 ins, 478 del, 3405 sub ]
 
 # epoch 6
-2021-02-17 09:25:12,438 INFO [mmi_att_transformer_decode.py:300] %WER 10.46% [5500 / 52576, 653 ins, 618 del, 4229 sub ]
+2021-03-07 11:00:46,395 INFO [mmi_att_transformer_decode.py:312] %WER 8.31% [4367 / 52576, 564 ins, 464 del, 3339 sub ]
 
 # epoch 7
-2021-02-17 09:26:04,223 INFO [mmi_att_transformer_decode.py:300] %WER 9.61% [5054 / 52576, 604 ins, 531 del, 3919 sub ]
+2021-03-07 11:01:32,543 INFO [mmi_att_transformer_decode.py:312] %WER 8.19% [4308 / 52576, 587 ins, 397 del, 3324 sub ]
 
 # epoch 8
-2021-02-17 09:26:55,382 INFO [mmi_att_transformer_decode.py:300] %WER 9.26% [4868 / 52576, 553 ins, 539 del, 3776 sub ]
+2021-03-07 11:02:19,537 INFO [mmi_att_transformer_decode.py:312] %WER 8.09% [4256 / 52576, 594 ins, 381 del, 3281 sub ]
 
 # epoch 9
-2021-02-17 09:27:46,199 INFO [mmi_att_transformer_decode.py:300] %WER 9.05% [4757 / 52576, 577 ins, 503 del, 3677 sub ]
+2021-03-07 11:03:04,628 INFO [mmi_att_transformer_decode.py:312] %WER 8.04% [4227 / 52576, 554 ins, 418 del, 3255 sub ]
+```
 
-# epoch 10
-2021-02-17 09:28:35,118 INFO [mmi_att_transformer_decode.py:300] %WER 8.95% [4703 / 52576, 607 ins, 475 del, 3621 sub ]
+# LibriSpeech MMI training results (Conformer)
 
-# epoch 11
-2021-02-17 09:29:22,655 INFO [mmi_att_transformer_decode.py:300] %WER 8.60% [4521 / 52576, 619 ins, 384 del, 3518 sub ]
+## 2021-03-08
 
-# epoch 12
-2021-02-17 09:30:10,919 INFO [mmi_att_transformer_decode.py:300] %WER 8.52% [4477 / 52576, 588 ins, 411 del, 3478 sub ]
+(Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/119>
 
-# epoch 13
-2021-02-17 09:30:57,622 INFO [mmi_att_transformer_decode.py:300] %WER 8.49% [4463 / 52576, 555 ins, 441 del, 3467 sub ]
+Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.) and each epoch model without model averaging are
+listed below.
 
-# epoch 14
-2021-02-17 09:31:43,641 INFO [mmi_att_transformer_decode.py:300] %WER 8.17% [4295 / 52576, 581 ins, 381 del, 3333 sub ]
+```
+# average over last 5 epochs
+2021-03-07 14:57:38,253 INFO [mmi_att_conformer_decode.py:312] %WER 6.84% [3598 / 52576, 538 ins, 257 del, 2803 sub ]
 
-# epoch 15
-2021-02-17 09:32:30,313 INFO [mmi_att_transformer_decode.py:300] %WER 8.33% [4378 / 52576, 613 ins, 406 del, 3359 sub ]
+# epoch 0
+2021-03-07 14:55:05,898 INFO [mmi_att_conformer_decode.py:312] %WER 20.76% [10914 / 52576, 1543 ins, 921 del, 8450 sub ]
 
-# epoch 16
-2021-02-17 09:33:17,155 INFO [mmi_att_transformer_decode.py:300] %WER 8.49% [4465 / 52576, 610 ins, 385 del, 3470 sub ]
+# epoch 1
+2021-03-07 14:56:18,627 INFO [mmi_att_conformer_decode.py:312] %WER 12.19% [6409 / 52576, 477 ins, 1108 del, 4824 sub ]
 
-# epoch 17
-2021-02-17 09:34:04,108 INFO [mmi_att_transformer_decode.py:300] %WER 8.27% [4346 / 52576, 617 ins, 361 del, 3368 sub ]
+# epoch 2
+2021-03-07 14:57:26,384 INFO [mmi_att_conformer_decode.py:312] %WER 9.50% [4997 / 52576, 596 ins, 447 del, 3954 sub ]
 
-# epoch 18
-2021-02-17 09:34:49,242 INFO [mmi_att_transformer_decode.py:300] %WER 8.33% [4382 / 52576, 629 ins, 361 del, 3392 sub ]
+# epoch 3
+2021-03-07 14:58:31,390 INFO [mmi_att_conformer_decode.py:312] %WER 8.96% [4711 / 52576, 588 ins, 396 del, 3727 sub ]
 
-# epoch 19
-2021-02-17 09:35:33,273 INFO [mmi_att_transformer_decode.py:300] %WER 8.39% [4409 / 52576, 638 ins, 378 del, 3393 sub ]
+# epoch 4
+2021-03-07 14:59:36,554 INFO [mmi_att_conformer_decode.py:312] %WER 8.36% [4393 / 52576, 564 ins, 372 del, 3457 sub ]
+
+# epoch 5
+2021-03-07 15:00:40,190 INFO [mmi_att_conformer_decode.py:312] %WER 8.06% [4239 / 52576, 613 ins, 348 del, 3278 sub ]
+
+# epoch 6
+2021-03-07 15:01:42,861 INFO [mmi_att_conformer_decode.py:312] %WER 7.95% [4181 / 52576, 599 ins, 326 del, 3256 sub ]
+
+# epoch 7
+2021-03-07 15:02:43,487 INFO [mmi_att_conformer_decode.py:312] %WER 8.00% [4207 / 52576, 644 ins, 306 del, 3257 sub ]
+
+# epoch 8
+2021-03-07 15:03:45,646 INFO [mmi_att_conformer_decode.py:312] %WER 7.74% [4072 / 52576, 536 ins, 341 del, 3195 sub ]
+
+# epoch 9
+2021-03-07 15:04:47,523 INFO [mmi_att_conformer_decode.py:312] %WER 7.79% [4095 / 52576, 677 ins, 280 del, 3138 sub ]
 ```
