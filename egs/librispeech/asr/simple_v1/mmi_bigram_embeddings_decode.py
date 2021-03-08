@@ -17,6 +17,7 @@ from typing import Union
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import find_first_disambig_symbol
+from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
@@ -25,19 +26,6 @@ from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
-
-def get_texts(best_paths: k2.Fsa)->List[List[int]]:
-    # remove any 0's or -1's (there should be no 0's left but may be -1's.)
-    aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
-    aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
-                                                aux_labels.shape())
-    # remove the states and arcs axes.
-    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
-    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
-    aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
-    assert (aux_labels.num_axes() == 2)
-
-    return k2.ragged.to_list(aux_labels)
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -54,7 +42,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                 model.subsampling_factor),
              torch.floor_divide(supervisions['num_frames'],
                                 model.subsampling_factor)), 1).to(torch.int32)
-
+        indices = torch.argsort(supervision_segments[:, 2], descending=True)
+        supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
         assert feature.ndim == 3
 
@@ -76,15 +65,13 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        # CAUTION(fangjun): `k2.intersect_dense` requires a sorted supervision_segments!
-        # But `k2.intersect_dense_pruned` does not.
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
         assert best_paths.shape[0] == len(texts)
-        hyps = get_texts(best_paths)
+        hyps = get_texts(best_paths, indices)
         assert len(hyps) == len(texts)
 
         for i in range(len(texts)):

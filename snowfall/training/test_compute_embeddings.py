@@ -14,6 +14,7 @@ sys.path.insert(0, '/root/fangjun/open-source/k2/build/lib')
 sys.path.insert(0, '/root/fangjun/open-source/k2/k2/python')
 
 from snowfall.training.compute_embeddings import compute_embeddings
+from snowfall.training.compute_embeddings import compute_embeddings_deprecated
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -115,6 +116,19 @@ def main():
 
     print('den', den_num_repeats)
 
+    den_padded_embeddings2, den_len_per_path2, den_path_to_seq2, den_num_repeats2 = compute_embeddings_deprecated(
+        den_lats,
+        graph_compiler.ctc_topo,
+        dense_fsa_vec,
+        max_phone_id=graph_compiler.max_phone_id,
+        num_paths=10,
+        debug=True)
+
+    assert torch.allclose(den_padded_embeddings, den_padded_embeddings2)
+    assert torch.allclose(den_len_per_path, den_len_per_path2)
+    assert torch.allclose(den_path_to_seq, den_path_to_seq2)
+    assert str(den_num_repeats) == str(den_num_repeats2)
+
     print('-' * 10, 'mbr_lats', '-' * 10)
     mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq, mbr_num_repeats = compute_embeddings(
         mbr_lats,
@@ -142,6 +156,18 @@ def main():
 
     assert mbr_padded_embeddings.requires_grad is True
     assert mbr_padded_embeddings.dtype == torch.float32
+
+    mbr_padded_embeddings2, mbr_len_per_path2, mbr_path_to_seq2, mbr_num_repeats2 = compute_embeddings_deprecated(
+        mbr_lats,
+        graph_compiler.ctc_topo,
+        dense_fsa_vec,
+        max_phone_id=graph_compiler.max_phone_id,
+        num_paths=10,
+        debug=True)
+    assert torch.allclose(mbr_padded_embeddings, mbr_padded_embeddings2)
+    assert torch.allclose(mbr_len_per_path, mbr_len_per_path2)
+    assert torch.allclose(mbr_path_to_seq, mbr_path_to_seq2)
+    assert str(mbr_num_repeats) == str(mbr_num_repeats2)
 
     print('mbr', mbr_num_repeats)
     print(mbr_padded_embeddings.sum())
