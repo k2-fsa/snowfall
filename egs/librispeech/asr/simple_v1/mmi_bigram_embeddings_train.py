@@ -149,10 +149,11 @@ def get_objf(batch: Dict,
 
     tot_scores = num_tot_scores - den_scale * den_tot_scores
 
-    (tot_score, tot_frames,
+    (first_pass_tot_score, tot_frames,
      all_frames) = get_tot_objf_and_num_frames(tot_scores,
                                                supervision_segments[:, 2])
 
+    tot_score = first_pass_tot_score
     if True:
         # Now compute the tot_scores for the second pass
         #
@@ -162,7 +163,7 @@ def get_objf(batch: Dict,
             graph_compiler.ctc_topo,
             dense_fsa_vec,
             max_phone_id=graph_compiler.max_phone_id,
-            num_paths=8, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
+            num_paths=5, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
             debug=False)
 
         # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
@@ -285,10 +286,10 @@ def get_objf(batch: Dict,
             else:
                 optimizer.step()
 
-    ans = (-tot_score.detach().cpu().item(),
-            -second_pass_tot_score.detach().cpu().item(),
-            tot_frames.cpu().item(),
-            all_frames.cpu().item())
+    ans = (-first_pass_tot_score.detach().cpu().item(),
+           -second_pass_tot_score.detach().cpu().item(),
+           tot_frames.cpu().item(),
+           all_frames.cpu().item())
     return ans
 
 
@@ -306,9 +307,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     second_pass_model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, _, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
+        first_objf, second_obj, frames, all_frames = get_objf(batch, model, second_pass_model, P, device,
                                                graph_compiler, False)
-        total_objf += objf
+        total_objf += first_objf + second_obj
         total_frames += frames
         total_all_frames += all_frames
 
@@ -328,6 +329,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     num_epochs: int,
                     global_batch_idx_train: int):
     total_objf, total_frames, total_all_frames = 0., 0., 0.
+    total_first_pass_objf = 0.
     total_second_pass_objf = 0.
     valid_average_objf = float('inf')
     time_waiting_for_batch = 0
@@ -346,7 +348,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             P.set_scores_stochastic_(model.P_scores)
         assert P.requires_grad is True
 
-        curr_batch_objf, curr_batch_second_pass_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
+        curr_batch_first_pass_objf, curr_batch_second_pass_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
             second_pass_model=second_pass_model,
@@ -359,7 +361,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             optimizer=optimizer
         )
 
-        total_objf += curr_batch_objf
+        total_objf += curr_batch_first_pass_objf + curr_batch_second_pass_objf
+        total_first_pass_objf += curr_batch_first_pass_objf
         total_second_pass_objf += curr_batch_second_pass_objf
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
@@ -368,28 +371,37 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
+                'global average first_pass objf: {:.6f} over {} '
                 'global average second_pass objf: {:.6f} over {} '
-                'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
+                'frames ({:.1f}% kept), current batch average first pass objf: {:.6f} over {} frames ({:.1f}% kept) '
                 'current batch average second_pass objf: {:.6f}) '
                 'avg time waiting for batch {:.3f}s'.format(
                     batch_idx, current_epoch, num_epochs,
                     total_objf / total_frames, total_frames,
+                    total_first_pass_objf / total_frames,
+                    total_frames,
                     total_second_pass_objf / total_frames,
                     total_frames,
                     100.0 * total_frames / total_all_frames,
-                    curr_batch_objf / (curr_batch_frames + 0.001),
+                    curr_batch_first_pass_objf / (curr_batch_frames + 0.001),
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     curr_batch_second_pass_objf / (curr_batch_frames + 0.001),  # FIXME(fangjun)
                     time_waiting_for_batch / max(1, batch_idx)))
             tb_writer.add_scalar('train/global_average_objf',
                                  total_objf / total_frames, global_batch_idx_train)
-            tb_writer.add_scalar('train/current_batch_average_objf',
-                                 curr_batch_objf / (curr_batch_frames + 0.001),
-                                 global_batch_idx_train)
+
+            tb_writer.add_scalar('train/global_first_pass_average_objf',
+                                 total_first_pass_objf / total_frames, global_batch_idx_train)
 
             tb_writer.add_scalar('train/global_second_pass_average_objf',
                                  total_second_pass_objf / total_frames, global_batch_idx_train)
+
+
+            tb_writer.add_scalar('train/current_first_pass_batch_average_objf',
+                                 curr_batch_first_pass_objf / (curr_batch_frames + 0.001),
+                                 global_batch_idx_train)
+
             tb_writer.add_scalar('train/current_second_pass_batch_average_objf',
                                  curr_batch_second_pass_objf / (curr_batch_frames + 0.001),
                                  global_batch_idx_train)
@@ -506,7 +518,7 @@ def main():
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=10000,
+            max_frames=20000,
             shuffle=True,
             num_buckets=30
         )
@@ -514,7 +526,7 @@ def main():
         logging.info('Using regular sampler with cut concatenation.')
         train_sampler = SingleCutSampler(
             cuts_train,
-            max_frames=10000,
+            max_frames=20000,
             shuffle=True,
         )
     logging.info("About to create train dataloader")
@@ -533,7 +545,7 @@ def main():
     #       torch.distributed.all_reduce() tends to hang indefinitely inside
     #       NCCL after ~3000 steps. With the current approach, we can still report
     #       the loss on the full validation set.
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000, world_size=1, rank=0)
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=20000, world_size=1, rank=0)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
