@@ -7,7 +7,7 @@ import k2
 import math
 import torch
 from torch import Tensor, nn
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from snowfall.common import get_texts
 from snowfall.models import AcousticModel
@@ -77,7 +77,7 @@ class Transformer(AcousticModel):
         else:
             self.decoder_criterion = None
 
-    def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tensor:
+    def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -86,14 +86,14 @@ class Transformer(AcousticModel):
         Returns:
             Tensor: After log-softmax tensor of dimension (batch_size, number_of_classes, input_length).
             Tensor: Before linear layer tensor of dimension (input_length, batch_size, d_model).
-            Tensor: Mask tensor of dimension (batch_size, input_length).
+            Optional[Tensor]: Mask tensor of dimension (batch_size, input_length) or None.
 
         """
         encoder_memory, memory_mask = self.encode(x, supervision)
         x = self.encoder_output(encoder_memory)
         return x, encoder_memory, memory_mask
 
-    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tensor:
+    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -101,7 +101,7 @@ class Transformer(AcousticModel):
 
         Returns:
             Tensor: Predictor tensor of dimension (input_length, batch_size, d_model).
-            Tensor: Mask tensor of dimension (batch_size, input_length)
+            Optional[Tensor]: Mask tensor of dimension (batch_size, input_length) or None.
         """
         x = x.permute(0, 2, 1)  # (B, F, T) -> (B, T, F)
 
@@ -653,7 +653,7 @@ def generate_square_subsequent_mask(sz: int) -> Tensor:
     return mask
 
 
-def add_sos_eos(ys: List[List[int]], lexicon: k2.Fsa, sos: int, eos: int, ignore_id: int = -1):
+def add_sos_eos(ys: List[List[int]], lexicon: k2.Fsa, sos: int, eos: int, ignore_id: int = -1) -> Tuple[Tensor, Tensor]:
     """Add <sos> and <eos> labels.
 
     Args:
