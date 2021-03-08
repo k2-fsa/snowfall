@@ -12,7 +12,7 @@ import warnings
 import copy
 
 from snowfall.common import get_texts
-from snowfall.models.transformer import Transformer, encoder_padding_mask, Noam
+from snowfall.models.transformer import Transformer, encoder_padding_mask
 
 
 class Conformer(Transformer):
