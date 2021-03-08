@@ -86,9 +86,9 @@ def get_objf(batch: Dict,
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
-         torch.floor_divide(supervisions['start_frame'],
-                            model.subsampling_factor),
+         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
          (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
+    supervision_segments = torch.clamp(supervision_segments, min=0)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -101,12 +101,12 @@ def get_objf(batch: Dict,
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
     if is_training:
-        nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+        nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
     else:
         with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
             if att_rate != 0.0:
                 att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
@@ -271,7 +271,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
         if forward_count == 1 or accum_grad == 1:
             P.set_scores_stochastic_(model.P_scores)
-            assert P.is_cpu
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -380,6 +379,16 @@ def get_parser():
         default=0.0,
         help="Attention loss rate.")
     parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
+    parser.add_argument(
         '--bucketing_sampler',
         type=str2bool,
         default=False,
@@ -391,6 +400,29 @@ def get_parser():
         default=30,
         help='The number of buckets for the BucketingSampler'
              '(you might want to increase it for larger datasets).')
+    parser.add_argument(
+        '--concatenate-cuts',
+        type=str2bool,
+        default=True,
+        help='When enabled, utterances (cuts) will be concatenated '
+             'to minimize the amount of padding.')
+    parser.add_argument(
+        '--duration-factor',
+        type=float,
+        default=1.0,
+        help='Determines the maximum duration of a concatenated cut '
+             'relative to the duration of the longest cut in a batch.')
+    parser.add_argument(
+        '--gap',
+        type=float,
+        default=1.0,
+        help='The amount of padding (in seconds) inserted between concatenated cuts. '
+             'This padding is filled with noise when noise augmentation is used.')
+    parser.add_argument(
+        '--full-libri',
+        type=str2bool,
+        default=False,
+        help='When enabled, use 960h LibriSpeech.')
     return parser
 
 
@@ -424,20 +456,30 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
+    device_id = 0
+    device = torch.device('cuda', device_id)
+
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device,
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
+    P = P.to(device)
 
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir /
-                                  'cuts_train-clean-100.json.gz')
+    cuts_train = CutSet.from_json(feature_dir / 'cuts_train-clean-100.json.gz')
+    if args.full_libri:
+        cuts_train = (
+            cuts_train + 
+            CutSet.from_json(feature_dir / 'cuts_train-clean-360.json.gz') + 
+            CutSet.from_json(feature_dir / 'cuts_train-other-500.json.gz')
+        )
     logging.info("About to get dev cuts")
     cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
     logging.info("About to get Musan cuts")
@@ -445,12 +487,11 @@ def main():
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if not args.bucketing_sampler:
-        # We don't mix concatenating the cuts and bucketing
-        # Here we insert concatenation before mixing so that the
-        # noises from Musan are mixed onto almost-zero-energy
-        # padding frames.
-        transforms = [CutConcatenate()] + transforms
+    if args.concatenate_cuts:
+        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
+        # Cut concatenation should be the first transform in the list,
+        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
+        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
@@ -461,7 +502,7 @@ def main():
             num_buckets=args.num_buckets
         )
     else:
-        logging.info('Using regular sampler with cut concatenation.')
+        logging.info('Using SingleCutSampler.')
         train_sampler = SingleCutSampler(
             cuts_train,
             max_frames=max_frames,
@@ -472,7 +513,7 @@ def main():
         train,
         sampler=train_sampler,
         batch_size=None,
-        num_workers=4
+        num_workers=4,
     )
     logging.info("About to create dev dataset")
     validate = K2SpeechRecognitionDataset(cuts_dev)
@@ -490,8 +531,6 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = 0
-    device = torch.device('cuda', device_id)
 
     if att_rate != 0.0:
         num_decoder_layers = 6
@@ -500,11 +539,21 @@ def main():
 
     model = Transformer(
         num_features=40,
+        nhead=args.nhead,
+        d_model=args.attention_dim,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
         subsampling_factor=4,
         num_decoder_layers=num_decoder_layers)
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
+
+    model.to(device)
+    describe(model)
+
+    optimizer = Noam(model.parameters(),
+                     model_size=args.attention_dim,
+                     factor=1.0,
+                     warm_step=args.warm_step)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -515,19 +564,11 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
-    model.to(device)
-    describe(model)
-
-    optimizer = Noam(model.parameters(),
-                     model_size=256,
-                     factor=1.0,
-                     warm_step=args.warm_step)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -558,6 +599,8 @@ def main():
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
+                            optimizer=None,
+                            scheduler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
@@ -577,6 +620,8 @@ def main():
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
+                        optimizer=optimizer,
+                        scheduler=None,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,

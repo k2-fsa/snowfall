@@ -222,6 +222,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def main():
     fix_random_seed(42)
 
+    start_epoch = 0
+    num_epochs = 8
+
     exp_dir = 'exp-lstm-adam-ctc-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -303,10 +306,15 @@ def main():
         num_features=40,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
         subsampling_factor=3)
+    
+    model.to(device)
+    describe(model)
 
-    learning_rate = 0.00001
-    start_epoch = 0
-    num_epochs = 8
+    learning_rate = 1e-3
+    optimizer = optim.AdamW(model.parameters(),
+                            lr=learning_rate,
+                            weight_decay=5e-4)
+
     best_objf = np.inf
     best_valid_objf = np.inf
     best_epoch = start_epoch
@@ -316,22 +324,11 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
-    model.to(device)
-    describe(model)
-
-    # optimizer = optim.SGD(model.parameters(),
-    #                       lr=learning_rate,
-    #                       momentum=0.9,
-    #                       weight_decay=5e-4)
-    optimizer = optim.AdamW(model.parameters(),
-                            # lr=learning_rate,
-                            weight_decay=5e-4)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -362,6 +359,8 @@ def main():
             save_checkpoint(filename=best_model_path,
                             model=model,
                             epoch=epoch,
+                            optimizer=None,
+                            scheduler=None,
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
@@ -380,6 +379,8 @@ def main():
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
                         model=model,
+                        optimizer=optimizer,
+                        scheduler=None,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,

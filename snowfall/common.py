@@ -42,13 +42,13 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: b
         logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
+def load_checkpoint(filename: Pathlike, model: AcousticModel, optimizer: Optional[object] = None, scheduler: Optional[object] = None) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
 
     keys = [
-        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
+        'state_dict', 'optimizer', 'scheduler', 'epoch', 'learning_rate', 'objf', 'valid_objf',
         'num_features', 'num_classes', 'subsampling_factor',
         'global_batch_idx_train'
     ]
@@ -73,6 +73,12 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel) -> Dict[str, Any]:
     model.num_features = checkpoint['num_features']
     model.num_classes = checkpoint['num_classes']
     model.subsampling_factor = checkpoint['subsampling_factor']
+
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    
+    if scheduler is not None:
+        scheduler.load_state_dict(checkpoint['scheduler'])
 
     return checkpoint
 
@@ -102,7 +108,7 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
     checkpoint['state_dict'] = avg_model
 
     keys = [
-        'state_dict', 'epoch', 'learning_rate', 'objf', 'valid_objf',
+        'state_dict', 'optimizer', 'scheduler', 'epoch', 'learning_rate', 'objf', 'valid_objf',
         'num_features', 'num_classes', 'subsampling_factor',
         'global_batch_idx_train'
     ]
@@ -134,6 +140,8 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
 def save_checkpoint(
         filename: Pathlike,
         model: Union[AcousticModel, DistributedDataParallel],
+        optimizer: object,
+        scheduler: object,
         epoch: int,
         learning_rate: float,
         objf: float,
@@ -149,6 +157,8 @@ def save_checkpoint(
                  f'learning_rate={learning_rate}, objf={objf}, valid_objf={valid_objf}')
     checkpoint = {
         'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict() if optimizer is not None else None,
+        'scheduler': scheduler.state_dict() if scheduler is not None else None,
         'epoch': epoch,
         'learning_rate': learning_rate,
         'objf': objf,

@@ -61,6 +61,7 @@ class MmiTrainingGraphCompiler(object):
         '''
         L_inv = L_inv.to(device)
         L_inv = k2.arc_sort(L_inv)
+
         assert L_inv.requires_grad is False
 
         assert oov in words
@@ -68,8 +69,8 @@ class MmiTrainingGraphCompiler(object):
         self.L_inv = L_inv
         self.phones = phones
         self.words = words
-        self.device = device
         self.oov_id = self.words[oov]
+        self.device = device
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
@@ -157,6 +158,7 @@ class MmiTrainingGraphCompiler(object):
 
         fsa = k2.linear_fsa(word_ids_list, self.device)
         fsa = k2.add_epsilon_self_loops(fsa)
+        assert fsa.device == self.device
         num_graphs = k2.intersect(self.L_inv,
                                   fsa,
                                   treat_epsilons_specially=False).invert_()

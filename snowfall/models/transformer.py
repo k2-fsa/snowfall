@@ -93,12 +93,11 @@ class Transformer(AcousticModel):
         x = self.encoder_output(encoder_memory)
         return x, encoder_memory, memory_mask
 
-    def encode(self, x: Tensor, supervision_segments: Optional[Tensor] = None) -> Tensor:
+    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tensor:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
-            supervision_segments: Supervison in lhotse format, including 'sequence_idx',
-                                    'start_frame', and 'num_frames'. 
+            supervisions : Supervison in lhotse format, i.e., batch['supervisions']
 
         Returns:
             Tensor: Predictor tensor of dimension (input_length, batch_size, d_model).
@@ -109,7 +108,7 @@ class Transformer(AcousticModel):
         x = self.encoder_embed(x)
         x = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
-        mask = encoder_padding_mask(supervision_segments)
+        mask = encoder_padding_mask(x.size(0), supervisions)
         mask = mask.to(x.device) if mask != None else None
         x = self.encoder(x, src_key_padding_mask=mask)  # (T, B, F)
 
@@ -569,40 +568,32 @@ class LabelSmoothingLoss(nn.Module):
         return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
 
 
-def encoder_padding_mask(supervision_segments: Optional[Tensor] = None) -> Optional[Tensor]:
+def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> Optional[Tensor]:
     """Make mask tensor containing indices of padded part.
 
     Args:
-        supervision_segments: Supervison in lhotse format, including 'sequence_idx',
-                            'start_frame', and 'num_frames'. 
+        max_len: maximum length of input features
+        supervisions : Supervison in lhotse format, i.e., batch['supervisions']
 
     Returns:
         Tensor: Mask tensor of dimension (batch_size, input_length), True denote the masked indices.
     """
-    if supervision_segments == None:
+    if supervisions == None:
         return None
+    
+    supervision_segments = torch.stack(
+        (supervisions['sequence_idx'],
+         supervisions['start_frame'],
+         supervisions['num_frames']), 1).to(torch.int32)
 
-    indices = torch.argsort(supervision_segments[:, 1], descending=False)
-    supervision_segments = supervision_segments[indices]
-
-    indices = torch.argsort(supervision_segments[:, 0], descending=False)
-    supervision_segments = supervision_segments[indices]
-
-    previous_idx = -1
-    cur_length = 0
-    lengths = []
+    lengths = [0 for _ in range(int(max(supervision_segments[:, 0])) + 1)]
     for sequence_idx, start_frame, num_frames in supervision_segments:
-        cur_length = start_frame + num_frames
-        if sequence_idx == previous_idx:
-            lengths[-1] = cur_length
-        else:
-            lengths.append(cur_length)
-        previous_idx = sequence_idx
-
+        lengths[sequence_idx] = start_frame + num_frames
+    
+    lengths = [((i -1) // 2 - 1) // 2 for i in lengths]
     bs = int(len(lengths))
-    maxlen = int(max(lengths))
-    seq_range = torch.arange(0, maxlen, dtype=torch.int64)
-    seq_range_expand = seq_range.unsqueeze(0).expand(bs, maxlen)
+    seq_range = torch.arange(0, max_len, dtype=torch.int64)
+    seq_range_expand = seq_range.unsqueeze(0).expand(bs, max_len)
     seq_length_expand = seq_range_expand.new(lengths).unsqueeze(-1)
     mask = seq_range_expand >= seq_length_expand
 
@@ -641,23 +632,9 @@ def get_normal_transcripts(supervision: Dict, words: k2.SymbolTable, oov: str = 
               for token in text.split(' ')] for text in supervision['text']]
     texts_ids = [[words[token] for token in text] for text in texts]
 
-    supervision_segments = [supervision['sequence_idx'], supervision['start_frame']]
-
-    indices = torch.argsort(supervision_segments[1], descending=False)
-    supervision_segments = [z[indices] for z in supervision_segments]
-    texts_ids = [texts_ids[indice] for indice in indices]
-    indices = torch.argsort(supervision_segments[0], descending=False)
-    supervision_segments = [z[indices] for z in supervision_segments]
-    texts_ids = [texts_ids[indice] for indice in indices]
-
-    previous_idx = -1
-    batch_text = []
-    for sequence_idx, text in zip(supervision_segments[0], texts_ids):
-        if sequence_idx == previous_idx:
-            batch_text[-1] = batch_text[-1] + text
-        else:
-            batch_text.append(text)
-        previous_idx = sequence_idx
+    batch_text = [[] for _ in range(int(max(supervision['sequence_idx'])) + 1)]
+    for sequence_idx, text in zip(supervision['sequence_idx'], texts_ids):
+        batch_text[sequence_idx] = batch_text[sequence_idx] + text
     return batch_text
 
 

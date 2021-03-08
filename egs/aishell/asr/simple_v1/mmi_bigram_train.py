@@ -281,6 +281,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def main():
     fix_random_seed(42)
 
+    start_epoch = 0
+    num_epochs = 10
+    use_adam = True
+
     exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -365,24 +369,6 @@ def main():
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
-    start_epoch = 0
-    num_epochs = 10
-    best_objf = np.inf
-    best_valid_objf = np.inf
-    best_epoch = start_epoch
-    best_model_path = os.path.join(exp_dir, 'best_model.pt')
-    best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
-    global_batch_idx_train = 0  # for logging only
-    use_adam = True
-
-    if start_epoch > 0:
-        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
-        best_objf = ckpt['objf']
-        best_valid_objf = ckpt['valid_objf']
-        global_batch_idx_train = ckpt['global_batch_idx_train']
-        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
     model.to(device)
     describe(model)
 
@@ -412,9 +398,23 @@ def main():
         )
         lr_scheduler = optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
-            gamma=lr_schedule_gamma,
-            last_epoch=start_epoch - 1
+            gamma=lr_schedule_gamma
         )
+
+    best_objf = np.inf
+    best_valid_objf = np.inf
+    best_epoch = start_epoch
+    best_model_path = os.path.join(exp_dir, 'best_model.pt')
+    best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
+    global_batch_idx_train = 0  # for logging only
+
+    if start_epoch > 0:
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scheduler=lr_scheduler)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -438,6 +438,9 @@ def main():
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
         )
+
+        lr_scheduler.step()
+
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf
@@ -445,6 +448,8 @@ def main():
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
                             model=model,
+                            optimizer=None,
+                            scheduler=None,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
@@ -464,6 +469,8 @@ def main():
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
                         model=model,
+                        optimizer=optimizer,
+                        scheduler=lr_scheduler,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
@@ -479,8 +486,6 @@ def main():
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
                            best_epoch=best_epoch)
-
-        lr_scheduler.step()
 
     logging.warning('Done')
 

@@ -77,9 +77,9 @@ def get_objf(batch: Dict,
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
-         torch.floor_divide(supervisions['start_frame'],
-                            model.subsampling_factor),
+         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
          (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
+    supervision_segments = torch.clamp(supervision_segments, min=0)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
     supervision_segments = supervision_segments[indices]
 
@@ -92,12 +92,12 @@ def get_objf(batch: Dict,
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
     if is_training:
-        nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+        nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
     else:
         with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervision_segments)
+            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
             if att_rate != 0.0:
                 att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
@@ -408,6 +408,14 @@ def main():
         subsampling_factor=4,
         num_decoder_layers=num_decoder_layers)
 
+    model.to(device)
+    describe(model)
+
+    optimizer = Noam(model.parameters(),
+                     model_size=256,
+                     factor=5.0,
+                     warm_step=25000)
+
     best_objf = np.inf
     best_valid_objf = np.inf
     best_epoch = start_epoch
@@ -417,19 +425,11 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
-    model.to(device)
-    describe(model)
-
-    optimizer = Noam(model.parameters(),
-                     model_size=256,
-                     factor=5.0,
-                     warm_step=25000)
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -457,6 +457,8 @@ def main():
             best_objf = objf
             best_epoch = epoch
             save_checkpoint(filename=best_model_path,
+                            optimizer=None,
+                            scheduler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
@@ -476,6 +478,8 @@ def main():
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
+                        optimizer=optimizer,
+                        scheduler=None,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
