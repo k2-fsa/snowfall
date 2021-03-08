@@ -2,6 +2,7 @@
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
 # Apache 2.0
+import argparse
 import os
 import subprocess
 import sys

@@ -5,6 +5,8 @@
 
 from typing import Optional
 
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -196,6 +198,20 @@ class Tdnn2aEmbedding(AcousticModel):
         x = self.tdnn2(x)
         x = F.log_softmax(x, dim=1)
         return x
+
+    def save_checkpoint(self, model_path: str, local_rank: int = 0) -> None:
+        if local_rank is not None and local_rank != 0:
+            return
+        logging.info(f'Saving checkpoint to {model_path}')
+        checkpoint = {
+            'state_dict': self.state_dict(),
+        }
+        torch.save(checkpoint, model_path)
+
+    def load_checkpoint(self, model_path: str) -> None:
+        logging.info(f'Loading checkpoint from {model_path}')
+        checkpoint = torch.load(model_path, map_location='cpu')
+        self.load_state_dict(checkpoint['state_dict'])
 
     def write_tensorboard_diagnostics(self,
                                       tb_writer: SummaryWriter,

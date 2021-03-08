@@ -364,7 +364,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if True or batch_idx % 10 == 0 and dist.get_rank() == 0:
+        if batch_idx % 10 == 0 and dist.get_rank() == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -387,12 +387,17 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             tb_writer.add_scalar('train/current_batch_average_objf',
                                  curr_batch_objf / (curr_batch_frames + 0.001),
                                  global_batch_idx_train)
+
+            tb_writer.add_scalar('train/global_second_pass_average_objf',
+                                 total_second_pass_objf / total_frames, global_batch_idx_train)
+            tb_writer.add_scalar('train/current_second_pass_batch_average_objf',
+                                 curr_batch_second_pass_objf / (curr_batch_frames + 0.001),
+                                 global_batch_idx_train)
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        # FIXME(fangjun): disable it for now
-        if False and batch_idx > 0 and batch_idx % 1000 == 0:
+        if batch_idx > 0 and batch_idx % 1000 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
@@ -450,7 +455,7 @@ def main():
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist'
+    exp_dir = 'exp-lstm-adam-mmi-bigram-embeddings-musan-dist'
     setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
 
@@ -566,34 +571,14 @@ def main():
     best_valid_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
+    second_pass_best_model_path = os.path.join(exp_dir, 'second_pass_best_model.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
     use_adam = True
 
-    if start_epoch > 0:
-        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        # TODO(fangjun): load second pass model
-        ckpt = load_checkpoint(filename=model_path, model=model)
-        best_objf = ckpt['objf']
-        best_valid_objf = ckpt['valid_objf']
-        global_batch_idx_train = ckpt['global_batch_idx_train']
-        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
-
     model.to(device)
     P = P.to(device)
     second_pass_model.to(device)
-    if args.world_size > 1:
-        logging.info('Using DistributedDataParallel in training. '
-                     'The reported loss, num_frames, etc. for training steps include '
-                     'only the batches seen in the master process (the actual loss '
-                     'includes batches from all GPUs, and the actual num_frames is '
-                     f'approx. {args.world_size}x larger.')
-        # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
-        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
-        # TODO(fangjun): wrap second pass model for DDP
-    describe(model)
-    describe(second_pass_model, 'Second pass')
 
     if use_adam:
         learning_rate = 1e-3
@@ -628,8 +613,33 @@ def main():
         lr_scheduler = optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
             gamma=lr_schedule_gamma,
-            last_epoch=start_epoch - 1
+            last_epoch=start_epoch
         )
+
+    model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch))
+    if Path(model_path).is_file():
+        second_pass_model_path = os.path.join(exp_dir, 'second-pass-epoch-{}.pt'.format(start_epoch))
+        second_pass_model.load_checkpoint(second_pass_model_path)
+
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
+        best_objf = ckpt['objf']
+        best_valid_objf = ckpt['valid_objf']
+        global_batch_idx_train = ckpt['global_batch_idx_train']
+        logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
+
+    if args.world_size > 1:
+        logging.info('Using DistributedDataParallel in training. '
+                     'The reported loss, num_frames, etc. for training steps include '
+                     'only the batches seen in the master process (the actual loss '
+                     'includes batches from all GPUs, and the actual num_frames is '
+                     f'approx. {args.world_size}x larger.')
+        # For now do not sync BatchNorm across GPUs due to NCCL hanging in all_gather...
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        # TODO(fangjun): wrap second pass model for DDP
+    describe(model)
+    describe(second_pass_model, 'Second pass')
+
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
@@ -661,9 +671,12 @@ def main():
             best_valid_objf = valid_objf
             best_objf = objf
             best_epoch = epoch
-            # TODO(fangjun): save second pass model
+            second_pass_model.save_checkpoint(second_pass_best_model_path,
+                                              local_rank=args.local_rank)
             save_checkpoint(filename=best_model_path,
                             model=model,
+                            optimizer=optimizer,
+                            scheduler=None,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
@@ -682,8 +695,15 @@ def main():
 
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
+        second_pass_model_path = os.path.join(
+            exp_dir, 'second-pass-epoch-{}.pt'.format(epoch))
+        second_pass_model.save_checkpoint(second_pass_model_path,
+                                          local_rank=args.local_rank)
+
         save_checkpoint(filename=model_path,
                         model=model,
+                        optimizer=optimizer,
+                        scheduler=None,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
