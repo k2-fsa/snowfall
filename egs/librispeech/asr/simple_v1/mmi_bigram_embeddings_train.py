@@ -109,12 +109,19 @@ def get_objf(batch: Dict,
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
 
     with torch.set_grad_enabled(is_training):
-        nnet_output = model(feature)
+        nnet_output, nnet_output_2nd = model(feature)
 
     assert nnet_output.requires_grad == is_training
+    assert nnet_output_2nd.requires_grad == is_training
 
+    assert nnet_output.device == device
+    assert nnet_output_2nd.device == device
+
+    # TODO(fangjun): we can let the model to output (N, T, C)
+    #
     # nnet_output is [N, C, T]
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+    nnet_output_2nd = nnet_output_2nd.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     with torch.set_grad_enabled(is_training):
         num_graph, den_graph = graph_compiler.compile(texts, P)
@@ -130,13 +137,9 @@ def get_objf(batch: Dict,
     # nnet_output2[:,:,0] += blank_bias
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
+    dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments)
 
-    #  logging.info(f'sum, {nnet_output.sum()}')
-
-    #  logging.info('the following crashes in the second batch (start)')
     num_lats = k2.intersect_dense(num_graph, dense_fsa_vec, 10.0)
-    #  logging.info('the above crashes in the second batch (end)')
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     num_tot_scores = num_lats.get_tot_scores(
@@ -161,7 +164,7 @@ def get_objf(batch: Dict,
         padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings(
             den_lats,
             graph_compiler.ctc_topo,
-            dense_fsa_vec,
+            dense_fsa_vec_2nd,
             max_phone_id=graph_compiler.max_phone_id,
             num_paths=5, # NOTE(fangjun): a larger number results in OOM in `intersect_dense` below
             debug=False)
@@ -650,8 +653,8 @@ def main():
             last_epoch=(start_epoch - 1)
         )
 
-    model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1)
-    if Path(model_path).is_file():
+    if start_epoch > 0:
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
         second_pass_model_path = os.path.join(
             exp_dir, 'second-pass-epoch-{}.pt'.format(start_epoch - 1))
         second_pass_model.load_checkpoint(second_pass_model_path)

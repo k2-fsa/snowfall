@@ -144,7 +144,9 @@ class TdnnLstm1b(AcousticModel):
             for _ in range(5)
         ])
         self.dropout = nn.Dropout(0.2)
-        self.linear = nn.Linear(in_features=500, out_features=self.num_classes)
+        # TODO(fangjun): create a new subclass of nn.Module
+        self.linear_1st = nn.Linear(in_features=500, out_features=self.num_classes)
+        self.linear_2nd = nn.Linear(in_features=500, out_features=self.num_classes)
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -162,10 +164,19 @@ class TdnnLstm1b(AcousticModel):
             x_new = self.dropout(x_new)
             x = x_new + x  # skip connections
         x = x.transpose(1, 0)  # (T, B, F) -> (B, T, F) -> linear expects "features" in the last dim
-        x = self.linear(x)
-        x = x.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
-        x = nn.functional.log_softmax(x, dim=1)
-        return x
+
+        # x_1st is for the first pass model, which is going to be processed by log-softmax
+        x_1st = self.linear_1st(x)
+
+        # x_2nd is for the second pass model, which is used to compute embeddings
+        x_2nd = self.linear_2nd(x)
+
+        x_1st = x_1st.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
+        x_2nd = x_2nd.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
+
+        x_1st = nn.functional.log_softmax(x_1st, dim=1)
+
+        return x_1st, x_2nd
 
     def write_tensorboard_diagnostics(
             self,

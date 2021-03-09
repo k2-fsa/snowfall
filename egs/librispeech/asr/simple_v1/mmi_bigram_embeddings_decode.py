@@ -60,15 +60,16 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
         with torch.no_grad():
-            nnet_output = model(feature)
+            nnet_output, nnet_output_2nd = model(feature)
         # nnet_output is [N, C, T]
-        nnet_output = nnet_output.permute(0, 2,
-                                          1)  # now nnet_output is [N, T, C]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        nnet_output_2nd = nnet_output_2nd.permute(0, 2, 1)  # now nnet_output_2nd is [N, T, C]
 
         #  blank_bias = -3.0
         #  nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
+        dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments)
         # assert LG.is_cuda()
         assert LG.device == nnet_output.device, \
             f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
@@ -85,11 +86,13 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             phone_seqs = k2.ragged.remove_values_eq(phone_seqs, 0)
             phone_seqs = k2.ragged.remove_axis(phone_seqs, 1)
 
+            # see ./mmi_bigram_embeddings_train.py for the meanings of the
+            # returned values
             padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings_from_phone_seqs(
                 lats=lattices,
                 phone_seqs=phone_seqs,
                 ctc_topo=ctc_topo,
-                dense_fsa_vec=dense_fsa_vec,
+                dense_fsa_vec=dense_fsa_vec_2nd,
                 max_phone_id=max_phone_id)
 
             # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
