@@ -18,18 +18,27 @@ from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
+from snowfall.common import invert_permutation
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.common import str2bool
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
+from snowfall.models import Tdnn2aEmbedding
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.training.compute_embeddings import compute_embeddings_from_phone_seqs
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable):
+           second_pass_model: AcousticModel,
+           ctc_topo: k2.Fsa,
+           max_phone_id: int,
+           device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable,
+           enable_second_pass_decoding: bool
+           ):
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -70,6 +79,68 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
         # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
+
+        if enable_second_pass_decoding:
+            phone_seqs = k2.RaggedInt(best_paths.arcs.shape(), best_paths.phones)
+            phone_seqs = k2.ragged.remove_values_eq(phone_seqs, 0)
+            phone_seqs = k2.ragged.remove_axis(phone_seqs, 1)
+
+            padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings_from_phone_seqs(
+                lats=lattices,
+                phone_seqs=phone_seqs,
+                ctc_topo=ctc_topo,
+                dense_fsa_vec=dense_fsa_vec,
+                max_phone_id=max_phone_id)
+
+            # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
+            # i.e., [N, T, C]
+            padded_embeddings = padded_embeddings.permute(0, 2, 1)
+            # now padded_embeddings is [N, C, T]
+
+            with torch.no_grad():
+                second_pass_out = second_pass_model(padded_embeddings)
+
+            assert second_pass_out.requires_grad is False
+
+            # second_pass_out is of shape [N, C, T]
+            second_pass_out = second_pass_out.permute(0, 2, 1)
+            # now second_pass_out is of shape [N, T, C]
+
+            assert second_pass_out.shape[0] == padded_embeddings.shape[0]
+            assert second_pass_out.shape[1] == padded_embeddings.shape[2]
+            assert second_pass_out.shape[2] == nnet_output.shape[2]
+
+            second_pass_supervision_segments = torch.stack(
+                (torch.arange(len_per_path.numel(), dtype=torch.int32),
+                 torch.zeros_like(len_per_path), len_per_path),
+                dim=1)
+
+            indices2 = torch.argsort(len_per_path, descending=True)
+            assert indices2.shape[0] == second_pass_supervision_segments.shape[0]
+            assert indices2.shape[0] == path_to_seq.shape[0]
+
+            second_pass_supervision_segments = second_pass_supervision_segments[indices2]
+            path_to_seq = path_to_seq[indices2]
+            # no need to modify second_pass_out
+
+            num_repeats_float = k2.ragged.RaggedFloat(
+                num_repeats.shape(),
+                num_repeats.values().to(torch.float32))
+            path_weight = k2.ragged.normalize_scores(num_repeats_float,
+                                                     use_log=False).values
+            path_weight = path_weight[indices2]
+
+            second_pass_dense_fsa_vec = k2.DenseFsaVec(
+                second_pass_out, second_pass_supervision_segments)
+
+            second_pass_lattices = k2.intersect_dense_pruned(LG, second_pass_dense_fsa_vec, 20.0, 7.0, 30,
+                                             10000)
+
+            best_paths = k2.shortest_path(second_pass_lattices, use_double_scores=True)
+            inverted_indices2 = invert_permutation(indices2)
+            best_paths = k2.index(best_paths, inverted_indices2.to(torch.int32).to(device))
+
+
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
         assert len(hyps) == len(texts)
@@ -156,13 +227,24 @@ def get_parser():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--epoch', default=0, type=int)
+    parser.add_argument(
+        '--enable_second_pass_decoding',
+        type=str2bool,
+        default=False,
+        help='When enabled, use second pass model for decoding')
     return parser
 
 
 def main():
     args = get_parser().parse_args()
     exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist'
-    setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
+
+    if args.enable_second_pass_decoding:
+        setup_logger('{}/log/log-decode-second'.format(exp_dir), log_level='debug')
+    else:
+        setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
+
+    logging.info(f'enable second pass model for decoding: {args.enable_second_pass_decoding}')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -184,10 +266,26 @@ def main():
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
+    # it consist of three parts
+    #  (1) len(phone_ids) + 1
+    #  (2) graph_compiler.max_phone_id + 2
+    #  (3) 1
+    max_phone_id = max(phone_ids)
+    num_embedding_features = len(phone_ids) + 1 + max_phone_id + 3
+    second_pass_model = Tdnn2aEmbedding(num_features=num_embedding_features, num_classes=len(phone_ids)+1)
+
+
     checkpoint = os.path.join(exp_dir, f'epoch-{args.epoch}.pt')
+    second_pass_checkpoint = os.path.join(exp_dir, f'second-pass-epoch-{args.epoch}.pt')
+
     load_checkpoint(checkpoint, model)
+    second_pass_model.load_checkpoint(second_pass_checkpoint)
+
     model.to(device)
+    second_pass_model.to(device)
+
     model.eval()
+    second_pass_model.eval()
 
     assert P.requires_grad is False
     P.scores = model.P_scores.cpu()
@@ -238,9 +336,14 @@ def main():
     logging.debug("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
+                     second_pass_model=second_pass_model,
+                     ctc_topo=ctc_topo.to(device),
+                     max_phone_id=max_phone_id,
                      device=device,
                      LG=LG,
-                     symbols=symbol_table)
+                     symbols=symbol_table,
+                     enable_second_pass_decoding=args.enable_second_pass_decoding
+                     )
     s = ''
     for ref, hyp in results:
         s += f'ref={ref}\n'

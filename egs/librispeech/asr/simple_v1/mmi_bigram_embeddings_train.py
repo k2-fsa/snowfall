@@ -432,14 +432,15 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                (model.module if isinstance(model, DDP) else model).write_tensorboard_diagnostics(
-                    tb_writer,
-                    global_step=global_batch_idx_train
-                )
-                (second_pass_model.module if isinstance(
-                    second_pass_model, DDP) else
-                 second_pass_model).write_tensorboard_diagnostics(
-                     tb_writer, global_step=global_batch_idx_train)
+                if False:
+                    (model.module if isinstance(model, DDP) else model).write_tensorboard_diagnostics(
+                        tb_writer,
+                        global_step=global_batch_idx_train
+                    )
+                    (second_pass_model.module if isinstance(
+                        second_pass_model, DDP) else
+                     second_pass_model).write_tensorboard_diagnostics(
+                         tb_writer, global_step=global_batch_idx_train)
 
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
@@ -625,12 +626,13 @@ def main():
         lr_scheduler = optim.lr_scheduler.ExponentialLR(
             optimizer=optimizer,
             gamma=lr_schedule_gamma,
-            last_epoch=start_epoch
+            last_epoch=(start_epoch - 1)
         )
 
-    model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch))
+    model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1)
     if Path(model_path).is_file():
-        second_pass_model_path = os.path.join(exp_dir, 'second-pass-epoch-{}.pt'.format(start_epoch))
+        second_pass_model_path = os.path.join(
+            exp_dir, 'second-pass-epoch-{}.pt'.format(start_epoch - 1))
         second_pass_model.load_checkpoint(second_pass_model_path)
 
         ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)

@@ -14,7 +14,8 @@ def create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
     Args:
       phone_seqs:
         It contains two axes with elements being phone IDs.
-        The last element of each sub-list is -1.
+        The last element of each sub-list is -1. It does not
+        contain 0s.
     Returns:
       Return an FsaVec representing the phone seqs.
     '''
@@ -23,9 +24,10 @@ def create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
     return k2.linear_fsa(phone_seqs)
 
 
-def generate_nbest_list_phones(lats: k2.Fsa,
-                               num_paths: int = 5,
-                               use_double_scores: bool = True) -> k2.RaggedInt:
+def generate_nbest_list_phone_seqs(lats: k2.Fsa,
+                                   num_paths: int = 3,
+                                   use_double_scores: bool = True
+                                  ) -> k2.RaggedInt:  # noqa
     '''Generate n-best lists as a 3-D tensor containing phones with indexes
     [seq][nbest][phone_id].
 
@@ -38,7 +40,9 @@ def generate_nbest_list_phones(lats: k2.Fsa,
         True to use double precision in `k2.random_paths`;
         False to use single precision in `k2.random_paths`.
     Returns:
-      A 3-D tensor with indexes [seq][nbest][phone_id]
+      A 3-D tensor with indexes [seq][nbest][phone_id]. The last
+      entry of every sublist is -1. The returned tensor does not
+      contain 0s.
     '''
     assert len(lats.shape) == 3
     assert hasattr(lats, 'phones')
@@ -59,35 +63,61 @@ def generate_nbest_list_phones(lats: k2.Fsa,
     return phone_seqs
 
 
-def compute_expected_times(lats: k2.Fsa,
-                           phone_seqs: k2.RaggedInt,
-                           ctc_topo: k2.Fsa,
-                           dense_fsa_vec: k2.DenseFsaVec,
-                           debug: bool = False):
+def compute_expected_times(
+        lats: k2.Fsa,
+        phone_seqs: k2.RaggedInt,
+        ctc_topo: k2.Fsa,
+        dense_fsa_vec: k2.DenseFsaVec,
+        use_double_scores: bool = True,
+        debug: bool = False
+) -> Tuple[torch.Tensor, k2.Fsa, torch.Tensor, k2.RaggedInt]:
     '''
     Args:
       lats:
         It has indexes [seq][states][arcs]
       phone_seqs:
-        It has indexes [seq][nbest][phone_id]
+        It has indexes [seq][nbest][phone_id].
+        See also :func:`generate_nbest_list_phone_seqs`.
+        Or it is from the second pass decoding, which has only two axes.
       ctc_topo:
         The return value of :func:`build_ctc_topo`.
       dense_fsa_vec:
         It contains nnet_output.
+      use_double_scores:
+        True to use double precision in `get_arc_post`;
+        False to use single precision.
       debug:
         Some checks are enabled if `debug` is True.
+    Returns:
+      Return a tuple containing 4 entries:
+        - expected_times, 1-D torch.Tensor indexed by pathphone_idx
+        - phone_fsas, an FsaVec with indexes [path][phones]
+        - path_to_seq_map, 1-D torch.Tensor
+        - num_repeats, a k2.RaggedInt with 2 axes [path][multiplicities]
     '''
-    assert phone_seqs.num_axes() == 3
     device = lats.device
 
-    phone_seqs, num_repeats = k2.ragged.unique_sequences(phone_seqs, True)
+    if phone_seqs.num_axes() == 3:
+        phone_seqs, num_repeats = k2.ragged.unique_sequences(phone_seqs, True)
 
-    # Remove the 1st axis from `phone_seqs` (that corresponds to `seq`) and
-    # keep it for later, we'll be processing paths separately.
-    seq_to_path_shape = k2.ragged.get_layer(phone_seqs.shape(), 0)
-    path_to_seq_map = seq_to_path_shape.row_ids(1)
+        # Remove the 1st axis from `phone_seqs` (that corresponds to `seq`) and
+        # keep it for later; we'll be processing paths separately.
+        seq_to_path_shape = k2.ragged.get_layer(phone_seqs.shape(), 0)
+        path_to_seq_map = seq_to_path_shape.row_ids(1)
 
-    phone_seqs = k2.ragged.remove_axis(phone_seqs, 0)
+        phone_seqs = k2.ragged.remove_axis(phone_seqs, 0)
+    else:
+        # we assume that phone_seqs is a 1-best list from the second pass decoding
+        assert phone_seqs.num_axes() == 2
+        num_repeats_value = torch.ones(phone_seqs.dim0(),
+                                       dtype=torch.int32,
+                                       device=device)
+        num_repeats_shape = k2.ragged.regular_ragged_shape(
+            phone_seqs.dim0(), 1).to(device)
+        num_repeats = k2.RaggedInt(num_repeats_shape, num_repeats_value)
+
+        seq_to_path_shape = num_repeats_shape
+        path_to_seq_map = seq_to_path_shape.row_ids(1)  # an identity map
 
     # now compile decoding graphs corresponding to `phone_seqs` by constructing
     # fsas from them (remember we already have the final -1's!) and composing
@@ -97,8 +127,8 @@ def compute_expected_times(lats: k2.Fsa,
 
     # Set an attribute called pathphone_idx, which corresponds to the arc-index
     # in `phone_fsas` with self-loops.
-    # Each phone has an index but there are blanks between them and at the start
-    # and end.
+    # Each phone has an index but there are blanks between them and at the
+    # start and end.
     phone_fsas.pathphone_idx = torch.arange(phone_fsas.arcs.num_elements(),
                                             dtype=torch.int32,
                                             device=device)
@@ -141,11 +171,12 @@ def compute_expected_times(lats: k2.Fsa,
     paths_lats.pathframe_idx = paths_lats.seqframe_idx + k2.index(
         path_offsets, paths_lats_arc2path)
 
-    pathframe_to_pathphone = k2.create_sparse(rows=paths_lats.pathframe_idx,
-                                              cols=paths_lats.pathphone_idx,
-                                              values=paths_lats.get_arc_post(
-                                                  True, True).exp(),
-                                              min_col_index=0)
+    pathframe_to_pathphone = k2.create_sparse(
+        rows=paths_lats.pathframe_idx,
+        cols=paths_lats.pathphone_idx,
+        values=paths_lats.get_arc_post(use_double_scores=use_double_scores,
+                                       log_semiring=True).exp(),
+        min_col_index=0)
     if debug:
         sum_per_row = torch.sparse.sum(pathframe_to_pathphone,
                                        dim=1).to_dense()
@@ -199,17 +230,20 @@ def compute_expected_times(lats: k2.Fsa,
 def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
                                         phone_fsas: k2.Fsa,
                                         dense_fsa_vec: k2.DenseFsaVec,
-                                        path_to_seq_map: torch.Tensor):
+                                        path_to_seq_map: torch.Tensor
+                                       ) -> torch.Tensor:
     '''
     Args:
       expected_times:
         1-D torch.Tensor.
       phone_fsas:
-        It is returned by :func:`compute_expected_times`.
+        An FsaVec returned by :func:`compute_expected_times`.
       dense_fsa_vec:
         It contains nnet_output.
       path_to_seq_map:
-        1-D torch.Tensor. It is returned by :func:`compute_expected_times`.
+        An 1-D torch.Tensor returned by :func:`compute_expected_times`.
+    Returns:
+      A 2-D torch.Tensor.
     '''
     # by seq we mean the original sequence indexes, by path we mean the indexes
     # of the n-best paths; path_to_seq_map maps from path-index to seq-index.
@@ -238,7 +272,7 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
     #  y = low * low_scale  + high * high_scale
 
     frame_idx_low = torch.floor(expected_times)
-    frame_idx_high = torch.ceil(expected_times)
+    #  frame_idx_high = torch.ceil(expected_times)
 
     #  low_scale = frame_idx_high - expected_times
     #  high_scale = 1 - low_scale
@@ -268,8 +302,16 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
     return embedding_scores
 
 
-def compute_embeddings_from_phones(phone_fsas: k2.Fsa, max_phone_id: int):
-    '''
+def compute_embeddings_from_phone_fsas(phone_fsas: k2.Fsa,
+                                       max_phone_id: int) -> torch.Tensor:
+    '''Return one hot encodings of phones as embeddings.
+    Args:
+      phone_fsas:
+        An FsaVec returned by :func:`compute_expected_times`.
+      max_phone_id:
+        The maximum phone ID.
+    Return:
+      A 2-D torch.Tensor.
     '''
     # phone_fsas is an acceptor, so its `labels` are `phones`
     pathphones = phone_fsas.labels.clone()
@@ -280,29 +322,62 @@ def compute_embeddings_from_phones(phone_fsas: k2.Fsa, max_phone_id: int):
     pathphones += 1
     num_classes = max_phone_id + 2  # +1 for the epsilon, +1 for EOS
 
-    # TODO(fangjun): do we need to build our own one_hot
-    # that supports dtype == torch.int32
+    # TODO(fangjun): do we need to build our own one_hot that supports
+    # dtype == torch.int32
     embedding_phones = torch.nn.functional.one_hot(
         pathphones.long(), num_classes=num_classes).to(device)
 
     return embedding_phones
 
 
-def compute_embeddings(lats: k2.Fsa,
-                       ctc_topo: k2.Fsa,
-                       dense_fsa_vec: k2.DenseFsaVec,
-                       max_phone_id: int,
-                       use_double_scores: bool = True,
-                       num_paths: int = 3,
-                       debug: bool = False):
-    phone_seqs = generate_nbest_list_phones(lats, 10)
-    expected_times, phone_fsas, path_to_seq_map, num_repeats = compute_expected_times(
-        lats, phone_seqs, ctc_topo, dense_fsa_vec)
+def compute_embeddings_from_phone_seqs(
+        lats: k2.Fsa,
+        phone_seqs: k2.Fsa,
+        ctc_topo: k2.Fsa,
+        dense_fsa_vec: k2.DenseFsaVec,
+        max_phone_id: int,
+        use_double_scores: bool = True,
+        debug: bool = True
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
+    '''
+    Args:
+      lats:
+        An FsaVec.
+      phone_seqs:
+        It has indexes [seq][nbest][phone_id].
+        See also :func:`generate_nbest_list_phone_seqs`.
+      ctc_topo:
+        The return value of :func:`build_ctc_topo`.
+      dense_fsa_vec:
+        It contains nnet_output.
+      max_phone_id:
+        The maximum phone ID.
+      use_double_scores:
+        True to use double precision in :func:`k2.random_paths` and
+        `get_arc_post`; False to use single precision.
+      debug:
+        Some checks are enabled if it is True.
+    Returns:
+      Return a tuple with 4 entries:
+        - padded_embeddings, a 3-D torch.Tensor with dtype torch.float32
+        - len_per_path, a 1-D CPU torch.Tensor
+        - path_to_seq_map, a 1-D torch.Tensor
+        - num_repeats, a ragged tensor of type k2.RaggedInt with 2
+          axes [path][multiplicities]
+    '''
+    expected_times, phone_fsas, path_to_seq_map, num_repeats = compute_expected_times(  # noqa
+        lats=lats,
+        phone_seqs=phone_seqs,
+        ctc_topo=ctc_topo,
+        dense_fsa_vec=dense_fsa_vec,
+        use_double_scores=use_double_scores,
+        debug=debug)
 
     embedding_scores = compute_embeddings_from_nnet_output(
         expected_times, phone_fsas, dense_fsa_vec, path_to_seq_map)
 
-    embedding_phones = compute_embeddings_from_phones(phone_fsas, max_phone_id)
+    embedding_phones = compute_embeddings_from_phone_fsas(
+        phone_fsas, max_phone_id)
 
     embeddings = torch.cat(
         (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
@@ -327,6 +402,52 @@ def compute_embeddings(lats: k2.Fsa,
 
     return padded_embeddings.to(
         torch.float32), len_per_path.cpu(), path_to_seq_map, num_repeats
+
+
+def compute_embeddings(
+        lats: k2.Fsa,
+        ctc_topo: k2.Fsa,
+        dense_fsa_vec: k2.DenseFsaVec,
+        max_phone_id: int,
+        use_double_scores: bool = True,
+        num_paths: int = 3,
+        debug: bool = False
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
+    '''
+    Args:
+      lats:
+        An FsaVec.
+      ctc_topo:
+        The return value of :func:`build_ctc_topo`.
+      dense_fsa_vec:
+        It contains nnet_output.
+      max_phone_id:
+        The maximum phone ID.
+      use_double_scores:
+        True to use double precision in :func:`k2.random_paths` and
+        `get_arc_post`; False to use single precision.
+      num_paths:
+        Size of `n` in the n-best list.
+      debug:
+        Some checks are enabled if `debug` is True.
+    Returns:
+      Return a tuple with 4 entries:
+        - padded_embeddings, a 3-D torch.Tensor with dtype torch.float32
+        - len_per_path, a 1-D CPU torch.Tensor
+        - path_to_seq_map, a 1-D torch.Tensor
+        - num_repeats, a ragged tensor of type k2.RaggedInt with 2
+          axes [path][multiplicities]
+    '''
+    phone_seqs = generate_nbest_list_phone_seqs(
+        lats=lats, num_paths=num_paths, use_double_scores=use_double_scores)
+    return compute_embeddings_from_phone_seqs(
+        lats=lats,
+        phone_seqs=phone_seqs,
+        ctc_topo=ctc_topo,
+        dense_fsa_vec=dense_fsa_vec,
+        max_phone_id=max_phone_id,
+        use_double_scores=use_double_scores,
+        debug=debug)
 
 
 def compute_embeddings_deprecated(
@@ -362,8 +483,10 @@ def compute_embeddings_deprecated(
         Some checks are enabled if `debug` is True.
     Returns:
       Return a tuple with four tensors:
-        - padded_embeddings, its shape is (num_paths, max_phone_seq_len, num_features)
-        - len_per_path, its shape is (num_paths,) containing the phone_seq_len before padding
+        - padded_embeddings, its shape is
+          `(num_paths, max_phone_seq_len, num_features)`
+        - len_per_path, its shape is (num_paths,) containing the phone_seq_len
+          before padding
         - path_to_seq_map, its shape is (num_paths,)
         - num_repeats (k2.RaggedInt)
     '''
@@ -421,8 +544,8 @@ def compute_embeddings_deprecated(
 
     # Set an attribute called pathphone_idx, which corresponds to the arc-index
     # in `phone_fsas` with self-loops.
-    # Each phone has an index but there are blanks between them and at the start
-    # and end.
+    # Each phone has an index but there are blanks between them and at the
+    # start and end.
     phone_fsas.pathphone_idx = torch.arange(phone_fsas.arcs.num_elements(),
                                             dtype=torch.int32,
                                             device=device)
@@ -539,12 +662,12 @@ def compute_embeddings_deprecated(
             #
             #      assert pathphone_idx_to_path[
             #          n -
-            #          1] < seq_len, f'{pathphone_idx_to_path[n - 1]}, {seq_len}, {n}'
+            #   1] < seq_len, f'{pathphone_idx_to_path[n - 1]}, {seq_len}, {n}'
 
         #  n = expected_times.shape[0] - 1
         #  seq = pathphone_idx_to_seq[n]
         #  seq_len = seqs_shape.row_splits(1)[seq +
-        #                                     1] - seqs_shape.row_splits(1)[seq]
+        #                                    1] - seqs_shape.row_splits(1)[seq]
         #
         #  assert pathphone_idx_to_path[n] < seq_len
 
@@ -561,20 +684,20 @@ def compute_embeddings_deprecated(
     #  y = low * low_scale  + high * high_scale
 
     frame_idx_low = torch.floor(expected_times)
-    frame_idx_high = torch.ceil(expected_times)
+    #  frame_idx_high = torch.ceil(expected_times)
 
-    low_scale = frame_idx_high - expected_times
-    high_scale = 1 - low_scale
+    #  low_scale = frame_idx_high - expected_times
+    #  high_scale = 1 - low_scale
     offset = k2.index(seq_starts, pathphone_idx_to_seq)
 
     low = frame_idx_low + offset
-    high = frame_idx_high + offset
+    #  high = frame_idx_high + offset
 
     # the first column is not from the nnet_output and contains lots of -inf
     # so it is removed here
     scores = dense_fsa_vec.scores[:, 1:]
     low_scores = k2.index(scores, low.to(torch.int32))
-    high_scores = k2.index(scores, high.to(torch.int32))
+    #  high_scores = k2.index(scores, high.to(torch.int32))
 
     # It can happen that `high_scores` contain fake nnet_output,
     # i.e., scores for arcs entering the final state are
@@ -634,6 +757,7 @@ def compute_embeddings_deprecated(
         assert s == len_per_path.sum().item()
         assert s == embeddings.shape[0]
 
-    # It used `double` for `get_arc_post`, but the network input requires torch.float32
+    # It used `double` for `get_arc_post`, but the network input requires
+    # torch.float32
     return padded_embeddings.to(
         torch.float32), len_per_path.cpu(), path_to_seq_map, num_repeats
