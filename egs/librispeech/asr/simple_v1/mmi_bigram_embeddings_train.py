@@ -168,6 +168,18 @@ def get_objf(batch: Dict,
 
         # padded_embeddings is of shape [num_paths, max_phone_seq_len, num_features]
         # i.e., [N, T, C]
+        #
+        # len_per_path is a 1-D tensor specifying the `T` of each path before padding
+        #   len_per_path.shape[0] == padded_embeddings.shape[0]
+        #   max(len_per_path) == padded_embeddings.shape[1]
+        #
+        # path_to_seq is a 1-D tensor. path_to_seq[i] is the seq that path_i belongs to
+        # Each seq contains at most `num_paths`.
+        #
+        # num_repeats is a ragged tensor with two axes. num_repeats.dim0() ==  num_seqs
+        # num_repeats.num_elements() == path_to_seq.shape[0]
+        # num_repeats.values()[i] specifies the number of multiplicities of path_i
+
         padded_embeddings = padded_embeddings.permute(0, 2, 1)
         # now padded_embeddings is [N, C, T]
 
@@ -193,20 +205,29 @@ def get_objf(batch: Dict,
              torch.zeros_like(len_per_path), len_per_path),
             dim=1)
 
-        indices = torch.argsort(len_per_path, descending=True)
-        assert indices.shape[0] == second_pass_supervision_segments.shape[0]
-        assert indices.shape[0] == path_to_seq.shape[0]
+        # k2.intersect_dense requires that the DenseFsaVec is sorted in descending order
+        # the name `indices` is already occupied above, we use `indices2` here to avoid confusion
+        indices2 = torch.argsort(len_per_path, descending=True)
+        assert indices2.shape[0] == second_pass_supervision_segments.shape[0]
+        assert indices2.shape[0] == path_to_seq.shape[0]
 
-        second_pass_supervision_segments = second_pass_supervision_segments[indices]
-        path_to_seq = path_to_seq[indices]
+        second_pass_supervision_segments = second_pass_supervision_segments[indices2]
+
+        # as the supervision for each path is sorted, we have to sort path_to_seq as well
+        path_to_seq = path_to_seq[indices2]
         # no need to modify second_pass_out
 
         num_repeats_float = k2.ragged.RaggedFloat(
             num_repeats.shape(),
             num_repeats.values().to(torch.float32))
+
+        # if num_repeats_float is [ [1 1 2] [1 2 2] ],
+        # then path weight is [ [ 1/4  1/4  2/4 ] [1/5 2/5 2/5] ]
+        # where 4 = sum([1 1 2]) and 5 = sum([1 2 2])
         path_weight = k2.ragged.normalize_scores(num_repeats_float,
                                                  use_log=False).values
-        path_weight = path_weight[indices]
+        # we also need to sort the path weight
+        path_weight = path_weight[indices2]
 
         second_pass_dense_fsa_vec = k2.DenseFsaVec(
             second_pass_out, second_pass_supervision_segments)
