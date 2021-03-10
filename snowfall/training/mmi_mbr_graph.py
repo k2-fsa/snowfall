@@ -13,7 +13,7 @@ import torch
 
 from .ctc_graph import build_ctc_topo
 from snowfall.common import get_phone_symbols
-from snowfall.decoding.graph import compile_LG
+from snowfall.decoding.graph import compile_HLG
 
 
 def find_first_disambig_symbol(symbols: k2.SymbolTable) -> int:
@@ -84,23 +84,23 @@ class MmiMbrTrainingGraphCompiler(object):
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
 
         lang_dir = Path('data/lang_nosp')
-        if not (lang_dir / 'ctc_topo_LG_uni.pt').exists():
+        if not (lang_dir / 'HLG_uni.pt').exists():
             logging.info("Composing (ctc_topo, L_disambig, G)")
             first_phone_disambig_id = find_first_disambig_symbol(phones)
             first_word_disambig_id = find_first_disambig_symbol(words)
             # decoding_graph is the result of composing (ctc_topo, L_disambig, G)
-            decoding_graph = compile_LG(
+            decoding_graph = compile_HLG(
                 L=L_disambig.to('cpu'),
                 G=G.to('cpu'),
-                ctc_topo=ctc_topo.to('cpu'),
+                H=ctc_topo.to('cpu'),
                 labels_disambig_id_start=first_phone_disambig_id,
                 aux_labels_disambig_id_start=first_word_disambig_id)
             torch.save(decoding_graph.as_dict(),
-                       lang_dir / 'ctc_topo_LG_uni.pt')
+                       lang_dir / 'HLG_uni.pt')
         else:
-            logging.info("Loading pre-compiled ctc_topo_LG")
+            logging.info("Loading pre-compiled HLG")
             decoding_graph = k2.Fsa.from_dict(
-                torch.load(lang_dir / 'ctc_topo_LG_uni.pt'))
+                torch.load(lang_dir / 'HLG_uni.pt'))
 
         assert hasattr(decoding_graph, 'phones')
 

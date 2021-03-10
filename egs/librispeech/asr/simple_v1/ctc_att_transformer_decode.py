@@ -23,14 +23,14 @@ from snowfall.common import get_phone_symbols
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
-from snowfall.decoding.graph import compile_LG
+from snowfall.decoding.graph import compile_HLG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.training.ctc_graph import build_ctc_topo
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], LG: Fsa, symbols: SymbolTable):
+           device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -60,15 +60,15 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-        # assert LG.is_cuda()
-        assert LG.device == nnet_output.device, \
-            f"Check failed: LG.device ({LG.device}) == nnet_output.device ({nnet_output.device})"
+        # assert HLG.is_cuda()
+        assert HLG.device == nnet_output.device, \
+            f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
+        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
+        # lattices = k2.intersect_dense(HLG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
@@ -135,7 +135,7 @@ def main():
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
-    if not os.path.exists(lang_dir / 'LG.pt'):
+    if not os.path.exists(lang_dir / 'HLG.pt'):
         print("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
@@ -144,16 +144,16 @@ def main():
             G = k2.Fsa.from_openfst(f.read(), acceptor=False)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
-        LG = compile_LG(L=L,
-                        G=G,
-                        ctc_topo=ctc_topo,
-                        labels_disambig_id_start=first_phone_disambig_id,
-                        aux_labels_disambig_id_start=first_word_disambig_id)
-        torch.save(LG.as_dict(), lang_dir / 'LG.pt')
+        HLG = compile_HLG(L=L,
+                         G=G,
+                         H=ctc_topo,
+                         labels_disambig_id_start=first_phone_disambig_id,
+                         aux_labels_disambig_id_start=first_word_disambig_id)
+        torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
     else:
-        print("Loading pre-compiled LG")
-        d = torch.load(lang_dir / 'LG.pt')
-        LG = k2.Fsa.from_dict(d)
+        print("Loading pre-compiled HLG")
+        d = torch.load(lang_dir / 'HLG.pt')
+        HLG = k2.Fsa.from_dict(d)
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -197,15 +197,15 @@ def main():
     model.to(device)
     model.eval()
 
-    print("convert LG to device")
-    LG = LG.to(device)
-    LG.aux_labels = k2.ragged.remove_values_eq(LG.aux_labels, 0)
-    LG.requires_grad_(False)
+    print("convert HLG to device")
+    HLG = HLG.to(device)
+    HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
+    HLG.requires_grad_(False)
     print("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
                      device=device,
-                     LG=LG,
+                     HLG=HLG,
                      symbols=symbol_table)
     s = ''
     for ref, hyp in results:
