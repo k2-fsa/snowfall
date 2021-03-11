@@ -256,9 +256,9 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-def describe(model: torch.nn.Module):
+def describe(model: torch.nn.Module, title: str = ''):
     logging.info('=' * 80)
-    logging.info('Model parameters summary:')
+    logging.info(f'{title} Model parameters summary:')
     logging.info('=' * 80)
     total = 0
     for name, param in model.named_parameters():

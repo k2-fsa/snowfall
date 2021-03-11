@@ -59,11 +59,8 @@ class MmiTrainingGraphCompiler(object):
         oov:
           Out of vocabulary word.
         '''
-
         L_inv = L_inv.to(device)
-
-        if L_inv.properties & k2.fsa_properties.ARC_SORTED != 0:
-            L_inv = k2.arc_sort(L_inv)
+        L_inv = k2.arc_sort(L_inv)
 
         assert L_inv.requires_grad is False
 
@@ -77,11 +74,14 @@ class MmiTrainingGraphCompiler(object):
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
+        self.max_phone_id = max(phone_symbols)
 
-        ctc_topo = build_ctc_topo(phone_symbols_with_blank).to(device)
+        ctc_topo = k2.arc_sort(
+            build_ctc_topo(phone_symbols_with_blank).to(device))
         assert ctc_topo.requires_grad is False
 
-        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
+        self.ctc_topo = ctc_topo
+        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
@@ -106,10 +106,10 @@ class MmiTrainingGraphCompiler(object):
         assert P.device == self.device
         P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
-                                  P_with_self_loops,
-                                  treat_epsilons_specially=False).invert()
-
+        ctc_topo_P = k2.compose(self.ctc_topo,
+                                P_with_self_loops,
+                                treat_epsilons_specially=False,
+                                inner_labels='phones')
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
 
         num_graphs = self.build_num_graphs(texts)
@@ -118,6 +118,7 @@ class MmiTrainingGraphCompiler(object):
 
         num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
 
+        # inherit the `phones` attribute from ctc_topo_P
         num = k2.compose(ctc_topo_P,
                          num_graphs_with_self_loops,
                          treat_epsilons_specially=False)

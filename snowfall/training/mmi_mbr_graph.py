@@ -75,6 +75,7 @@ class MmiMbrTrainingGraphCompiler(object):
 
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
+        self.max_phone_id = max(phone_symbols)
 
         ctc_topo = k2.arc_sort(
             build_ctc_topo(phone_symbols_with_blank).to(device))
@@ -84,6 +85,7 @@ class MmiMbrTrainingGraphCompiler(object):
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert())
 
         lang_dir = Path('data/lang_nosp')
+        lang_dir.mkdir(parents=True, exist_ok=True)
         if not (lang_dir / 'ctc_topo_LG_uni.pt').exists():
             logging.info("Composing (ctc_topo, L_disambig, G)")
             first_phone_disambig_id = find_first_disambig_symbol(phones)
@@ -134,9 +136,10 @@ class MmiMbrTrainingGraphCompiler(object):
         assert P.device == self.device
         P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
-                                  P_with_self_loops,
-                                  treat_epsilons_specially=False).invert()
+        ctc_topo_P = k2.compose(self.ctc_topo,
+                                P_with_self_loops,
+                                treat_epsilons_specially=False,
+                                inner_labels='phones')
         ctc_topo_P = k2.arc_sort(ctc_topo_P)
 
         num_graphs = self.build_num_graphs(texts)
@@ -146,10 +149,11 @@ class MmiMbrTrainingGraphCompiler(object):
 
         num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
 
+        # inherit the `phones` attribute from ctc_topo_P
         num = k2.compose(ctc_topo_P,
                          num_graphs_with_self_loops,
-                         treat_epsilons_specially=False,
-                         inner_labels='phones')
+                         treat_epsilons_specially=False)
+
         num = k2.arc_sort(num)
 
         ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
