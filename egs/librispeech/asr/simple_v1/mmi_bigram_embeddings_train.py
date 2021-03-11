@@ -157,6 +157,7 @@ def get_objf(batch: Dict,
                                                supervision_segments[:, 2])
 
     tot_score = first_pass_tot_score
+    #  second_pass_tot_score = torch.tensor([0.])
     if True:
         # Now compute the tot_scores for the second pass
         #
@@ -285,7 +286,14 @@ def get_objf(batch: Dict,
         #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max()}')
 
         clip_grad_value_(model.parameters(), 5.0)
-        clip_grad_value_(second_pass_model.parameters(), 5.0)
+        #  clip_grad_value_(second_pass_model.parameters(), 5.0)
+
+        #  logging.info('after clipping')
+        #  for n, p in model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max()}')
+        #
+        #  for n, p in second_pass_model.named_parameters():
+        #      logging.info(f'{n}: {p.abs().max()}, {p.grad.max()}')
 
         #  maybe_log_gradients('train/clipped_grad_norms')
         optimizer.step()

@@ -63,6 +63,7 @@ def generate_nbest_list_phone_seqs(lats: k2.Fsa,
     return phone_seqs
 
 
+@torch.no_grad()
 def compute_expected_times(
         lats: k2.Fsa,
         phone_seqs: k2.RaggedInt,
@@ -271,7 +272,11 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
     #
     #  y = low * low_scale  + high * high_scale
 
-    frame_idx_low = torch.floor(expected_times)
+    #  frame_idx_low = torch.floor(expected_times)
+    # TODO(fangjun): change it to torch.floor
+    # if interpolation is used
+    frame_idx_low = torch.round(expected_times)
+
     #  frame_idx_high = torch.ceil(expected_times)
 
     #  low_scale = frame_idx_high - expected_times
@@ -372,6 +377,7 @@ def compute_embeddings_from_phone_seqs(
         dense_fsa_vec=dense_fsa_vec,
         use_double_scores=use_double_scores,
         debug=debug)
+    assert expected_times.requires_grad is False
 
     embedding_scores = compute_embeddings_from_nnet_output(
         expected_times, phone_fsas, dense_fsa_vec, path_to_seq_map)
@@ -683,7 +689,10 @@ def compute_embeddings_deprecated(
     #
     #  y = low * low_scale  + high * high_scale
 
-    frame_idx_low = torch.floor(expected_times)
+    #  frame_idx_low = torch.floor(expected_times)
+    # TODO(fangjun): change it to torch.floor
+    # if interpolation is used
+    frame_idx_low = torch.round(expected_times)
     #  frame_idx_high = torch.ceil(expected_times)
 
     #  low_scale = frame_idx_high - expected_times

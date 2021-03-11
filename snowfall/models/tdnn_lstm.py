@@ -157,6 +157,10 @@ class TdnnLstm1b(AcousticModel):
             Tensor: Predictor tensor of dimension (batch_size, number_of_classes, input_length).
         """
         x = self.tdnn(x)
+
+        # x_2nd is for the second pass model, which is used to compute embeddings
+        x_2nd = self.linear_2nd(x.permute(0, 2, 1)) # x_2nd is (B, T, F)
+
         x = x.permute(2, 0, 1)  # (B, F, T) -> (T, B, F) -> how LSTM expects it
         for lstm, bnorm in zip(self.lstms, self.lstm_bnorms):
             x_new, _ = lstm(x)
@@ -167,9 +171,6 @@ class TdnnLstm1b(AcousticModel):
 
         # x_1st is for the first pass model, which is going to be processed by log-softmax
         x_1st = self.linear_1st(x)
-
-        # x_2nd is for the second pass model, which is used to compute embeddings
-        x_2nd = self.linear_2nd(x)
 
         x_1st = x_1st.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
         x_2nd = x_2nd.transpose(1, 2)  # (B, T, F) -> (B, F, T) -> shape expected by Snowfall
