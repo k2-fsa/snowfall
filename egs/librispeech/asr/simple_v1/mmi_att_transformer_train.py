@@ -29,9 +29,10 @@ from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
+from snowfall.training.hmm_topo import build_hmm_topo_2state
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -472,6 +473,7 @@ def main():
         phones=phone_symbol_table,
         words=word_symbol_table,
         device=device,
+        topo_builder_fn=build_hmm_topo_2state
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -550,7 +552,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * (len(phone_ids) + 1),  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
     else:
@@ -558,7 +560,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * (len(phone_ids) + 1),  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
             
