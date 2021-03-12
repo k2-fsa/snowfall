@@ -4,6 +4,7 @@
 #                                                   Haowen Qiu
 #                                                   Fangjun Kuang)
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
+#                2021  Pingfeng Luo
 # Apache 2.0
 
 import argparse
@@ -30,6 +31,7 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.models.conformer import Conformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -349,6 +351,12 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--model-type',
+        type=str,
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
+    parser.add_argument(
         '--num-epochs',
         type=int,
         default=20,
@@ -385,6 +393,16 @@ def get_parser():
         default=0.0,
         help="Attention loss rate.")
     parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
+    parser.add_argument(
         '--bucketing_sampler',
         type=str2bool,
         default=False,
@@ -396,19 +414,36 @@ def get_parser():
         default=30,
         help='The number of buckets for the BucketingSampler'
              '(you might want to increase it for larger datasets).')
+    parser.add_argument(
+        '--concatenate-cuts',
+        type=str2bool,
+        default=True,
+        help='When enabled, utterances (cuts) will be concatenated '
+             'to minimize the amount of padding.')
+    parser.add_argument(
+        '--duration-factor',
+        type=float,
+        default=1.0,
+        help='Determines the maximum duration of a concatenated cut '
+             'relative to the duration of the longest cut in a batch.')
+    parser.add_argument(
+        '--gap',
+        type=float,
+        default=1.0,
+        help='The amount of padding (in seconds) inserted between concatenated cuts. '
+             'This padding is filled with noise when noise augmentation is used.')
+    parser.add_argument(
+        '--full-libri',
+        type=str2bool,
+        default=False,
+        help='When enabled, use 960h LibriSpeech.')
     return parser
 
 
 def main():
     args = get_parser().parse_args()
 
-    if not torch.cuda.is_available():
-        logging.error('No GPU detected!')
-        sys.exit(-1)
-
-    device_id = 0
-    device = torch.device('cuda', device_id)
-
+    model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
     max_frames = args.max_frames
@@ -418,8 +453,7 @@ def main():
 
     fix_random_seed(42)
 
-    # exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
-    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -437,6 +471,9 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
+    device_id = 0
+    device = torch.device('cuda', device_id)
+
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
@@ -446,6 +483,7 @@ def main():
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
+    P = P.to(device)
 
     # load dataset
     # feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
@@ -460,12 +498,11 @@ def main():
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if not args.bucketing_sampler:
-        # We don't mix concatenating the cuts and bucketing
-        # Here we insert concatenation before mixing so that the
-        # noises from Musan are mixed onto almost-zero-energy
-        # padding frames.
-        transforms = [CutConcatenate()] + transforms
+    if args.concatenate_cuts:
+        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
+        # Cut concatenation should be the first transform in the list,
+        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
+        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
@@ -476,7 +513,7 @@ def main():
             num_buckets=args.num_buckets
         )
     else:
-        logging.info('Using regular sampler with cut concatenation.')
+        logging.info('Using SingleCutSampler.')
         train_sampler = SingleCutSampler(
             cuts_train,
             max_frames=max_frames,
@@ -500,6 +537,10 @@ def main():
         num_workers=1
     )
 
+    if not torch.cuda.is_available():
+        logging.error('No GPU detected!')
+        sys.exit(-1)
+
     logging.info("About to create model")
 
     if att_rate != 0.0:
@@ -507,20 +548,30 @@ def main():
     else:
         num_decoder_layers = 0
 
-    model = Transformer(
-        num_features=40,
-        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=4,
-        num_decoder_layers=num_decoder_layers)
-
+    if model_type == "transformer":
+        model = Transformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+    else:
+        model = Conformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+            
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)
-    P = P.to(device)
     describe(model)
 
     optimizer = Noam(model.parameters(),
-                     model_size=256,
+                     model_size=args.attention_dim,
                      factor=1.0,
                      warm_step=args.warm_step)
 
@@ -613,9 +664,6 @@ def main():
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
 
 if __name__ == '__main__':
     main()

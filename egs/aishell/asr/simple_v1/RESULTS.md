@@ -1,10 +1,17 @@
 # AIShell MMI training results
 
 ## 2021-02-10
-(Pingfeng Luo): This CER is obtained using the latest k2 and lhotse as of today (2021-02-10).
+(Pingfeng Luo):
+This CER is obtained using the latest k2 and lhotse at 2021-02-10.
 ```
 # epoch 7
-2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ] exp-lstm-adam-mmi-bigram-musan
+2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ]
+```
+## 2021-03-11
+(Pingfeng Luo):
+following CER is average over epochs 10 to 14, using mmi_att_conformer model.
+```
+2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:344] %WER 6.89% [7220 / 104765, 592 ins, 146 del, 6482 sub ]
 ```
 
 # AIShell MMI+transformer training results
