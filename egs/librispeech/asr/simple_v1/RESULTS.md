@@ -247,6 +247,9 @@ listed below. They are obtained using the latest k2 and lhotse as of today (2021
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/119>
 
+TensorBoard log is available at <https://tensorboard.dev/experiment/oabLDpTJSEObc3rrWyQJig/#scalars>
+and the training log can be downloaded using <https://github.com/k2-fsa/snowfall/files/6116390/log-train-2021-03-07-02-27-09.txt>.
+
 Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.) and each epoch model without model averaging are
 listed below.
 
@@ -290,6 +293,10 @@ listed below.
 ## 2021-03-08
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/119>
+
+TensorBoard log is available at <https://tensorboard.dev/experiment/CpiZPPV6Snq3TgfDR9iJZA/#scalars>
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/6116417/log-train-2021-03-07-02-26-29.txt>.
 
 Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.) and each epoch model without model averaging are
 listed below.
