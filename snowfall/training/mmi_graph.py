@@ -1,14 +1,13 @@
 # Copyright (c)  2020  Xiaomi Corp.       (author: Fangjun Kuang)
 
+import k2
+import torch
 from typing import Iterable
 from typing import List
 from typing import Tuple
 
-import k2
-import torch
-
-from .ctc_graph import build_ctc_topo
 from snowfall.common import get_phone_symbols
+from .ctc_graph import build_ctc_topo
 
 
 def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
@@ -47,6 +46,7 @@ class MmiTrainingGraphCompiler(object):
                  phones: k2.SymbolTable,
                  words: k2.SymbolTable,
                  device: torch.device,
+                 topo_builder_fn=build_ctc_topo,
                  oov: str = '<UNK>'):
         '''
         Args:
@@ -78,10 +78,9 @@ class MmiTrainingGraphCompiler(object):
         phone_symbols = get_phone_symbols(phones)
         phone_symbols_with_blank = [0] + phone_symbols
 
-        ctc_topo = build_ctc_topo(phone_symbols_with_blank).to(device)
-        assert ctc_topo.requires_grad is False
-
-        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
+        H = topo_builder_fn(phone_symbols_with_blank).to(device)
+        assert H.requires_grad is False
+        self.H_inv = k2.arc_sort(H.invert_())
 
     def compile(self, texts: Iterable[str],
                 P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
@@ -106,28 +105,28 @@ class MmiTrainingGraphCompiler(object):
         assert P.device == self.device
         P_with_self_loops = k2.add_epsilon_self_loops(P)
 
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
-                                  P_with_self_loops,
-                                  treat_epsilons_specially=False).invert()
-
-        ctc_topo_P = k2.arc_sort(ctc_topo_P)
+        HP = k2.intersect(
+            self.H_inv,
+            P_with_self_loops,
+            treat_epsilons_specially=False
+        ).invert()
+        HP = k2.arc_sort(HP)
 
         num_graphs = self.build_num_graphs(texts)
         num_graphs_with_self_loops = k2.remove_epsilon_and_add_self_loops(
             num_graphs)
-
         num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
 
-        num = k2.compose(ctc_topo_P,
+        num = k2.compose(HP,
                          num_graphs_with_self_loops,
                          treat_epsilons_specially=False)
         num = k2.arc_sort(num)
 
-        ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
+        HP_vec = k2.create_fsa_vec([HP.detach()])
         indexes = torch.zeros(len(texts),
                               dtype=torch.int32,
                               device=self.device)
-        den = k2.index_fsa(ctc_topo_P_vec, indexes)
+        den = k2.index_fsa(HP_vec, indexes)
 
         return num, den
 
