@@ -2,6 +2,7 @@
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
+#                2021  Pingfeng Luo
 # Apache 2.0
 
 import argparse
@@ -26,6 +27,7 @@ from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
+from snowfall.models.conformer import Conformer
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -157,6 +159,12 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--model-type',
+        type=str,
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
+    parser.add_argument(
         '--epoch',
         type=int,
         default=20,
@@ -177,19 +185,29 @@ def get_parser():
         type=float,
         default=0.0,
         help="Attention loss rate.")
+    parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
     return parser
 
 
 def main():
     args = get_parser().parse_args()
 
+    model_type = args.model_type
     epoch = args.epoch
     max_frames = args.max_frames
     avg = args.avg
     att_rate = args.att_rate
 
-    # exp_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp-transformer-noam-mmi-att-musan')
-    exp_dir = Path('exp-transformer-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -213,11 +231,23 @@ def main():
     else:
         num_decoder_layers = 0
 
-    model = Transformer(
-        num_features=40,
-        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=4,
-        num_decoder_layers=num_decoder_layers)
+    if model_type == "transformer":
+        model = Transformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+    else:
+        model = Conformer(
+            num_features=40,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     if avg == 1:

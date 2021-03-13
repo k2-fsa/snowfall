@@ -1,11 +1,38 @@
 # AIShell MMI training results
 
 ## 2021-02-10
-(Pingfeng Luo): This CER is obtained using the latest k2 and lhotse as of today (2021-02-10).
+(Pingfeng Luo):
+This CER is obtained using the latest k2 and lhotse at 2021-02-10.
 ```
 # epoch 7
-2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ] exp-lstm-adam-mmi-bigram-musan
+2021-02-10 18:12:22,691 INFO [mmi_bigram_decode.py:263] %WER 10.06% [10542 / 104765, 436 ins, 495 del, 9611 sub ]
 ```
+## 2021-03-11
+(Pingfeng Luo):
+following is average over last 5 epochs, i.e. epochs 5 to 9, using mmi_att_conformer model.
+```
+2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:340] %WER 14.50% [9345 / 64428, 834 ins, 1249 del, 7262 sub ]
+2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:344] %WER 6.89% [7220 / 104765, 592 ins, 146 del, 6482 sub ]
+```
+and related lost:
+```
+epoch: 5
+best objf: 0.09375367592695481
+valid objf: 0.09187789649726409
+epoch: 6
+best objf: 0.0880647696924415
+valid objf: 0.09059886088615578
+epoch: 7
+best objf: 0.0880647696924415
+valid objf: 0.09063070541871378
+epoch: 8
+best objf: 0.08386929301927937
+valid objf: 0.09076970567486643
+epoch: 9
+best objf: 0.08086437557875469
+valid objf: 0.09090691501700747
+```
+
 
 # AIShell MMI+transformer training results
 (dan povey: following is average over last 5 epochs, i.e. epochs 15 to 19.)
