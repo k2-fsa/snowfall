@@ -9,8 +9,9 @@ This CER is obtained using the latest k2 and lhotse at 2021-02-10.
 ```
 ## 2021-03-11
 (Pingfeng Luo):
-following CER is average over epochs 10 to 14, using mmi_att_conformer model.
+following is average over last 5 epochs, i.e. epochs 10 to 14, using mmi_att_conformer model.
 ```
+2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:340] %WER 14.50% [9345 / 64428, 834 ins, 1249 del, 7262 sub ]
 2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:344] %WER 6.89% [7220 / 104765, 592 ins, 146 del, 6482 sub ]
 ```
 
