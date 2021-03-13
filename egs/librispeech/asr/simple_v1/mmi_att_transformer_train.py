@@ -134,7 +134,7 @@ def get_objf(batch: Dict,
     assert nnet_output.device == device
 
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 8.0)
+    den = k2.intersect_dense(den, dense_fsa_vec, 4.0)
 
     num_tot_scores = num.get_tot_scores(
         log_semiring=True,
@@ -553,7 +553,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=2 * len(phone_ids),  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
     else:
@@ -561,7 +561,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=2 * len(phone_ids),  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
             
