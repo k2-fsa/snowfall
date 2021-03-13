@@ -9,11 +9,30 @@ This CER is obtained using the latest k2 and lhotse at 2021-02-10.
 ```
 ## 2021-03-11
 (Pingfeng Luo):
-following is average over last 5 epochs, i.e. epochs 10 to 14, using mmi_att_conformer model.
+following is average over last 5 epochs, i.e. epochs 5 to 9, using mmi_att_conformer model.
 ```
 2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:340] %WER 14.50% [9345 / 64428, 834 ins, 1249 del, 7262 sub ]
 2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:344] %WER 6.89% [7220 / 104765, 592 ins, 146 del, 6482 sub ]
 ```
+and related lost:
+```
+epoch: 5
+best objf: 0.09375367592695481
+valid objf: 0.09187789649726409
+epoch: 6
+best objf: 0.0880647696924415
+valid objf: 0.09059886088615578
+epoch: 7
+best objf: 0.0880647696924415
+valid objf: 0.09063070541871378
+epoch: 8
+best objf: 0.08386929301927937
+valid objf: 0.09076970567486643
+epoch: 9
+best objf: 0.08086437557875469
+valid objf: 0.09090691501700747
+```
+
 
 # AIShell MMI+transformer training results
 (dan povey: following is average over last 5 epochs, i.e. epochs 15 to 19.)
