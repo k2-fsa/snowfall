@@ -16,7 +16,11 @@ def build_hmm_topo_2state(tokens: List[int]) -> k2.Fsa:
     Returns:
         An FST that converts a sequence of HMM state IDs to a sequence of token IDs.
     """
-    followup_tokens = range(len(tokens), len(tokens) * 2)
+    min_token_id = min(tokens)
+    followup_tokens = list(range(
+        len(tokens) + min_token_id,
+        2 * len(tokens) + min_token_id
+    ))
     num_states = len(tokens) + 2  # + start state, + final state
     arcs = []
 
@@ -42,7 +46,7 @@ def build_hmm_topo_2state(tokens: List[int]) -> k2.Fsa:
     arcs += [f'{num_states - 1}']
 
     # Build the FST
-    arcs = '\n'.join(sorted(arcs))
+    arcs = '\n'.join(sorted(arcs, key=lambda arc: int(arc.split()[0])))
     ans = k2.Fsa.from_str(arcs)
     ans = k2.arc_sort(ans)
     return ans
