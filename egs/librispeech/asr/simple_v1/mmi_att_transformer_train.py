@@ -519,11 +519,12 @@ def main():
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
 
     if args.on_the_fly_feats:
-        # Add on-the-fly speed perturbation; since originally it would have increased epoch
-        # size by 3, we will apply prob 2/3 and use 3x more epochs.
-        # Speed perturbation probably should come first before concatenation,
-        # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
-        transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
+        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
+        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
+        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
+        # # Speed perturbation probably should come first before concatenation,
+        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
+        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
         # Drop feats to be on the safe side.
         cuts_train = cuts_train.drop_features()
         train = K2SpeechRecognitionDataset(
