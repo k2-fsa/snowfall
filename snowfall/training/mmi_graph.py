@@ -162,3 +162,4 @@ class MmiTrainingGraphCompiler(object):
                                   treat_epsilons_specially=False).invert_()
         num_graphs = k2.arc_sort(num_graphs)
         return num_graphs
+

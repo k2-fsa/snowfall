@@ -134,7 +134,8 @@ def get_objf(batch: Dict,
     assert nnet_output.device == device
 
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 4.0)
+    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    #den = k2.intersect_dense_pruned(den, dense_fsa_vec, search_beam=10.0, output_beam=10.0, min_active_states=100, max_active_states=1000)
 
     num_tot_scores = num.get_tot_scores(
         log_semiring=True,
