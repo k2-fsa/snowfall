@@ -21,16 +21,18 @@ from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet
+from lhotse import CutSet, Fbank
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
+from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from lhotse.utils import fix_random_seed
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -430,6 +432,13 @@ def get_parser():
         type=str2bool,
         default=False,
         help='When enabled, use 960h LibriSpeech.')
+    parser.add_argument(
+        '--on-the-fly-feats',
+        type=str2bool,
+        default=False,
+        help='When enabled, use on-the-fly cut mixing and feature extraction. '
+             'Will drop existing precomputed feature manifests if available.'
+    )
     return parser
 
 
@@ -446,7 +455,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-otf')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -501,6 +510,21 @@ def main():
         # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
         transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+
+    if args.on_the_fly_feats:
+        # Add on-the-fly speed perturbation; since originally it would have increased epoch
+        # size by 3, we will apply prob 2/3 and use 3x more epochs.
+        # Speed perturbation probably should come first before concatenation,
+        # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
+        transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
+        # Drop feats to be on the safe side.
+        cuts_train = cuts_train.drop_features()
+        train = K2SpeechRecognitionDataset(
+            cuts=cuts_train,
+            cut_transforms=transforms,
+            input_strategy=OnTheFlyFeatures(Fbank()),
+        )
+
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
@@ -523,8 +547,16 @@ def main():
         batch_size=None,
         num_workers=4,
     )
+
     logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionDataset(cuts_dev)
+    if args.on_the_fly_feats:
+        cuts_dev = cuts_dev.drop_features()
+        validate = K2SpeechRecognitionDataset(
+            cuts_dev,
+            input_strategy=OnTheFlyFeatures(Fbank())
+        )
+    else:
+        validate = K2SpeechRecognitionDataset(cuts_dev)
     valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
