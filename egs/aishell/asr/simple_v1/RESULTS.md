@@ -14,7 +14,7 @@ following is average over last 5 epochs, i.e. epochs 5 to 9, using mmi_att_confo
 2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:340] %WER 14.50% [9345 / 64428, 834 ins, 1249 del, 7262 sub ]
 2021-03-11 11:03:54,736 INFO [mmi_att_transformer_decode.py:344] %WER 6.89% [7220 / 104765, 592 ins, 146 del, 6482 sub ]
 ```
-and related lost:
+and related loss:
 ```
 epoch: 5
 best objf: 0.09375367592695481
