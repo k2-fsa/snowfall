@@ -367,6 +367,11 @@ def get_parser():
         default=50000,
         help="Maximum number of feature frames in a single batch.")
     parser.add_argument(
+        '--max-duration',
+        type=int,
+        default=500.0,
+        help="Maximum pooled recordings duration in a single batch.")
+    parser.add_argument(
         '--warm-step',
         type=int,
         default=5000,
@@ -449,6 +454,7 @@ def main():
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
     max_frames = args.max_frames
+    max_duration = args.max_duration
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
@@ -529,7 +535,8 @@ def main():
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=max_frames,
+            max_duration=max_duration,
+            # max_frames=max_frames,
             shuffle=True,
             num_buckets=args.num_buckets
         )
@@ -537,7 +544,8 @@ def main():
         logging.info('Using SingleCutSampler.')
         train_sampler = SingleCutSampler(
             cuts_train,
-            max_frames=max_frames,
+            max_duration=max_duration,
+            # max_frames=max_frames,
             shuffle=True,
         )
     logging.info("About to create train dataloader")
@@ -557,7 +565,11 @@ def main():
         )
     else:
         validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
+    valid_sampler = SingleCutSampler(
+        cuts_dev,
+        max_duration=max_duration,
+        # max_frames=max_frames
+    )
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
