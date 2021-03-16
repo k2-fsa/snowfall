@@ -268,7 +268,8 @@ def main():
     P.set_scores_stochastic_(model.P_scores)
     print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
 
-    if not os.path.exists(lang_dir / 'HLG.pt'):
+    HLG_path = exp_dir / 'HLG.pt'
+    if not HLG_path.exists():
         logging.debug("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
@@ -282,10 +283,10 @@ def main():
                           H=H,
                           labels_disambig_id_start=first_phone_disambig_id,
                           aux_labels_disambig_id_start=first_word_disambig_id)
-        torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
+        torch.save(HLG.as_dict(), HLG_path)
     else:
         logging.debug("Loading pre-compiled HLG")
-        d = torch.load(lang_dir / 'HLG.pt')
+        d = torch.load(HLG_path)
         HLG = k2.Fsa.from_dict(d)
 
     # load dataset
