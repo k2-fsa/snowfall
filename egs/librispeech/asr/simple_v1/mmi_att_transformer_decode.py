@@ -38,7 +38,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
-        feature = batch['features']
+        feature = batch['inputs']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],
@@ -206,7 +206,7 @@ def main():
     avg = args.avg
     att_rate = args.att_rate
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-otf')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
