@@ -23,6 +23,9 @@ from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.common import str2bool
 from snowfall.decoding.graph import compile_LG
+from snowfall.decoding.rescore import get_paths
+from snowfall.decoding.rescore import get_word_fsas
+from snowfall.decoding.rescore import rescore
 from snowfall.models import AcousticModel
 from snowfall.models import Tdnn2aEmbedding
 from snowfall.models.tdnn_lstm import TdnnLstm1b
@@ -78,10 +81,32 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
-        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        if not enable_second_pass_decoding:
+            # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
+            best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        else:
+            # FIXME(fangjun): increase num_paths and fix `num_repeats` in rescore.py
+            paths = get_paths(lats=lattices, num_paths=1)
+            word_fsas, seq_to_path_shape = get_word_fsas(lattices, paths)
+            replicated_lats = k2.index(lattices, seq_to_path_shape.row_ids(1))
+            word_lats = k2.compose(replicated_lats,
+                                   word_fsas,
+                                   treat_epsilons_specially=False)
+            tot_scores_1st = word_lats.get_tot_scores(use_double_scores=True,
+                                                      log_semiring=True)
 
-        if enable_second_pass_decoding:
+            best_paths = rescore(lats=lattices,
+                                 paths=paths,
+                                 tot_scores_1st=tot_scores_1st,
+                                 seq_to_path_shape=seq_to_path_shape,
+                                 ctc_topo=ctc_topo,
+                                 decoding_graph=LG,
+                                 dense_fsa_vec=dense_fsa_vec_2nd,
+                                 second_pass_model=second_pass_model,
+                                 max_phone_id=max_phone_id)
+
+
+        if False and enable_second_pass_decoding:
             phone_seqs = k2.RaggedInt(best_paths.arcs.shape(), best_paths.phones)
             phone_seqs = k2.ragged.remove_values_eq(phone_seqs, 0)
             phone_seqs = k2.ragged.remove_axis(phone_seqs, 1)
@@ -89,7 +114,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             # see ./mmi_bigram_embeddings_train.py for the meanings of the
             # returned values
             padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings_from_phone_seqs(
-                lats=lattices,
                 phone_seqs=phone_seqs,
                 ctc_topo=ctc_topo,
                 dense_fsa_vec=dense_fsa_vec_2nd,
@@ -160,6 +184,10 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                     float(num_cuts) / tot_num_cuts * 100))
 
         num_cuts += len(texts)
+
+        # FIXME(fangjun): remove it
+        if batch_idx == 50:
+            break
 
     return results
 
@@ -240,7 +268,8 @@ def get_parser():
 
 def main():
     args = get_parser().parse_args()
-    exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist'
+    exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist-2021-03-12'
+    #  exp_dir = f'exp-lstm-adam-mmi-bigram-embeddings-musan-dist-0.01'
 
     if args.enable_second_pass_decoding:
         setup_logger('{}/log/log-decode-second'.format(exp_dir), log_level='debug')
@@ -324,7 +353,7 @@ def main():
 
     logging.info("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=40000)
+    sampler = SingleCutSampler(cuts_test, max_frames=10000)
     logging.info("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 

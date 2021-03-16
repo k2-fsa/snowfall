@@ -303,7 +303,7 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
 
 
 def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
-    ans = torch.zeros(indices.shape, device=indices.device, dtype=torch.long)
+    ans = torch.empty_like(indices, dtype=torch.long)
     ans[indices] = torch.arange(0, indices.shape[0], device=indices.device)
     return ans
 
