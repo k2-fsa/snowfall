@@ -21,16 +21,18 @@ from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet
+from lhotse import CutSet, Fbank
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
+from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from lhotse.utils import fix_random_seed
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -83,7 +85,7 @@ def get_objf(batch: Dict,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
-    feature = batch['features']
+    feature = batch['inputs']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
@@ -196,7 +198,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
     model.eval()
 
-    for batch_idx, batch in enumerate(dataloader):
+    from torchaudio.datasets.utils import bg_iterator
+    for batch_idx, batch in enumerate(bg_iterator(dataloader, 2)):
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
@@ -360,10 +363,10 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-frames',
+        '--max-duration',
         type=int,
-        default=50000,
-        help="Maximum number of feature frames in a single batch.")
+        default=500.0,
+        help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--warm-step',
         type=int,
@@ -430,6 +433,13 @@ def get_parser():
         type=str2bool,
         default=False,
         help='When enabled, use 960h LibriSpeech.')
+    parser.add_argument(
+        '--on-the-fly-feats',
+        type=str2bool,
+        default=False,
+        help='When enabled, use on-the-fly cut mixing and feature extraction. '
+             'Will drop existing precomputed feature manifests if available.'
+    )
     return parser
 
 
@@ -439,7 +449,7 @@ def main():
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_frames = args.max_frames
+    max_duration = args.max_duration
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
@@ -501,11 +511,27 @@ def main():
         # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
         transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
+
+    if args.on_the_fly_feats:
+        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
+        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
+        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
+        # # Speed perturbation probably should come first before concatenation,
+        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
+        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
+        # Drop feats to be on the safe side.
+        cuts_train = cuts_train.drop_features()
+        train = K2SpeechRecognitionDataset(
+            cuts=cuts_train,
+            cut_transforms=transforms,
+            input_strategy=OnTheFlyFeatures(Fbank()),
+        )
+
     if args.bucketing_sampler:
         logging.info('Using BucketingSampler.')
         train_sampler = BucketingSampler(
             cuts_train,
-            max_frames=max_frames,
+            max_duration=max_duration,
             shuffle=True,
             num_buckets=args.num_buckets
         )
@@ -513,7 +539,7 @@ def main():
         logging.info('Using SingleCutSampler.')
         train_sampler = SingleCutSampler(
             cuts_train,
-            max_frames=max_frames,
+            max_duration=max_duration,
             shuffle=True,
         )
     logging.info("About to create train dataloader")
@@ -523,9 +549,20 @@ def main():
         batch_size=None,
         num_workers=4,
     )
+
     logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
+    if args.on_the_fly_feats:
+        cuts_dev = cuts_dev.drop_features()
+        validate = K2SpeechRecognitionDataset(
+            cuts_dev,
+            input_strategy=OnTheFlyFeatures(Fbank())
+        )
+    else:
+        validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(
+        cuts_dev,
+        max_duration=max_duration,
+    )
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
