@@ -363,15 +363,10 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-frames',
-        type=int,
-        default=50000,
-        help="Maximum number of feature frames in a single batch.")
-    parser.add_argument(
         '--max-duration',
         type=int,
         default=500.0,
-        help="Maximum pooled recordings duration in a single batch.")
+        help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--warm-step',
         type=int,
@@ -462,7 +457,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-otf')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -538,7 +533,6 @@ def main():
         train_sampler = BucketingSampler(
             cuts_train,
             max_duration=max_duration,
-            # max_frames=max_frames,
             shuffle=True,
             num_buckets=args.num_buckets
         )
@@ -547,7 +541,6 @@ def main():
         train_sampler = SingleCutSampler(
             cuts_train,
             max_duration=max_duration,
-            # max_frames=max_frames,
             shuffle=True,
         )
     logging.info("About to create train dataloader")
@@ -570,7 +563,6 @@ def main():
     valid_sampler = SingleCutSampler(
         cuts_dev,
         max_duration=max_duration,
-        # max_frames=max_frames
     )
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(

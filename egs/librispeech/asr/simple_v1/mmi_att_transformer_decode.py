@@ -169,10 +169,10 @@ def get_parser():
         default=10,
         help="Decoding epoch.")
     parser.add_argument(
-        '--max-frames',
+        '--max-duration',
         type=int,
-        default=100000,
-        help="Maximum number of feature frames in a single batch.")
+        default=1000.0,
+        help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--avg',
         type=int,
@@ -202,11 +202,11 @@ def main():
 
     model_type = args.model_type
     epoch = args.epoch
-    max_frames = args.max_frames
+    max_duration = args.max_duration
     avg = args.avg
     att_rate = args.att_rate
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-otf')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -294,7 +294,7 @@ def main():
 
     logging.debug("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=max_frames)
+    sampler = SingleCutSampler(cuts_test, max_duration=max_duration)
     logging.debug("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
