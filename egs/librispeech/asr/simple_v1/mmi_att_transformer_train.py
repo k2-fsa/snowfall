@@ -449,7 +449,6 @@ def main():
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_frames = args.max_frames
     max_duration = args.max_duration
     accum_grad = args.accum_grad
     den_scale = args.den_scale
