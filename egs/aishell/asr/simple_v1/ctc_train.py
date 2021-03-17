@@ -69,7 +69,7 @@ def get_objf(batch: Dict,
              graph_compiler: CtcTrainingGraphCompiler,
              training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
-    feature = batch['features']
+    feature = batch['inputs']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],

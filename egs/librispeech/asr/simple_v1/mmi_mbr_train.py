@@ -78,7 +78,7 @@ def get_loss(batch: Dict,
              is_training: bool,
              optimizer: Optional[torch.optim.Optimizer] = None):
     assert P.device == device
-    feature = batch['features']
+    feature = batch['inputs']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],

@@ -82,7 +82,7 @@ def get_objf(batch: Dict,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
-    feature = batch['features']
+    feature = batch['inputs']
     supervisions = batch['supervisions']
     subsampling_factor = model.module.subsampling_factor if isinstance(model, DDP) else model.subsampling_factor
     supervision_segments = torch.stack(

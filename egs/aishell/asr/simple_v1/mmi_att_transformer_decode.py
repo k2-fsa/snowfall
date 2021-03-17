@@ -37,7 +37,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
-        feature = batch['features']
+        feature = batch['inputs']
         supervisions = batch['supervisions']
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],

@@ -73,7 +73,7 @@ def get_objf(batch: Dict,
              accum_grad: int = 1,
              att_rate: float = 0.0,
              optimizer: Optional[torch.optim.Optimizer] = None):
-    feature = batch['features']
+    feature = batch['inputs']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
