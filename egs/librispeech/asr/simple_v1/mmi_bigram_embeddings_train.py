@@ -162,7 +162,7 @@ def get_objf(batch: Dict,
         # Now compute the tot_scores for the second pass
         #
         # TODO(fangjun): We probably need to split it into a separate function
-        padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings(
+        padded_embeddings, len_per_path, path_to_seq, num_repeats, _ = compute_embeddings(
             den_lats,
             graph_compiler.ctc_topo,
             dense_fsa_vec_2nd,

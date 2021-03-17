@@ -89,7 +89,7 @@ def main():
     den_lats = k2.intersect_dense(den_graph, dense_fsa_vec, 10.0)
 
     print('-' * 10, 'den_lats', '-' * 10)
-    den_padded_embeddings, den_len_per_path, den_path_to_seq, den_num_repeats = compute_embeddings(
+    den_padded_embeddings, den_len_per_path, den_path_to_seq, den_num_repeats, den_new2old = compute_embeddings(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -116,7 +116,7 @@ def main():
 
     print('den', den_num_repeats)
 
-    den_padded_embeddings2, den_len_per_path2, den_path_to_seq2, den_num_repeats2 = compute_embeddings_deprecated(
+    den_padded_embeddings2, den_len_per_path2, den_path_to_seq2, den_num_repeats2, den_new2old2 = compute_embeddings_deprecated(
         den_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -128,9 +128,10 @@ def main():
     assert torch.allclose(den_len_per_path, den_len_per_path2)
     assert torch.allclose(den_path_to_seq, den_path_to_seq2)
     assert str(den_num_repeats) == str(den_num_repeats2)
+    assert torch.allclose(den_new2old, den_new2old2)
 
     print('-' * 10, 'mbr_lats', '-' * 10)
-    mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq, mbr_num_repeats = compute_embeddings(
+    mbr_padded_embeddings, mbr_len_per_path, mbr_path_to_seq, mbr_num_repeats, mbr_new2old = compute_embeddings(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -157,7 +158,7 @@ def main():
     assert mbr_padded_embeddings.requires_grad is True
     assert mbr_padded_embeddings.dtype == torch.float32
 
-    mbr_padded_embeddings2, mbr_len_per_path2, mbr_path_to_seq2, mbr_num_repeats2 = compute_embeddings_deprecated(
+    mbr_padded_embeddings2, mbr_len_per_path2, mbr_path_to_seq2, mbr_num_repeats2, mbr_new2old2 = compute_embeddings_deprecated(
         mbr_lats,
         graph_compiler.ctc_topo,
         dense_fsa_vec,
@@ -168,6 +169,7 @@ def main():
     assert torch.allclose(mbr_len_per_path, mbr_len_per_path2)
     assert torch.allclose(mbr_path_to_seq, mbr_path_to_seq2)
     assert str(mbr_num_repeats) == str(mbr_num_repeats2)
+    assert torch.allclose(mbr_new2old, mbr_new2old2)
 
     print('mbr', mbr_num_repeats)
     print(mbr_padded_embeddings.sum())

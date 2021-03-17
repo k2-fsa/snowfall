@@ -16,6 +16,7 @@ from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse.utils import fix_random_seed
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import invert_permutation
@@ -85,8 +86,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
             best_paths = k2.shortest_path(lattices, use_double_scores=True)
         else:
-            # FIXME(fangjun): increase num_paths and fix `num_repeats` in rescore.py
-            paths = get_paths(lats=lattices, num_paths=1)
+            paths = get_paths(lats=lattices, num_paths=10)
             word_fsas, seq_to_path_shape = get_word_fsas(lattices, paths)
             replicated_lats = k2.index(lattices, seq_to_path_shape.row_ids(1))
             word_lats = k2.compose(replicated_lats,
@@ -184,10 +184,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                     float(num_cuts) / tot_num_cuts * 100))
 
         num_cuts += len(texts)
-
-        # FIXME(fangjun): remove it
-        if batch_idx == 50:
-            break
+        if batch_idx == 140: break
 
     return results
 
@@ -275,6 +272,8 @@ def main():
         setup_logger('{}/log/log-decode-second'.format(exp_dir), log_level='debug')
     else:
         setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
+
+    fix_random_seed(42)
 
     logging.info(f'enable second pass model for decoding: {args.enable_second_pass_decoding}')
 

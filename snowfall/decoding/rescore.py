@@ -117,7 +117,9 @@ def rescore(lats: k2.Fsa,
     #    0 <= path_to_seq[i] < num_seqs
     #
     # num_repeats is a k2.RaggedInt with two axes [seq][path_multiplicities]
-    padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings_from_phone_seqs(
+    #
+    # CAUTION: Paths within a seq are reordered due to `k2.ragged.unique_sequences`.
+    padded_embeddings, len_per_path, path_to_seq, num_repeats, new2old = compute_embeddings_from_phone_seqs(
         phone_seqs=phone_seqs,
         ctc_topo=ctc_topo,
         dense_fsa_vec=dense_fsa_vec,
@@ -142,31 +144,36 @@ def rescore(lats: k2.Fsa,
     indices2 = torch.argsort(len_per_path, descending=True)
     second_pass_supervision_segments = second_pass_supervision_segments[
         indices2]
-    # note that path_to_seq is not changed!
-    # no need to modify second_pass_out
+    # Note that path_to_seq is not changed!
+    # No need to modify second_pass_out
 
     num_repeats_float = k2.ragged.RaggedFloat(
         num_repeats.shape(),
         num_repeats.values().to(torch.float32))
     path_weight = k2.ragged.normalize_scores(num_repeats_float,
                                              use_log=False).values
-    path_weight = path_weight[indices2]
 
     second_pass_dense_fsa_vec = k2.DenseFsaVec(
         second_pass_out, second_pass_supervision_segments)
 
     second_pass_lattices = k2.intersect_dense_pruned(
-        decoding_graph, second_pass_dense_fsa_vec, 20.0, 7.0, 30, 10000)
+        decoding_graph, second_pass_dense_fsa_vec, 20.0, 7.0, 30, 20000)
+
+    #  second_pass_lattices = k2.intersect_dense(decoding_graph,
+    #                                            second_pass_dense_fsa_vec, 10.0)
 
     tot_scores = second_pass_lattices.get_tot_scores(
         log_semiring=True, use_double_scores=use_double_scores)
 
     inverted_indices2 = invert_permutation(indices2)
     tot_scores_2nd = tot_scores[inverted_indices2]
-    # now tot_scores_2nd[i] corresponds to path_i
+    # Now tot_scores_2nd[i] corresponds to sorted_path_i
+    # `sorted` here is due to k2.ragged.unique_sequences.
+    # We have to use `new2old` to map it to the original unsorted path
 
-    # FIXME(fangjun): Handle the case when num_repeats contains entries > 1
-    tot_scores = tot_scores_1st + tot_scores_2nd
+    # Note that path_weight was not reordered
+    tot_scores = tot_scores_1st
+    tot_scores[new2old.long()] += tot_scores_2nd * path_weight
     ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
                                        tot_scores.to(torch.float32))
     argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)

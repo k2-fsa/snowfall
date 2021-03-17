@@ -73,7 +73,7 @@ def compute_expected_times(
         dense_fsa_vec: k2.DenseFsaVec,
         use_double_scores: bool = True,
         debug: bool = False
-) -> Tuple[torch.Tensor, k2.Fsa, torch.Tensor, k2.RaggedInt]:
+) -> Tuple[torch.Tensor, k2.Fsa, torch.Tensor, k2.RaggedInt, torch.Tensor]:
     '''
     Args:
       phone_seqs:
@@ -96,11 +96,13 @@ def compute_expected_times(
         - phone_fsas, an FsaVec with indexes [path][phones]
         - path_to_seq_map, 1-D torch.Tensor
         - num_repeats, a k2.RaggedInt with 2 axes [path][multiplicities]
+        - new2old, a 1-D torch.Tensor, see :func:`k2.ragged.unique_sequences`
     '''
     device = ctc_topo.device
 
     if phone_seqs.num_axes() == 3:
-        phone_seqs, num_repeats = k2.ragged.unique_sequences(phone_seqs, True)
+        phone_seqs, num_repeats, new2old = k2.ragged.unique_sequences(
+            phone_seqs, True, True)
 
         # Remove the 1st axis from `phone_seqs` (that corresponds to `seq`) and
         # keep it for later; we'll be processing paths separately.
@@ -128,6 +130,7 @@ def compute_expected_times(
 
         seq_to_path_shape = num_repeats_shape
         path_to_seq_map = seq_to_path_shape.row_ids(1)  # an identity map
+        new2old = path_to_seq_map
 
     # now compile decoding graphs corresponding to `phone_seqs` by constructing
     # fsas from them (remember we already have the final -1's!) and composing
@@ -242,7 +245,7 @@ def compute_expected_times(
     # TODO(fangjun): do we need to support `torch.int32` for the indexing
     expected_times[first_epsilon_offset[:-1].long()] = 0
 
-    return expected_times, phone_fsas, path_to_seq_map, num_repeats
+    return expected_times, phone_fsas, path_to_seq_map, num_repeats, new2old
 
 
 def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
@@ -358,8 +361,8 @@ def compute_embeddings_from_phone_seqs(
         dense_fsa_vec: k2.DenseFsaVec,
         max_phone_id: int,
         use_double_scores: bool = True,
-        debug: bool = True
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
+        debug: bool = True) -> Tuple[torch.Tensor, torch.Tensor, torch.
+                                     Tensor, k2.RaggedInt, torch.Tensor]:
     '''
     Args:
       phone_seqs:
@@ -384,7 +387,7 @@ def compute_embeddings_from_phone_seqs(
         - num_repeats, a ragged tensor of type k2.RaggedInt with 2
           axes [path][multiplicities]
     '''
-    expected_times, phone_fsas, path_to_seq_map, num_repeats = compute_expected_times(  # noqa
+    expected_times, phone_fsas, path_to_seq_map, num_repeats, new2old = compute_expected_times(  # noqa
         phone_seqs=phone_seqs,
         ctc_topo=ctc_topo,
         dense_fsa_vec=dense_fsa_vec,
@@ -420,19 +423,19 @@ def compute_embeddings_from_phone_seqs(
     padded_embeddings = torch.nn.utils.rnn.pad_sequence(embeddings_per_path,
                                                         batch_first=True)
 
-    return padded_embeddings.to(
-        torch.float32), len_per_path.cpu(), path_to_seq_map, num_repeats
+    return padded_embeddings.to(torch.float32), len_per_path.cpu(
+    ), path_to_seq_map, num_repeats, new2old
 
 
-def compute_embeddings(
-        lats: k2.Fsa,
-        ctc_topo: k2.Fsa,
-        dense_fsa_vec: k2.DenseFsaVec,
-        max_phone_id: int,
-        use_double_scores: bool = True,
-        num_paths: int = 3,
-        debug: bool = False
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
+def compute_embeddings(lats: k2.Fsa,
+                       ctc_topo: k2.Fsa,
+                       dense_fsa_vec: k2.DenseFsaVec,
+                       max_phone_id: int,
+                       use_double_scores: bool = True,
+                       num_paths: int = 3,
+                       debug: bool = False
+                      ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.
+                                 RaggedInt, torch.Tensor]:
     '''
     Args:
       lats:
@@ -476,8 +479,8 @@ def compute_embeddings_deprecated(
         max_phone_id: int,
         use_double_scores=True,
         num_paths=100,
-        debug=False
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.RaggedInt]:
+        debug=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, k2.
+                              RaggedInt, torch.Tensor]:
     '''Compute embeddings for an n-best list.
 
     See the following comments for more information:
@@ -508,6 +511,7 @@ def compute_embeddings_deprecated(
           before padding
         - path_to_seq_map, its shape is (num_paths,)
         - num_repeats (k2.RaggedInt)
+        - new2old, a 1-D torch.Tensor, see :func:`k2.ragged.unique_sequences`
     '''
     device = lats.device
     assert len(lats.shape) == 3
@@ -541,7 +545,8 @@ def compute_embeddings_deprecated(
 
     # Remove repeated sequences from `phone_seqs`
     #
-    phone_seqs, num_repeats = k2.ragged.unique_sequences(phone_seqs, True)
+    phone_seqs, num_repeats, new2old = k2.ragged.unique_sequences(
+        phone_seqs, True, True)
 
     # Remove the 1st axis from `phone_seqs` (that corresponds to `seq`) and
     # keep it for later, we'll be processing paths separately.
@@ -781,5 +786,5 @@ def compute_embeddings_deprecated(
 
     # It used `double` for `get_arc_post`, but the network input requires
     # torch.float32
-    return padded_embeddings.to(
-        torch.float32), len_per_path.cpu(), path_to_seq_map, num_repeats
+    return padded_embeddings.to(torch.float32), len_per_path.cpu(
+    ), path_to_seq_map, num_repeats, new2old

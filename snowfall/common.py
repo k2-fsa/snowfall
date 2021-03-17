@@ -21,7 +21,7 @@ Pathlike = Union[str, Path]
 def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: bool = True) -> None:
     now = datetime.now()
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
-    log_filename = '{}-{}'.format(log_filename, date_time)
+    log_filename = '{}-{}.txt'.format(log_filename, date_time)
     os.makedirs(os.path.dirname(log_filename), exist_ok=True)
     formatter = '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
     level = logging.ERROR
