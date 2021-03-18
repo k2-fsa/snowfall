@@ -8,6 +8,7 @@ import logging
 import numpy as np
 import os
 import torch
+import k2.fsa_properties as fsa_properties
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
 from pathlib import Path
@@ -82,16 +83,20 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         lattices = k2.intersect_dense_pruned(LG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        if not enable_second_pass_decoding:
-            # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
-            best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        else:
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        if True and enable_second_pass_decoding:
+            del best_paths
             paths = get_paths(lats=lattices, num_paths=10)
             word_fsas, seq_to_path_shape = get_word_fsas(lattices, paths)
             replicated_lats = k2.index(lattices, seq_to_path_shape.row_ids(1))
             word_lats = k2.compose(replicated_lats,
                                    word_fsas,
                                    treat_epsilons_specially=False)
+            if word_lats.properties & fsa_properties.TOPSORTED_AND_ACYCLIC != fsa_properties.TOPSORTED_AND_ACYCLIC:
+                word_lats = k2.top_sort(k2.connect(word_lats.to('cpu'))).to(device)
+
+            assert word_lats.properties & fsa_properties.TOPSORTED_AND_ACYCLIC == fsa_properties.TOPSORTED_AND_ACYCLIC
+
             tot_scores_1st = word_lats.get_tot_scores(use_double_scores=True,
                                                       log_semiring=True)
 
@@ -113,7 +118,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
             # see ./mmi_bigram_embeddings_train.py for the meanings of the
             # returned values
-            padded_embeddings, len_per_path, path_to_seq, num_repeats = compute_embeddings_from_phone_seqs(
+            padded_embeddings, len_per_path, path_to_seq, num_repeats, _ = compute_embeddings_from_phone_seqs(
                 phone_seqs=phone_seqs,
                 ctc_topo=ctc_topo,
                 dense_fsa_vec=dense_fsa_vec_2nd,
@@ -184,7 +189,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                     float(num_cuts) / tot_num_cuts * 100))
 
         num_cuts += len(texts)
-        if batch_idx == 140: break
 
     return results
 

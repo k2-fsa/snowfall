@@ -184,12 +184,6 @@ def rescore(lats: k2.Fsa,
     aux_labels = k2.index(lats.aux_labels, best_paths.values())
     labels = k2.ragged.remove_values_eq(labels, -1)
     best_paths = k2.linear_fsa(labels)
-    try:
-        best_paths.aux_labels = aux_labels
-    except:
-        print('labels', best_paths.labels.shape)
-        print('aux_labels', aux_labels.dim0())
-        print('shape', best_paths.values().shape)
-        raise
+    best_paths.aux_labels = aux_labels
 
     return best_paths
