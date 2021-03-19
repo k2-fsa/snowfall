@@ -1,12 +1,15 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 
+import logging
 import k2
 import k2.fsa_properties as fsa_properties
 import torch
 
 from snowfall.common import invert_permutation
 from snowfall.training.compute_embeddings import compute_embeddings_from_phone_seqs
+from snowfall.training.compute_embeddings import create_phone_fsas
 from snowfall.training.compute_embeddings import generate_nbest_list_phone_seqs
+from snowfall.decoding.util import get_log_probs
 
 
 def get_paths(lats: k2.Fsa, num_paths: int,
@@ -141,6 +144,14 @@ def rescore(lats: k2.Fsa,
     second_pass_out = second_pass_out.permute(0, 2, 1)
     # now second_pass_out is of shape [N, T, C]
 
+    if True:
+        phone_seqs, _, _ = k2.ragged.unique_sequences(phone_seqs, True, True)
+        phone_seqs = k2.ragged.remove_axis(phone_seqs, 0)
+        phone_fsas = create_phone_fsas(phone_seqs)
+        phone_fsas = k2.add_epsilon_self_loops(phone_fsas)
+
+        probs = get_log_probs(phone_fsas, second_pass_out, len_per_path)
+
     second_pass_supervision_segments = torch.stack(
         (torch.arange(len_per_path.numel(), dtype=torch.int32),
          torch.zeros_like(len_per_path), len_per_path),
@@ -162,7 +173,7 @@ def rescore(lats: k2.Fsa,
         second_pass_out, second_pass_supervision_segments)
 
     second_pass_lattices = k2.intersect_dense_pruned(
-        decoding_graph, second_pass_dense_fsa_vec, 20.0, 7.0, 30, 20000)
+        decoding_graph, second_pass_dense_fsa_vec, 20.0, 10.0, 300, 10000)
 
     # The number of FSAs in the second_pass_lattices may not
     # be equal to the number of paths since repeated paths are removed
@@ -191,10 +202,31 @@ def rescore(lats: k2.Fsa,
         tot_scores_2nd_num = reorded_lats.get_tot_scores(
             use_double_scores=True, log_semiring=True)
 
+        for k in [0, 1, 2, 30, 40, 50]:
+            pk, _ = k2.ragged.index(probs, torch.tensor([k],
+                                                        dtype=torch.int32))
+            assert pk.num_elements() == len_per_path[k]
+            logging.info(
+                f'\npath: {k}\ntot_scores: {tot_scores_2nd_num[k]}\nlog_probs:{str(pk)}'
+            )
+
         tot_scores_2nd_den = second_pass_lattices.get_tot_scores(
             log_semiring=True, use_double_scores=use_double_scores)
 
         tot_scores_2nd = tot_scores_2nd_num - tot_scores_2nd_den
+
+        #  print(
+        #      'word',
+        #      reordered_word_fsas.arcs.row_splits(1)[1:] -
+        #      reordered_word_fsas.arcs.row_splits(1)[:-1])
+        #  print(
+        #      reorded_lats.arcs.row_splits(1)[1:] -
+        #      reorded_lats.arcs.row_splits(1)[:-1])
+        print('2 num', tot_scores_2nd_num)
+        print('2 den', tot_scores_2nd_den)
+
+        import sys
+        sys.exit(0)
     else:
         tot_scores_2nd = second_pass_lattices.get_tot_scores(
             use_double_scores=True, log_semiring=True)
@@ -209,6 +241,7 @@ def rescore(lats: k2.Fsa,
     ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
                                        tot_scores.to(torch.float32))
     argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)
+    print(argmax_indexes)
     # argmax_indexes may contain -1. This case happens
     # when a sublist contains all -inf
     argmax_indexes = torch.clamp(argmax_indexes, min=0)
