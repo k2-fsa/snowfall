@@ -1,6 +1,7 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 
 import k2
+import k2.fsa_properties as fsa_properties
 import torch
 
 from snowfall.common import invert_permutation
@@ -65,6 +66,7 @@ def get_word_fsas(lats: k2.Fsa, paths: k2.RaggedInt) -> k2.Fsa:
 @torch.no_grad()
 def rescore(lats: k2.Fsa,
             paths: k2.RaggedInt,
+            word_fsas: k2.Fsa,
             tot_scores_1st: torch.Tensor,
             seq_to_path_shape: k2.RaggedShape,
             ctc_topo: k2.Fsa,
@@ -79,6 +81,8 @@ def rescore(lats: k2.Fsa,
         Lattice from the 1st pass decoding with indexes [seq][state][arc].
       paths:
         An FsaVec returned by :func:`get_paths`.
+      word_fsas:
+        An FsaVec returned by :func:`get_word_fsas`.
       tot_scores_1st:
         Total scores of the paths from the 1st pass.
       ctc_topo:
@@ -96,6 +100,7 @@ def rescore(lats: k2.Fsa,
     Returns:
       Return the best_paths of each seq after rescoring.
     '''
+    device = lats.device
     assert hasattr(lats, 'phones')
     assert paths.num_axes() == 3
 
@@ -159,14 +164,41 @@ def rescore(lats: k2.Fsa,
     second_pass_lattices = k2.intersect_dense_pruned(
         decoding_graph, second_pass_dense_fsa_vec, 20.0, 7.0, 30, 20000)
 
-    #  second_pass_lattices = k2.intersect_dense(decoding_graph,
-    #                                            second_pass_dense_fsa_vec, 10.0)
-
-    tot_scores = second_pass_lattices.get_tot_scores(
-        log_semiring=True, use_double_scores=use_double_scores)
+    # The number of FSAs in the second_pass_lattices may not
+    # be equal to the number of paths since repeated paths are removed
+    # by k2.ragged.unique_sequences
 
     inverted_indices2 = invert_permutation(indices2)
-    tot_scores_2nd = tot_scores[inverted_indices2]
+
+    second_pass_lattices = k2.index(
+        second_pass_lattices,
+        inverted_indices2.to(torch.int32).to(device))
+    # now second_pass_lattices corresponds to the reordered paths
+    # (due to k2.ragged.unique_sequences)
+
+    if True:
+        reordered_word_fsas = k2.index(word_fsas, new2old)
+
+        reorded_lats = k2.compose(second_pass_lattices,
+                                  reordered_word_fsas,
+                                  treat_epsilons_specially=False)
+
+        if reorded_lats.properties & fsa_properties.TOPSORTED_AND_ACYCLIC != fsa_properties.TOPSORTED_AND_ACYCLIC:
+            reorded_lats = k2.top_sort(k2.connect(
+                reorded_lats.to('cpu'))).to(device)
+
+        # note some entries in `tot_scores_2nd_num` is -inf !!!
+        tot_scores_2nd_num = reorded_lats.get_tot_scores(
+            use_double_scores=True, log_semiring=True)
+
+        tot_scores_2nd_den = second_pass_lattices.get_tot_scores(
+            log_semiring=True, use_double_scores=use_double_scores)
+
+        tot_scores_2nd = tot_scores_2nd_num - tot_scores_2nd_den
+    else:
+        tot_scores_2nd = second_pass_lattices.get_tot_scores(
+            use_double_scores=True, log_semiring=True)
+
     # Now tot_scores_2nd[i] corresponds to sorted_path_i
     # `sorted` here is due to k2.ragged.unique_sequences.
     # We have to use `new2old` to map it to the original unsorted path
@@ -177,6 +209,10 @@ def rescore(lats: k2.Fsa,
     ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
                                        tot_scores.to(torch.float32))
     argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)
+    # argmax_indexes may contain -1. This case happens
+    # when a sublist contains all -inf
+    argmax_indexes = torch.clamp(argmax_indexes, min=0)
+
     paths = k2.ragged.remove_axis(paths, 0)
 
     best_paths = k2.index(paths, argmax_indexes)

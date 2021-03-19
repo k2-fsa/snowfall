@@ -102,6 +102,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
             best_paths = rescore(lats=lattices,
                                  paths=paths,
+                                 word_fsas=word_fsas,
                                  tot_scores_1st=tot_scores_1st,
                                  seq_to_path_shape=seq_to_path_shape,
                                  ctc_topo=ctc_topo,
