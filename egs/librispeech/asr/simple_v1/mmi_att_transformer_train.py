@@ -494,8 +494,8 @@ def main():
     cuts_train = CutSet.from_json(feature_dir / 'cuts_train-clean-100.json.gz')
     if args.full_libri:
         cuts_train = (
-            cuts_train + 
-            CutSet.from_json(feature_dir / 'cuts_train-clean-360.json.gz') + 
+            cuts_train +
+            CutSet.from_json(feature_dir / 'cuts_train-clean-360.json.gz') +
             CutSet.from_json(feature_dir / 'cuts_train-other-500.json.gz')
         )
     logging.info("About to get dev cuts")
@@ -598,7 +598,7 @@ def main():
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
-            
+
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)

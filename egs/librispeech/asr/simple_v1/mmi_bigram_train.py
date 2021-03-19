@@ -333,14 +333,18 @@ def main():
             L_inv = k2.arc_sort(L.invert_())
             torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
+    device_id = args.local_rank
+    device = torch.device('cuda', device_id)
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
-        words=word_symbol_table
+        words=word_symbol_table,
+        device=device
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
+    P = P.to(device)
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -406,8 +410,6 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = args.local_rank
-    device = torch.device('cuda', device_id)
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
@@ -444,7 +446,7 @@ def main():
             optimizer=optimizer,
             gamma=lr_schedule_gamma
         )
-    
+
     best_objf = np.inf
     best_valid_objf = np.inf
     best_epoch = start_epoch
