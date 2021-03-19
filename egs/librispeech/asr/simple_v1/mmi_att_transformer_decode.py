@@ -296,9 +296,7 @@ def main():
     feature_dir = Path('exp/data')
     test_sets = ['test-clean', 'test-other']
     for test_set in test_sets:
-        logging.info('*' * 80)
-        logging.info(f'* DECODING: {test_set:*<68}')
-        logging.info('*' * 80)
+        logging.info(f'* DECODING: {test_set}')
 
         logging.debug("About to get test cuts")
         cuts_test = load_manifest(feature_dir / f'cuts_{test_set}.json.gz')
