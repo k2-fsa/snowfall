@@ -21,7 +21,7 @@ from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet, Fbank
+from lhotse import CutSet, Fbank, load_manifest
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
@@ -491,17 +491,20 @@ def main():
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir / 'cuts_train-clean-100.json.gz')
+    cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
     if args.full_libri:
         cuts_train = (
             cuts_train +
-            CutSet.from_json(feature_dir / 'cuts_train-clean-360.json.gz') +
-            CutSet.from_json(feature_dir / 'cuts_train-other-500.json.gz')
+            load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
+            load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
         )
     logging.info("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
+    cuts_dev = (
+        load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
+        load_manifest(feature_dir / 'cuts_dev-other.json.gz')
+    )
     logging.info("About to get Musan cuts")
-    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
+    cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]

@@ -11,7 +11,7 @@ import torch
 from datetime import datetime
 from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from snowfall.models import AcousticModel
 
@@ -310,3 +310,10 @@ def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
 
 def find_first_disambig_symbol(symbols: k2.SymbolTable) -> int:
     return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
+
+
+def store_transcripts(path: Pathlike, texts: Iterable[Tuple[str, str]]):
+    with open(path, 'w') as f:
+        for ref, hyp in texts:
+            print(f'ref={ref}', file=f)
+            print(f'hyp={hyp}', file=f)

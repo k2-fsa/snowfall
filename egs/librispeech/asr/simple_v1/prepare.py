@@ -76,13 +76,13 @@ def get_parser():
     return parser
 
 
-
 def main():
     args = get_parser().parse_args()
     if args.full_libri:
-        dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100', 'train-clean-360', 'train-other-500')
+        dataset_parts = ('dev-clean', 'dev-other', 'test-clean', 'test-other',
+                         'train-clean-100', 'train-clean-360', 'train-other-500')
     else:
-        dataset_parts = ('dev-clean', 'test-clean', 'train-clean-100')
+        dataset_parts = ('dev-clean', 'dev-other', 'test-clean', 'test-other', 'train-clean-100')
 
     print("Parts we will prepare: ", dataset_parts)
 
