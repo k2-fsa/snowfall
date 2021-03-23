@@ -177,7 +177,7 @@ def get_objf(batch: Dict,
         #   len_per_path.shape[0] == padded_embeddings.shape[0]
         #   max(len_per_path) == padded_embeddings.shape[1]
         #
-        # path_to_seq is a 1-D tensor. path_to_seq[i] is the seq that path_i belongs to
+        # path_to_seq is a 1-D tensor. path_to_seq[i] is the seq that path_i belongs to.
         # Each seq contains at most `num_paths`.
         #
         # num_repeats is a ragged tensor with two axes. num_repeats.dim0() ==  num_seqs
@@ -209,8 +209,8 @@ def get_objf(batch: Dict,
              torch.zeros_like(len_per_path), len_per_path),
             dim=1)
 
-        # k2.intersect_dense requires that the DenseFsaVec is sorted in descending order
-        # the name `indices` is already occupied above, we use `indices2` here to avoid confusion
+        # k2.intersect_dense requires that the DenseFsaVec is sorted in descending order.
+        # The name `indices` is already occupied above, we use `indices2` here to avoid confusion
         indices2 = torch.argsort(len_per_path, descending=True)
         assert indices2.shape[0] == second_pass_supervision_segments.shape[0]
         assert indices2.shape[0] == path_to_seq.shape[0]
@@ -594,21 +594,11 @@ def main():
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     # it consist of three parts
-    #  (1) len(phone_ids) + 1
-    #  (2) graph_compiler.max_phone_id + 2
-    #  (3) 1
-    num_embedding_features = len(phone_ids) + 1 + graph_compiler.max_phone_id + 3
+    #  (1) len(phone_ids) + 1, i.e., the output dim of the first pass network
+    #  (2) graph_compiler.max_phone_id + 1 (for one-hot encoding)
+    #  (3) 1 (for duration)
+    num_embedding_features = len(phone_ids) + 1 + graph_compiler.max_phone_id + 1 + 1
     second_pass_model = Tdnn2aEmbedding(num_features=num_embedding_features, num_classes=len(phone_ids)+1)
-
-    # TODO(fangjun):
-    #  (1) save second_pass_model to checkpoint
-    #  (2) load second_pass_model from checkpoint
-    #  (3) compute embeddings from the 1st pass output
-    #  (4) pass embeddings to the second_pass_model
-    #  (5) compute another MMI loss, where the total_scores
-    #      are computed from the weighted sum of different
-    #      paths' total_scores. The weight is
-    #      (num_copies_this_path / num_paths_this_seq)
 
     start_epoch = 0
     num_epochs = 10

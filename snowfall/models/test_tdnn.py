@@ -32,7 +32,7 @@ def test_tdnn2a_embedding_case_2():
     num_classes = 8
     model = Tdnn2aEmbedding(num_features=num_features, num_classes=num_classes)
 
-    feature_length = [3, 8, 10, 6]
+    feature_length = [100, 200, 500, 90]
     N = len(feature_length)
     max_T = max(feature_length)
     features = []

@@ -140,51 +140,49 @@ class Tdnn2aEmbedding(AcousticModel):
 
     def __init__(self, num_features: int, num_classes: int) -> None:
         super().__init__()
-        self.num_features = num_classes
+        self.num_features = num_features
         self.num_classes = num_classes
         self.subsampling_factor = 1
-        # left context: 1 + 1 + 3 + 3 = 8
-        # right context: 1 + 1 + 3 + 3 = 8
+        # left context: 2 + 4 + 8 + 16 = 40
+        # right context: 2 + 4 + 8 + 16 = 40
         self.tdnn2 = nn.Sequential(
+            # conv0
             nn.Conv1d(in_channels=num_features,
-                      out_channels=500,
-                      kernel_size=3,
-                      stride=1,
-                      padding=1),
+                      out_channels=128,
+                      kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(num_features=500, affine=False),
-            #
-            nn.Conv1d(in_channels=500,
-                      out_channels=500,
-                      kernel_size=3,
-                      stride=1,
-                      padding=1),
+            # conv1, left context 2
+            nn.Conv1d(in_channels=128,
+                      out_channels=128,
+                      kernel_size=5,
+                      dilation=1,
+                      padding=2),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(num_features=500, affine=False),
-            #
-            nn.Conv1d(in_channels=500,
-                      out_channels=2000,
-                      kernel_size=3,
-                      stride=1,
-                      dilation=3,
-                      padding=3),
+            # conv2, left context 4
+            nn.Conv1d(in_channels=128,
+                      out_channels=128,
+                      kernel_size=5,
+                      dilation=2,
+                      padding=4),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(num_features=2000, affine=False),
-            #
-            nn.Conv1d(in_channels=2000,
-                      out_channels=2000,
-                      kernel_size=3,
-                      stride=1,
-                      dilation=3,
-                      padding=3),
+            # conv3, left context 8
+            nn.Conv1d(in_channels=128,
+                      out_channels=128,
+                      kernel_size=5,
+                      dilation=4,
+                      padding=8),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(num_features=2000, affine=False),
+            # conv4, left context 16
+            nn.Conv1d(in_channels=128,
+                      out_channels=128,
+                      kernel_size=5,
+                      dilation=8,
+                      padding=16),
+            nn.ReLU(inplace=True),
             #
-            nn.Conv1d(in_channels=2000,
+            nn.Conv1d(in_channels=128,
                       out_channels=num_classes,
-                      kernel_size=1,
-                      stride=1,
-                      padding=0),
+                      kernel_size=1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

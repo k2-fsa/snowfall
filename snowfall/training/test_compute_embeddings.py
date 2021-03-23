@@ -98,9 +98,11 @@ def main():
         debug=True)
     assert den_padded_embeddings.ndim == 3
     assert den_padded_embeddings.shape[1] == den_len_per_path.max()
-    assert den_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] -
-                                              1 + graph_compiler.max_phone_id +
-                                              2 + 1)
+    # -1 because we remove the 0th column of dense_fsa_vec.scores
+    # +1, the one_hot encoding includes an extra blank symbol
+    # +1, expected time is used as one column of the embedding
+    assert den_padded_embeddings.shape[2] == \
+            dense_fsa_vec.scores.shape[1] - 1 + graph_compiler.max_phone_id + 1 + 1
     assert den_padded_embeddings.shape[0] == den_len_per_path.shape[0]
     assert den_padded_embeddings.shape[0] == den_path_to_seq.shape[0]
     assert 0 <= den_path_to_seq.max() < supervision_segments.shape[0]
@@ -141,9 +143,11 @@ def main():
 
     assert mbr_padded_embeddings.ndim == 3
     assert mbr_padded_embeddings.shape[1] == mbr_len_per_path.max()
-    assert mbr_padded_embeddings.shape[2] == (dense_fsa_vec.scores.shape[1] -
-                                              1 + graph_compiler.max_phone_id +
-                                              2 + 1)
+    # -1 because we remove the 0th column of dense_fsa_vec.scores
+    # +1, the one_hot encoding includes blank
+    # +1, expected time is used as one column of the embedding
+    assert mbr_padded_embeddings.shape[2] == \
+            dense_fsa_vec.scores.shape[1] - 1 + graph_compiler.max_phone_id + 1 + 1
 
     assert mbr_padded_embeddings.shape[0] == mbr_len_per_path.shape[0]
     assert mbr_padded_embeddings.shape[0] == mbr_path_to_seq.shape[0]

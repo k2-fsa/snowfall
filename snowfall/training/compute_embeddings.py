@@ -4,9 +4,32 @@
 
 from typing import Tuple
 
+import k2
+import numpy as np
 import torch
 
-import k2
+
+def delete_rows(src: torch.Tensor,
+                rows_to_delete: torch.Tensor) -> torch.Tensor:
+    '''Delete specified rows from a tensor.
+    Args:
+      src:
+        The source tensor.
+      rows_to_delete:
+        A 1-D tensor containing the row indexes to delete
+    Returns:
+      A tensor without specified rows in `src`.
+    '''
+    assert rows_to_delete.ndim == 1
+
+    rows_to_delete = rows_to_delete.cpu().numpy()
+
+    all_rows = np.arange(src.shape[0])
+    kept_rows = np.delete(all_rows, rows_to_delete)
+    kept_rows = torch.from_numpy(kept_rows).to(src.device)
+
+    ans = torch.index_select(src, dim=0, index=kept_rows)
+    return ans
 
 
 def create_phone_fsas(phone_seqs: k2.RaggedInt) -> k2.Fsa:
@@ -83,15 +106,15 @@ def compute_expected_times(
       ctc_topo:
         The return value of :func:`build_ctc_topo`.
       dense_fsa_vec:
-        It contains nnet_output. It is from the extra layer added
-        to the 1st pass model that is placed before LSTM layers.
+        It contains nnet_output (without log-softmax). It is from the extra
+        layer added to the 1st pass model that is placed before LSTM layers.
       use_double_scores:
         True to use double precision in `get_arc_post`;
         False to use single precision.
       debug:
         Some checks are enabled if `debug` is True.
     Returns:
-      Return a tuple containing 4 entries:
+      Return a tuple containing 5 entries:
         - expected_times, 1-D torch.Tensor indexed by pathphone_idx
         - phone_fsas, an FsaVec with indexes [path][phones]
         - path_to_seq_map, 1-D torch.Tensor
@@ -101,6 +124,8 @@ def compute_expected_times(
     device = ctc_topo.device
 
     if phone_seqs.num_axes() == 3:
+        # CAUTION: `k2.ragged.unique_sequences` reorders paths within a seq
+        # even if no path is removed
         phone_seqs, num_repeats, new2old = k2.ragged.unique_sequences(
             phone_seqs, True, True)
 
@@ -175,13 +200,16 @@ def compute_expected_times(
 
     if debug:
         seq_len = seqs_shape.row_splits(1)[1:] - seqs_shape.row_splits(1)[:-1]
-        indexes = torch.argsort(seq_len, descending=True)
-        identity = torch.arange(0, indexes.numel()).to(indexes)
+        for i in range(1, seq_len.shape[0]):
+            assert seq_len[i - 1] >= seq_len[i]
+        #  indexes = torch.argsort(seq_len, descending=True)
+        #  identity = torch.arange(0, indexes.numel()).to(indexes)
         # The following assert may not hold because `torch.argsort`
-        # is not a stable sort
+        # is not a stable sort. That is, indexes is not an identity map
+        # even if seq_len is in sorted order
         #  assert torch.all(torch.eq(indexes, identity))
 
-    # We can map from seqframe_idx  for paths, to seqframe_idx for seqs,
+    # We can map from seqframe_idx for paths, to seqframe_idx for seqs,
     # by adding path_offsets.  path_offsets is indexed by path-index.
     path_offsets = path_starts - k2.index(seq_starts, path_to_seq_map)
 
@@ -245,14 +273,17 @@ def compute_expected_times(
     # TODO(fangjun): do we need to support `torch.int32` for the indexing
     expected_times[first_epsilon_offset[:-1].long()] = 0
 
+    # Later we will discard values belonging to arcs that entering the final state
+    #  expected_times = delete_rows(expected_times, first_epsilon_offset[1:] - 1)
+
     return expected_times, phone_fsas, path_to_seq_map, num_repeats, new2old
 
 
 def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
                                         phone_fsas: k2.Fsa,
                                         dense_fsa_vec: k2.DenseFsaVec,
-                                        path_to_seq_map: torch.Tensor
-                                       ) -> torch.Tensor:
+                                        path_to_seq_map: torch.Tensor,
+                                        debug: bool) -> torch.Tensor:
     '''
     Args:
       expected_times:
@@ -263,9 +294,12 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
         It contains nnet_output.
       path_to_seq_map:
         An 1-D torch.Tensor returned by :func:`compute_expected_times`.
+      debug:
+        If True, some assertions are enabled.
     Returns:
       A 2-D torch.Tensor.
     '''
+    assert expected_times.numel() == phone_fsas.arcs.num_elements()
     # by seq we mean the original sequence indexes, by path we mean the indexes
     # of the n-best paths; path_to_seq_map maps from path-index to seq-index.
     seqs_shape = dense_fsa_vec.dense_fsa_vec.shape()
@@ -312,7 +346,7 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
     low_scores = k2.index(scores, low.to(torch.int32))
     #  high_scores = k2.index(scores, high.to(torch.int32))
 
-    # It can happen that `high_scores` contain fake nnet_output,
+    # It can happen that `high_scores` contains faked nnet_output,
     # i.e., scores for arcs entering the final state are
     # [0, -inf, -inf, ..., ]
     #  embedding_scores = low_scores * low_scale.unsqueeze(
@@ -321,14 +355,19 @@ def compute_embeddings_from_nnet_output(expected_times: torch.Tensor,
     # FIXME(fangjun): Use linear interpolation
     embedding_scores = low_scores
 
-    # set `embedding_scores` of arcs entering final states to 0
-    embedding_scores[(first_epsilon_offset[1:] - 1).long()] = 0
+    if debug:
+        # Make sure that it does not take the faked nnet_output
+        assert torch.isfinite(embedding_scores.sum()).item() is False
+
+    # remove `embedding_scores` for arcs entering final states
+    embedding_scores = delete_rows(embedding_scores,
+                                   first_epsilon_offset[1:] - 1)
 
     return embedding_scores
 
 
-def compute_embeddings_from_phone_fsas(phone_fsas: k2.Fsa,
-                                       max_phone_id: int) -> torch.Tensor:
+def compute_embeddings_from_phone_fsas(phone_fsas: k2.Fsa, max_phone_id: int,
+                                       debug: bool) -> torch.Tensor:
     '''Return one hot encodings of phones as embeddings.
     Args:
       phone_fsas:
@@ -341,11 +380,19 @@ def compute_embeddings_from_phone_fsas(phone_fsas: k2.Fsa,
     # phone_fsas is an acceptor, so its `labels` are `phones`
     pathphones = phone_fsas.labels.clone()
 
+    first_epsilon_offset = k2.index(phone_fsas.arcs.row_splits(2),
+                                    phone_fsas.arcs.row_splits(1))
+
     device = phone_fsas.device
-    # arcs entering the final state have phone == -1.
-    # Increment it so that 0 represents EOS
-    pathphones += 1
-    num_classes = max_phone_id + 2  # +1 for the epsilon, +1 for EOS
+    # arcs entering the final state have phone == -1 and we will remove them
+
+    if debug:
+        actual = k2.index(pathphones, first_epsilon_offset[1:] - 1)
+        expected = -1 * torch.ones_like(actual)
+        assert torch.all(torch.eq(actual, expected))
+
+    pathphones = delete_rows(pathphones, first_epsilon_offset[1:] - 1)
+    num_classes = max_phone_id + 1  # +1 for the epsilon
 
     # TODO(fangjun): do we need to build our own one_hot that supports
     # dtype == torch.int32
@@ -395,30 +442,40 @@ def compute_embeddings_from_phone_seqs(
         debug=debug)
     assert expected_times.requires_grad is False
 
-    embedding_scores = compute_embeddings_from_nnet_output(
-        expected_times, phone_fsas, dense_fsa_vec, path_to_seq_map)
+    embedding_scores = compute_embeddings_from_nnet_output(expected_times,
+                                                           phone_fsas,
+                                                           dense_fsa_vec,
+                                                           path_to_seq_map,
+                                                           debug=debug)
 
-    embedding_phones = compute_embeddings_from_phone_fsas(
-        phone_fsas, max_phone_id)
-
-    # TODO(fangjun): compute duration from expected_times
-    embeddings = torch.cat(
-        (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
-        dim=1)
+    embedding_phones = compute_embeddings_from_phone_fsas(phone_fsas,
+                                                          max_phone_id,
+                                                          debug=debug)
 
     first_epsilon_offset = k2.index(phone_fsas.arcs.row_splits(2),
                                     phone_fsas.arcs.row_splits(1))
 
-    embeddings_per_path = []
-    num_paths = phone_fsas.arcs.dim0()
-    for i in range(num_paths - 1):
-        start = first_epsilon_offset[i]
-        end = first_epsilon_offset[i + 1]
-        embeddings_per_path.append(embeddings[start:end])
+    # NOTE: durations for arcs entering the final state are not correct
+    # but we don't care it since those incorrect values will be removed
+    duration = expected_times[1:] - expected_times[:-1]
+    # Use 1:-1 to exclude the last entry since it has already been excluded above
+    duration = delete_rows(duration, first_epsilon_offset[1:-1] - 1)
 
-    start = first_epsilon_offset[num_paths - 1]
-    embeddings_per_path.append(embeddings[start:])
-    len_per_path = first_epsilon_offset[1:] - first_epsilon_offset[0:-1]
+    if debug:
+        # duration should not be negative
+        assert torch.all(torch.ge(duration, 0))
+
+    assert embedding_scores.shape[0] == embedding_phones.shape[0] \
+            == duration.shape[0]
+
+    # TODO(fangjun): compute duration from expected_times
+    embeddings = torch.cat(
+        (embedding_scores, embedding_phones, duration.unsqueeze(-1)), dim=1)
+
+    len_per_path = first_epsilon_offset[1:] - first_epsilon_offset[:-1]
+    len_per_path -= 1  # -1 because we have removed the arc with label -1
+
+    embeddings_per_path = torch.split(embeddings, len_per_path.tolist())
 
     padded_embeddings = torch.nn.utils.rnn.pad_sequence(embeddings_per_path,
                                                         batch_first=True)
@@ -738,10 +795,23 @@ def compute_embeddings_deprecated(
     # set `embedding_scores` of arcs entering final states to 0
     embedding_scores[(first_epsilon_offset[1:] - 1).long()] = 0
 
-    # arcs entering the final state have phone == -1.
-    # Increment it so that 0 represents EOS
-    pathphones += 1
-    num_classes = max_phone_id + 2  # +1 for the epsilon, +1 for EOS
+    # remove `embedding_scores` for arcs entering final states
+    embedding_scores = delete_rows(embedding_scores,
+                                   first_epsilon_offset[1:] - 1)
+
+    # NOTE: durations for arcs entering the final state are not correct
+    # but we don't care it since those incorrect values will be removed
+    duration = expected_times[1:] - expected_times[:-1]
+    # Use 1:-1 to exclude the last entry since it has already been excluded above
+    duration = delete_rows(duration, first_epsilon_offset[1:-1] - 1)
+
+    if debug:
+        # duration should not be negative
+        assert torch.all(torch.ge(duration, 0))
+
+    # remove the one belongs to arcs entering the final state
+    pathphones = delete_rows(pathphones, first_epsilon_offset[1:] - 1)
+    num_classes = max_phone_id + 1  # +1 for the epsilon
     #  print(pathphones.max(), pathphones.min(), num_classes)
 
     # TODO(fangjun): do we need to build our own one_hot
@@ -753,26 +823,20 @@ def compute_embeddings_deprecated(
     #  print(embedding_phones.shape)
     #  print(expected_times.unsqueeze(-1).shape)
     embeddings = torch.cat(
-        (embedding_scores, embedding_phones, expected_times.unsqueeze(-1)),
-        dim=1)
+        (embedding_scores, embedding_phones, duration.unsqueeze(-1)), dim=1)
 
     if debug:
         assert embeddings.ndim == 2
         assert embeddings.shape[0] == pathphones.shape[0]
         assert embeddings.shape[1] == (dense_fsa_vec.scores.shape[1] - 1 +
                                        num_classes + 1)
-        assert embeddings.shape[0] == phone_fsas.arcs.row_splits(2)[-1]
+        assert embeddings.shape[0] == \
+                phone_fsas.arcs.row_splits(2)[-1] - phone_fsas.arcs.dim0()
 
-    embeddings_per_path = []
-    num_paths = phone_fsas.arcs.dim0()
-    for i in range(num_paths - 1):
-        start = first_epsilon_offset[i]
-        end = first_epsilon_offset[i + 1]
-        embeddings_per_path.append(embeddings[start:end])
+    len_per_path = first_epsilon_offset[1:] - first_epsilon_offset[:-1]
+    len_per_path -= 1  # -1 because we have removed the arc with label -1
 
-    start = first_epsilon_offset[num_paths - 1]
-    embeddings_per_path.append(embeddings[start:])
-    len_per_path = first_epsilon_offset[1:] - first_epsilon_offset[0:-1]
+    embeddings_per_path = torch.split(embeddings, len_per_path.tolist())
 
     padded_embeddings = torch.nn.utils.rnn.pad_sequence(embeddings_per_path,
                                                         batch_first=True)
