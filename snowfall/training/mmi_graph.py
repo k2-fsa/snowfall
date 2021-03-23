@@ -37,7 +37,7 @@ def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
             rules += f'{i} {j} {phones[j-1]} 0.0\n'
         rules += f'{i} {final_state} -1 0.0\n'
     rules += f'{final_state}'
-    return k2.Fsa.from_str(rules, num_aux_labels=1)
+    return k2.Fsa.from_str(rules)
 
 
 class MmiTrainingGraphCompiler(object):
