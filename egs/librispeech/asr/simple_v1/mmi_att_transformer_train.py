@@ -34,6 +34,7 @@ from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
+from snowfall.training.hmm_topo import build_hmm_topo_2state
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -66,7 +67,7 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
                   frames_per_seq[bad_indexes], " vs. max length ",
                   torch.max(frames_per_seq), ", avg ",
                   (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
+    #print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
     all_frames = frames_per_seq.sum()
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
@@ -136,6 +137,7 @@ def get_objf(batch: Dict,
 
     num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
     den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+    #den = k2.intersect_dense_pruned(den, dense_fsa_vec, search_beam=10.0, output_beam=10.0, min_active_states=100, max_active_states=1000)
 
     num_tot_scores = num.get_tot_scores(
         log_semiring=True,
@@ -456,7 +458,7 @@ def main():
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-hmm')
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -477,11 +479,13 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
 
+    logging.info('Initializing the MMI graph compiler')
     graph_compiler = MmiTrainingGraphCompiler(
         L_inv=L_inv,
         phones=phone_symbol_table,
         words=word_symbol_table,
         device=device,
+        topo_builder_fn=build_hmm_topo_2state
     )
     phone_ids = get_phone_symbols(phone_symbol_table)
     P = create_bigram_phone_lm(phone_ids)
@@ -590,7 +594,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
     else:
@@ -598,7 +602,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
 

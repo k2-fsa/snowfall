@@ -25,9 +25,9 @@ from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_HLG
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
-from snowfall.training.ctc_graph import build_ctc_topo
+from snowfall.models.transformer import Transformer
+from snowfall.training.hmm_topo import build_hmm_topo_2state
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
@@ -206,7 +206,7 @@ def main():
     avg = args.avg
     att_rate = args.att_rate
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-hmm')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -218,7 +218,8 @@ def main():
     P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
-    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
+    # H = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
+    H = build_hmm_topo_2state(phone_ids_with_blank)
 
     logging.debug("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
@@ -235,7 +236,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
     else:
@@ -243,7 +244,7 @@ def main():
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            num_classes=2 * len(phone_ids) + 2,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
 
@@ -267,7 +268,8 @@ def main():
     P.set_scores_stochastic_(model.P_scores)
     print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
 
-    if not os.path.exists(lang_dir / 'HLG.pt'):
+    HLG_path = exp_dir / 'HLG.pt'
+    if not HLG_path.exists():
         logging.debug("Loading L_disambig.fst.txt")
         with open(lang_dir / 'L_disambig.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
@@ -277,14 +279,14 @@ def main():
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         HLG = compile_HLG(L=L,
-                         G=G,
-                         H=ctc_topo,
-                         labels_disambig_id_start=first_phone_disambig_id,
-                         aux_labels_disambig_id_start=first_word_disambig_id)
-        torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
+                          G=G,
+                          H=H,
+                          labels_disambig_id_start=first_phone_disambig_id,
+                          aux_labels_disambig_id_start=first_word_disambig_id)
+        torch.save(HLG.as_dict(), HLG_path)
     else:
         logging.debug("Loading pre-compiled HLG")
-        d = torch.load(lang_dir / 'HLG.pt')
+        d = torch.load(HLG_path)
         HLG = k2.Fsa.from_dict(d)
 
     logging.debug("convert HLG to device")
