@@ -526,7 +526,7 @@ def main():
         cuts_train,
         cut_transforms=transforms,
         input_transforms=[
-             SpecAugment(num_frame_masks=2, features_mask_size=14, num_feature_masks=2, frames_mask_size=100)
+             SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
         ]
     )
 
