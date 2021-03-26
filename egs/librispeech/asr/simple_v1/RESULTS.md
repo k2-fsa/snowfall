@@ -290,6 +290,50 @@ listed below.
 
 # LibriSpeech MMI training results (Conformer)
 
+## 2021-03-26
+
+Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
+best results were obtained with 80 rather than 40 filter banks.
+
+Average over last 5 epochs
+2021-03-26 19:23:07,097 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 6.90% [3627 / 52576, 502 ins, 310 del, 2815 sub ]
+2021-03-26 19:24:50,661 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 17.89% [9363 / 52343, 1141 ins, 908 del, 7314 sub ]
+
+Epoch 1:
+2021-03-26 17:28:44,723 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 21.89% [11511 / 52576, 1433 ins, 1149 del, 8929 sub ]
+2021-03-26 17:31:22,335 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 45.15% [23634 / 52343, 2475 ins, 2830 del, 18329 sub ]
+Epoch 2:
+2021-03-26 17:33:09,657 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 12.52% [6584 / 52576, 581 ins, 899 del, 5104 sub ]
+2021-03-26 17:34:32,237 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 29.97% [15689 / 52343, 1224 ins, 2419 del, 12046 sub ]
+Epoch 3:
+2021-03-26 17:36:27,185 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 9.96% [5234 / 52576, 680 ins, 433 del, 4121 sub ]
+2021-03-26 17:37:48,597 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 25.27% [13229 / 52343, 1615 ins, 1282 del, 10332 sub ]
+Epoch 4:
+2021-03-26 17:39:45,618 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 8.83% [4640 / 52576, 677 ins, 333 del, 3630 sub ]
+2021-03-26 17:41:08,419 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 23.00% [12038 / 52343, 1555 ins, 1070 del, 9413 sub ]
+Epoch 5:
+2021-03-26 17:43:01,038 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 8.65% [4548 / 52576, 595 ins, 415 del, 3538 sub ]
+2021-03-26 17:44:22,546 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 21.88% [11454 / 52343, 1312 ins, 1236 del, 8906 sub ]
+Epoch 6:
+2021-03-26 17:46:10,045 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.81% [4105 / 52576, 528 ins, 354 del, 3223 sub ]
+2021-03-26 17:47:30,558 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.72% [10844 / 52343, 1247 ins, 1133 del, 8464 sub ]
+Epoch 7:
+2021-03-26 17:49:34,328 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.94% [4174 / 52576, 534 ins, 355 del, 3285 sub ]
+2021-03-26 17:50:57,266 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.97% [10978 / 52343, 1220 ins, 1182 del, 8576 sub ]
+Epoch 8:
+2021-03-26 17:53:00,601 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.77% [4084 / 52576, 533 ins, 336 del, 3215 sub ]
+2021-03-26 17:54:21,968 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.42% [10687 / 52343, 1260 ins, 1059 del, 8368 sub ]
+Epoch 9:
+2021-03-26 18:02:31,839 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.52% [3954 / 52576, 497 ins, 374 del, 3083 sub ]
+2021-03-26 18:04:16,252 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.06% [10501 / 52343, 1075 ins, 1268 del, 8158 sub ]
+Epoch 10:
+2021-03-26 19:42:11,096 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.62% [4005 / 52576, 562 ins, 316 del, 3127 sub ]
+2021-03-26 19:43:18,106 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 19.92% [10427 / 52343, 1250 ins, 1037 del, 8140 sub ]
+
+Average over last 5 epochs, When using 40 filter banks instead of 80 (also twice smaller feature mask sizes for specaug):
+2021-03-25 21:52:23,645 INFO [mmi_att_transformer_decode.py:329] [test-clean] %WER 6.93% [3645 / 52576, 529 ins, 308 del, 2808 sub ]
+2021-03-25 21:53:10,674 INFO [mmi_att_transformer_decode.py:329] [test-other] %WER 18.53% [9697 / 52343, 1136 ins, 929 del, 7632 sub ]
+
 ## 2021-03-08
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/119>

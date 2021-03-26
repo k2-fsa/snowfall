@@ -206,7 +206,7 @@ def main():
     avg = args.avg
     att_rate = args.att_rate
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -232,7 +232,7 @@ def main():
 
     if model_type == "transformer":
         model = Transformer(
-            num_features=40,
+            num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -240,7 +240,7 @@ def main():
             num_decoder_layers=num_decoder_layers)
     else:
         model = Conformer(
-            num_features=40,
+            num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -301,7 +301,9 @@ def main():
         logging.debug("About to get test cuts")
         cuts_test = load_manifest(feature_dir / f'cuts_{test_set}.json.gz')
         logging.debug("About to create test dataset")
-        test = K2SpeechRecognitionDataset(cuts_test)
+        from lhotse.dataset.input_strategies import OnTheFlyFeatures
+        from lhotse import Fbank, FbankConfig
+        test = K2SpeechRecognitionDataset(cuts_test, input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))))
         sampler = SingleCutSampler(cuts_test, max_duration=max_duration)
         logging.debug("About to create test dataloader")
         test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
