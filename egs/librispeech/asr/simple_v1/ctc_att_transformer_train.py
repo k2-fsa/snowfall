@@ -403,7 +403,7 @@ def main():
         num_decoder_layers = 0
 
     model = Transformer(
-        num_features=40,
+        num_features=80,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
         subsampling_factor=4,
         num_decoder_layers=num_decoder_layers)

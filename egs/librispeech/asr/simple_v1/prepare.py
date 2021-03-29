@@ -89,6 +89,7 @@ def main():
     corpus_dir = locate_corpus(
         Path('/export/corpora5/LibriSpeech'),
         Path('/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech'),
+        Path('/root/fangjun/data/librispeech/LibriSpeech'),
         Path('/export/common/data/corpora/ASR/openslr/SLR12/LibriSpeech')
     )
     musan_dir = locate_corpus(
