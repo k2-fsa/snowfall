@@ -26,7 +26,7 @@ def get_args():
                         help="""file to train tokenizer""")
     parser.add_argument('--vocab-size',
                         type=int,
-                        default=1000,
+                        default=10000,
                         help="""number of tokens of the tokenizer""")
     parser.add_argument('--tokenizer-path',
                         type=str,

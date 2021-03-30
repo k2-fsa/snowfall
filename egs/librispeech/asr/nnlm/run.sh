@@ -5,6 +5,7 @@
 
 # References:
 # https://github.com/kaldi-asr/kaldi/blob/master/scripts/rnnlm/train_rnnlm.sh
+# https://github.com/kaldi-asr/kaldi/blob/pybind11/egs/librispeech/s5/local/rnnlm/tuning/run_tdnn_lstm_1a.sh#L75
 # https://github.com/kaldi-asr/kaldi/blob/master/scripts/rnnlm/prepare_rnnlm_dir.sh
 # https://github.com/pytorch/examples/tree/master/word_language_model
 # https://huggingface.co/docs/tokenizers/python/latest/quicktour.html
@@ -15,44 +16,33 @@ set -e
 stage=$1
 
 lm_train=data/lm_train/
-full_text=$lm_train/librispeech_train_960_text
-tokenizer=$lm_train/tokenizer-librispeech_train_960.json
-if [ $stage -eq 1 ]; then
-  python3 ./local/download_lm_train_data.py
+tokenizer=$lm_train/tokenizer-librispeech.json
+
+text=data/local/lm/librispeech-lm-norm.txt.gz
+text_dir=data/nnlm/text
+train_text=$text_dir/librispeech.txt
+if [ $stage -eq 0 ]; then
+  mkdir -p $text_dir
+  if [ ! -f $text ]; then
+    wget http://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz -P data/local/lm 
+  fi
+  echo -n >$text_dir/dev.txt
+  # hold out one in every 2000 lines as dev data.
+  gunzip -c $text | cut -d ' ' -f2- | awk -v text_dir=$text_dir '{if(NR%2000 == 0) { print >text_dir"/dev.txt"; } else {print;}}' >$train_text
 fi
+
+
 if [ $stage -eq 2 ]; then
   echo "training tokenizer"
   python3 local/huggingface_tokenizer.py \
-    --train-file=$full_text \
+    --train-file=$train_text \
     --tokenizer-path=$tokenizer
 fi
 
 if [ $stage -eq 3 ]; then
-  echo "tokenize a file"
-  python3 local/huggingface_tokenizer.py \
-    --test-file=$full_text \
-    --tokenizer-path=$tokenizer
+  echo "generate lexicon"
+  python local/generate_lexicon.py
 fi
-
-if [ $stage -eq 4 ]; then
-  echo "split all data into train/valid/test"
-
-  full_tokens=${full_text}.tokens
-  valid_test_fraction=10 # currently 5 percent for valid and 5 percent for test
-  valid_test_tokens=$lm_train/valid_test.tokens
-  train_tokens=$lm_train/train.tokens
-
-  num_utts_total=$(wc -l <$full_tokens )
-  num_valid_test=$(($num_utts_total/${valid_test_fraction}))
-  set +x
-  shuf -n $num_valid_test  $full_tokens > $valid_test_tokens
-
-  comm -3 <(sort $valid_test_tokens) <(sort $full_tokens) > $train_tokens
-  shuf -n $(($num_valid_test/2)) $valid_test_tokens > $lm_train/valid.tokens
-  comm -3 <(sort $lm_train/valid.tokens) <(sort $valid_test_tokens) > $lm_train/test.tokens
-
-fi
-
 
 if [ $stage -eq 5 ]; then
   python main.py \
