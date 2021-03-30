@@ -36,7 +36,7 @@ def read_mapping(filename: Union[str, Path]) -> Dict[str, int]:
 
     with open(filename) as f:
         for line in f:
-            line = line.strip()
+            line = line.strip().lower()
             if len(line) == 0:
                 continue  # skip empty lines
 
@@ -57,8 +57,8 @@ def read_mapping(filename: Union[str, Path]) -> Dict[str, int]:
     return ans
 
 
-def convert_tokens_to_ids(tokens: List[str],
-                          mapping: Dict[str, int]) -> List[int]:
+def convert_tokens_to_ids(tokens: List[str], mapping: Dict[str,
+                                                           int]) -> List[int]:
     '''Convert a list of tokens to its corresponding IDs.
 
     Caution:
@@ -75,14 +75,17 @@ def convert_tokens_to_ids(tokens: List[str],
     '''
     ans = []
     for t in tokens:
-        assert t in mapping, f"token '{t}' does not have an ID"
-        ans.append(mapping[t])
+        # assert t in mapping, f"token '{t}' does not have an ID"
+        if t in mapping:
+            ans.append(mapping[t])
+        else:
+            ans.append(mapping['<unk>'])
     return ans
 
 
 def convert_lexicon_to_mappings(
-        filename: Union[str, Path]
-) -> Tuple[Dict[str, int], Dict[str, int]]:  # noqa
+    filename: Union[str,
+                    Path]) -> Tuple[Dict[str, int], Dict[str, int]]:  # noqa
     '''Generate IDs for tokens from a lexicon file.
 
     Each line in the lexicon consists of spaces separated columns.
@@ -173,8 +176,8 @@ def read_lexicon(lexicon_filename: Union[Path, str]) -> Dict[str, List[str]]:
     return ans
 
 
-def create_ragged_lexicon(lexicon: Dict[str, List[str]],
-                          word2id: Dict[str, int],
+def create_ragged_lexicon(lexicon: Dict[str, List[str]], word2id: Dict[str,
+                                                                       int],
                           piece2id: Dict[str, int]) -> k2.RaggedInt:
     '''
     Args:

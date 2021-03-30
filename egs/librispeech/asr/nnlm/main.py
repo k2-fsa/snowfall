@@ -14,6 +14,9 @@ import torch.optim as optim
 import sys
 
 sys.path.insert(0, './local/')
+sys.path.insert(0, './scripts/')
+from lexicon import Lexicon
+
 from dataset import LMDataset, CollateFunc
 from model import TransformerModel
 from trainer import Trainer
@@ -30,8 +33,8 @@ def get_args():
     parser.add_argument('--dev_text',
                         default='data/nnlm/text/dev.txt',
                         help='dev data file')
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--ntokens', type=int, default=3000)
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--ntokens', type=int, default=10000)
     parser.add_argument('--emsize', type=int, default=128)
     parser.add_argument('--nhead', type=int, default=4)
     parser.add_argument('--nhid', type=int, default=128)
@@ -45,8 +48,12 @@ def get_args():
                         help='path to save tensorboard log')
     parser.add_argument('--gpu',
                         type=int,
-                        default=-1,
+                        default=1,
                         help='gpu id for this local rank, -1 for cpu')
+    parser.add_argument('--lexicon-path',
+                        default='data/nnlm/lexicon',
+                        type=str,
+                        help="path to save lexicon files")
 
     args = parser.parse_args()
 
@@ -61,9 +68,13 @@ def main():
     #Set random seed
     torch.manual_seed(2021)
     collate_func = CollateFunc()
+    lexicon_filename = '{}/lexicon.txt'.format(args.lexicon_path)
+    word2id_filename = '{}/words.txt'.format(args.lexicon_path)
+    piece2id_filename = '{}/tokens.txt'.format(args.lexicon_path)
 
-    train_dataset = LMDataset(args.train_text)
-    dev_dataset = LMDataset(args.dev_text)
+    lexicon = Lexicon(lexicon_filename, word2id_filename, piece2id_filename)
+    train_dataset = LMDataset(args.train_text, lexicon)
+    dev_dataset = LMDataset(args.dev_text, lexicon)
 
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=args.batch_size,

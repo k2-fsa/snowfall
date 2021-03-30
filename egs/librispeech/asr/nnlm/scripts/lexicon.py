@@ -29,11 +29,11 @@ class Lexicon(object):
             Path to the file that maps a word piece to an ID.
         '''
         lexicon = read_lexicon(lexicon_filename)
-        word2id = read_mapping(word2id_filename)
+        self.word2id = read_mapping(word2id_filename)
         piece2id = read_mapping(piece2id_filename)
 
         self.lexicon = create_ragged_lexicon(lexicon=lexicon,
-                                             word2id=word2id,
+                                             word2id=self.word2id,
                                              piece2id=piece2id)
 
     def word_seq_to_word_piece_seq(self, words: torch.Tensor) -> torch.Tensor:
