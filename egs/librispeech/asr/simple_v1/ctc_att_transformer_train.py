@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey
+#                                                   Haowen Qiu
+#                                                   Fangjun Kuang)
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
@@ -14,21 +16,27 @@ import sys
 import torch
 from datetime import datetime
 from pathlib import Path
+from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet
-from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from lhotse import CutSet, Fbank, load_manifest
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
+    SpecAugment
+from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
+from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from lhotse.utils import fix_random_seed
-from snowfall.common import describe
-from snowfall.common import get_phone_symbols
+from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
+from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
+from snowfall.training.mmi_graph import get_phone_symbols
 
 
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
@@ -72,6 +80,8 @@ def get_objf(batch: Dict,
              is_update: bool,
              accum_grad: int = 1,
              att_rate: float = 0.0,
+             tb_writer: Optional[SummaryWriter] = None,
+             global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['inputs']
     supervisions = batch['supervisions']
@@ -126,14 +136,34 @@ def get_objf(batch: Dict,
                                                supervision_segments[:, 2])
 
     if is_training:
+        def maybe_log_gradients(tag: str):
+            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 200 == 0:
+                tb_writer.add_scalars(
+                    tag,
+                    measure_gradient_norms(model, norm='l1'),
+                    global_step=global_batch_idx_train
+                )
+
         if att_rate != 0.0:
             loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-tot_score) / (len(texts) * accum_grad)
         loss.backward()
         if is_update:
+            maybe_log_gradients('train/grad_norms')
             clip_grad_value_(model.parameters(), 5.0)
-            optimizer.step()
+            maybe_log_gradients('train/clipped_grad_norms')
+            if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
+                # Once in a time we will perform a more costly diagnostic
+                # to check the relative parameter change per minibatch.
+                deltas = optim_step_and_measure_param_change(model, optimizer)
+                tb_writer.add_scalars(
+                    'train/relative_param_change_per_minibatch',
+                    deltas,
+                    global_step=global_batch_idx_train
+                )
+            else:
+                optimizer.step()
             optimizer.zero_grad()
 
     ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
@@ -142,7 +172,8 @@ def get_objf(batch: Dict,
 
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
-                        model: AcousticModel, device: torch.device,
+                        model: AcousticModel,
+                        device: torch.device,
                         graph_compiler: CtcTrainingGraphCompiler):
     total_objf = 0.
     total_frames = 0.  # for display only
@@ -150,7 +181,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
     model.eval()
 
-    for batch_idx, batch in enumerate(dataloader):
+    from torchaudio.datasets.utils import bg_iterator
+    for batch_idx, batch in enumerate(bg_iterator(dataloader, 2)):
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
@@ -168,7 +200,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, device: torch.device,
+                    model: AcousticModel,
+                    device: torch.device,
                     graph_compiler: CtcTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
                     accum_grad: int,
@@ -226,6 +259,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             is_update=is_update,
             accum_grad=accum_grad,
             att_rate=att_rate,
+            tb_writer=tb_writer,
+            global_batch_idx_train=global_batch_idx_train,
             optimizer=optimizer
         )
 
@@ -247,12 +282,13 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
 
-            tb_writer.add_scalar('train/global_average_objf',
-                                 total_objf / total_frames, global_batch_idx_train)
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_average_objf',
+                                     total_objf / total_frames, global_batch_idx_train)
 
-            tb_writer.add_scalar('train/current_batch_average_objf',
-                                 curr_batch_objf / (curr_batch_frames + 0.001),
-                                 global_batch_idx_train)
+                tb_writer.add_scalar('train/current_batch_average_objf',
+                                     curr_batch_objf / (curr_batch_frames + 0.001),
+                                     global_batch_idx_train)
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
@@ -271,9 +307,11 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
-            tb_writer.add_scalar('train/global_valid_average_objf',
-                                 valid_average_objf,
-                                 global_batch_idx_train)
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_valid_average_objf',
+                                     valid_average_objf,
+                                     global_batch_idx_train)
+                model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -281,9 +319,15 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--model-type',
+        type=str,
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
+    parser.add_argument(
         '--num-epochs',
         type=int,
-        default=20,
+        default=10,
         help="Number of traning epochs.")
     parser.add_argument(
         '--start-epoch',
@@ -291,10 +335,16 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-frames',
+        '--max-duration',
         type=int,
-        default=60000,
-        help="Maximum number of feature frames in a single batch.")
+        default=500.0,
+        help="Maximum pooled recordings duration (seconds) in a single batch.")
+    parser.add_argument(
+        '--warm-step',
+        type=int,
+        default=5000,
+        help='The number of warm-up steps for Noam optimizer.'
+    )
     parser.add_argument(
         '--accum-grad',
         type=int,
@@ -305,23 +355,82 @@ def get_parser():
         type=float,
         default=0.0,
         help="Attention loss rate.")
+    parser.add_argument(
+        '--nhead',
+        type=int,
+        default=4,
+        help="Number of attention heads in transformer.")
+    parser.add_argument(
+        '--attention-dim',
+        type=int,
+        default=256,
+        help="Number of units in transformer attention layers.")
+    parser.add_argument(
+        '--bucketing_sampler',
+        type=str2bool,
+        default=False,
+        help='When enabled, the batches will come from buckets of '
+             'similar duration (saves padding frames).')
+    parser.add_argument(
+        '--num-buckets',
+        type=int,
+        default=30,
+        help='The number of buckets for the BucketingSampler'
+             '(you might want to increase it for larger datasets).')
+    parser.add_argument(
+        '--concatenate-cuts',
+        type=str2bool,
+        default=True,
+        help='When enabled, utterances (cuts) will be concatenated '
+             'to minimize the amount of padding.')
+    parser.add_argument(
+        '--duration-factor',
+        type=float,
+        default=1.0,
+        help='Determines the maximum duration of a concatenated cut '
+             'relative to the duration of the longest cut in a batch.')
+    parser.add_argument(
+        '--gap',
+        type=float,
+        default=1.0,
+        help='The amount of padding (in seconds) inserted between concatenated cuts. '
+             'This padding is filled with noise when noise augmentation is used.')
+    parser.add_argument(
+        '--full-libri',
+        type=str2bool,
+        default=False,
+        help='When enabled, use 960h LibriSpeech.')
+    parser.add_argument(
+        '--on-the-fly-feats',
+        type=str2bool,
+        default=False,
+        help='When enabled, use on-the-fly cut mixing and feature extraction. '
+             'Will drop existing precomputed feature manifests if available.'
+    )
+    parser.add_argument(
+        '--tensorboard',
+        type=str2bool,
+        default=True,
+        help='Should various information be logged in tensorboard.'
+    )
     return parser
 
 
 def main():
     args = get_parser().parse_args()
 
+    model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_frames = args.max_frames
+    max_duration = args.max_duration
     accum_grad = args.accum_grad
     att_rate = args.att_rate
 
     fix_random_seed(42)
 
-    exp_dir = Path('exp-transformer-noam-ctc-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-ctc-att-musan-sa')
     setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -347,40 +456,91 @@ def main():
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir /
-                                  'cuts_train-clean-100.json.gz')
+    cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
+    if args.full_libri:
+        cuts_train = (
+            cuts_train +
+            load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
+            load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
+        )
     logging.info("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev-clean.json.gz')
+    cuts_dev = (
+        load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
+        load_manifest(feature_dir / 'cuts_dev-other.json.gz')
+    )
     logging.info("About to get Musan cuts")
-    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
+    cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
+    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
+    if args.concatenate_cuts:
+        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
+        # Cut concatenation should be the first transform in the list,
+        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
+        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
     train = K2SpeechRecognitionDataset(
         cuts_train,
-        cut_transforms=[
-            CutConcatenate(),
-            CutMix(
-                cuts=cuts_musan,
-                prob=0.5,
-                snr=(10, 20)
-            )
+        cut_transforms=transforms,
+        input_transforms=[
+             SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
         ]
     )
-    train_sampler = SingleCutSampler(
-        cuts_train,
-        max_frames=max_frames,
-        shuffle=True,
-    )
+
+    if args.on_the_fly_feats:
+        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
+        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
+        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
+        # # Speed perturbation probably should come first before concatenation,
+        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
+        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
+        # Drop feats to be on the safe side.
+        cuts_train = cuts_train.drop_features()
+        from lhotse.features.fbank import FbankConfig
+        train = K2SpeechRecognitionDataset(
+            cuts=cuts_train,
+            cut_transforms=transforms,
+            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
+            input_transforms=[
+                SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
+            ]
+        )
+
+    if args.bucketing_sampler:
+        logging.info('Using BucketingSampler.')
+        train_sampler = BucketingSampler(
+            cuts_train,
+            max_duration=max_duration,
+            shuffle=True,
+            num_buckets=args.num_buckets
+        )
+    else:
+        logging.info('Using SingleCutSampler.')
+        train_sampler = SingleCutSampler(
+            cuts_train,
+            max_duration=max_duration,
+            shuffle=True,
+        )
     logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,
         sampler=train_sampler,
         batch_size=None,
-        num_workers=4
+        num_workers=4,
     )
+
     logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
+    if args.on_the_fly_feats:
+        cuts_dev = cuts_dev.drop_features()
+        validate = K2SpeechRecognitionDataset(
+            cuts_dev.drop_features(),
+            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+        )
+    else:
+        validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(
+        cuts_dev,
+        max_duration=max_duration,
+    )
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
@@ -402,19 +562,30 @@ def main():
     else:
         num_decoder_layers = 0
 
-    model = Transformer(
-        num_features=40,
-        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=4,
-        num_decoder_layers=num_decoder_layers)
+    if model_type == "transformer":
+        model = Transformer(
+            num_features=80,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
+    else:
+        model = Conformer(
+            num_features=80,
+            nhead=args.nhead,
+            d_model=args.attention_dim,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4,
+            num_decoder_layers=num_decoder_layers)
 
     model.to(device)
     describe(model)
 
     optimizer = Noam(model.parameters(),
-                     model_size=256,
-                     factor=5.0,
-                     warm_step=25000)
+                     model_size=args.attention_dim,
+                     factor=1.0,
+                     warm_step=args.warm_step)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -434,23 +605,25 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
+        if tb_writer is not None:
+            tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+            tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
-        tb_writer.add_scalar('learning_rate', curr_learning_rate, epoch)
-
-        logging.info('epoch {}, learning rate {}'.format(
-            epoch, curr_learning_rate))
-        objf, valid_objf, global_batch_idx_train = train_one_epoch(dataloader=train_dl,
-                                                                   valid_dataloader=valid_dl,
-                                                                   model=model,
-                                                                   device=device,
-                                                                   graph_compiler=graph_compiler,
-                                                                   optimizer=optimizer,
-                                                                   accum_grad=accum_grad,
-                                                                   att_rate=att_rate,
-                                                                   current_epoch=epoch,
-                                                                   tb_writer=tb_writer,
-                                                                   num_epochs=num_epochs,
-                                                                   global_batch_idx_train=global_batch_idx_train)
+        logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
+        objf, valid_objf, global_batch_idx_train = train_one_epoch(
+            dataloader=train_dl,
+            valid_dataloader=valid_dl,
+            model=model,
+            device=device,
+            graph_compiler=graph_compiler,
+            optimizer=optimizer,
+            accum_grad=accum_grad,
+            att_rate=att_rate,
+            current_epoch=epoch,
+            tb_writer=tb_writer,
+            num_epochs=num_epochs,
+            global_batch_idx_train=global_batch_idx_train,
+        )
         # the lower, the better
         if valid_objf < best_valid_objf:
             best_valid_objf = valid_objf
@@ -469,7 +642,7 @@ def main():
                                model_path=best_model_path,
                                current_epoch=epoch,
                                learning_rate=curr_learning_rate,
-                               objf=best_objf,
+                               objf=objf,
                                best_objf=best_objf,
                                valid_objf=valid_objf,
                                best_valid_objf=best_valid_objf,
@@ -486,8 +659,7 @@ def main():
                         objf=objf,
                         valid_objf=valid_objf,
                         global_batch_idx_train=global_batch_idx_train)
-        epoch_info_filename = os.path.join(exp_dir,
-                                           'epoch-{}-info'.format(epoch))
+        epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
                            current_epoch=epoch,
