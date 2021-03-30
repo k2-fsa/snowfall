@@ -163,9 +163,9 @@ Decoding results (WER) of each epoch are listed below. They are obtained using t
 2021-02-17 11:54:34,531 INFO [mmi_mbr_decode.py:252] %WER 12.95% [6810 / 52576, 831 ins, 728 del, 5251 sub ]
 ```
 
-# LibriSpeech CTC training results (Transformer)
+# LibriSpeech CTC training results
 
-## 2021-02-17
+## 2021-02-17 (Transformer)
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
@@ -241,6 +241,60 @@ listed below. They are obtained using the latest k2 and lhotse as of today (2021
 2021-02-17 08:39:22,562 INFO [ctc_att_transformer_decode.py:226] %WER 8.63% [4538 / 52576, 491 ins, 591 del, 3456 sub ]
 ```
 
+## 2021-03-29 (Conformer)
+
+(Fangjun): Results of <https://github.com/k2-fsa/snowfall/pull/143>
+
+Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
+best results were obtained with 80 rather than 40 filter banks.
+
+They are obtained using the latest k2 and lhotse as of today (2021-03-29).
+
+# average over last 5 epochs
+2021-03-30 10:25:17,347 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.32% [3849 / 52576, 438 ins, 413 del, 2998 sub ]
+2021-03-30 10:29:04,690 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 19.84% [10387 / 52343, 975 ins, 1552 del, 7860 sub ]
+
+Epoch 0:
+2021-03-30 14:05:50,210 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 23.23% [12212 / 52576, 691 ins, 2818 del, 8703 sub ]
+2021-03-30 14:09:40,577 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 47.27% [24742 / 52343, 931 ins, 6718 del, 17093 sub ]
+
+Epoch 1:
+2021-03-30 10:45:30,596 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 16.31% [8574 / 52576, 637 ins, 1643 del, 6294 sub ]
+2021-03-30 10:49:17,734 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 38.39% [20096 / 52343, 1092 ins, 4732 del, 14272 sub ]
+
+Epoch 2:
+2021-03-30 10:53:46,940 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 12.99% [6831 / 52576, 546 ins, 1192 del, 5093 sub ]
+2021-03-30 10:57:36,322 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 33.15% [17350 / 52343, 999 ins, 3996 del, 12355 sub ]
+
+Epoch 3:
+2021-03-30 11:02:07,617 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 10.19% [5356 / 52576, 474 ins, 845 del, 4037 sub ]
+2021-03-30 11:05:55,902 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 27.00% [14133 / 52343, 943 ins, 3082 del, 10108 sub ]
+
+Epoch 4:
+2021-03-30 11:10:27,557 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 9.56% [5026 / 52576, 447 ins, 792 del, 3787 sub ]
+2021-03-30 11:13:47,567 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 25.45% [13319 / 52343, 795 ins, 3154 del, 9370 sub ]
+
+Epoch 5:
+2021-03-30 11:18:17,627 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 9.06% [4763 / 52576, 431 ins, 718 del, 3614 sub ]
+2021-03-30 11:22:08,528 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 24.07% [12598 / 52343, 929 ins, 2538 del, 9131 sub ]
+
+Epoch 6:
+2021-03-30 11:26:39,332 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 8.63% [4535 / 52576, 463 ins, 579 del, 3493 sub ]
+2021-03-30 11:30:29,829 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 23.51% [12304 / 52343, 933 ins, 2296 del, 9075 sub ]
+
+Epoch 7:
+2021-03-30 11:35:03,633 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 8.54% [4488 / 52576, 414 ins, 596 del, 3478 sub ]
+2021-03-30 11:38:25,811 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 22.51% [11784 / 52343, 908 ins, 2152 del, 8724 sub ]
+
+Epoch 8:
+2021-03-30 11:42:56,193 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.78% [4091 / 52576, 455 ins, 481 del, 3155 sub ]
+2021-03-30 11:46:46,510 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 21.36% [11183 / 52343, 920 ins, 1912 del, 8351 sub ]
+
+Epoch 9:
+2021-03-30 11:51:15,704 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.88% [4142 / 52576, 406 ins, 537 del, 3199 sub ]
+2021-03-30 11:55:06,389 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 21.54% [11275 / 52343, 865 ins, 2043 del, 8367 sub ]
+
+
 # LibriSpeech MMI training results (Transformer)
 
 ## 2021-03-08
@@ -294,6 +348,8 @@ listed below.
 
 Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
 best results were obtained with 80 rather than 40 filter banks.
+
+Training log and tensorboard log can be found at <https://github.com/k2-fsa/snowfall/pull/143>.
 
 Average over last 5 epochs
 2021-03-26 19:23:07,097 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 6.90% [3627 / 52576, 502 ins, 310 del, 2815 sub ]
