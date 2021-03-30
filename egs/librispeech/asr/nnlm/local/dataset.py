@@ -22,12 +22,12 @@ class CollateFunc(object):
 
     def __call__(self, batch: List[List[int]]):
         '''batch contains token_id.
-           batch can be viewd as a ragged 2-d array, with a row represent a token_id.
+           batch can be viewd as a ragged 2-d array, with a row represents a token_id.
            token_id reprents a tokenized text, whose format is:
            <bos_id> token_id token_id token_id *** <eos_id>
         '''
         data_pad = pad_sequence(
-            [torch.from_numpy(np.array(x)).float() for x in batch], True,
+            [torch.from_numpy(np.array(x)).long() for x in batch], True,
             self.pad_index)
         xs_pad = data_pad[:, :-1]
         ys_pad = data_pad[:, 1:]
@@ -50,12 +50,14 @@ class LMDataset(Dataset):
             # DELAWARE IS NOT AFRAID OF DOGS
             for line in f:
                 text = line.strip().split()
-                assert len(text) > 0
+                if len(text) == 0:
+                    continue
                 text_id = self.text2id(text)
                 # token_id format:
                 # <bos_id> token_id token_id token_id *** <eos_id>
                 token_id = self.text_id2token_id(text_id)
-                self.data.append(token_id)
+                if len(token_id) >= 2:
+                    self.data.append(token_id)
 
     def __len__(self):
         return len(self.data)
