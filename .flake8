@@ -1,0 +1,14 @@
+[flake8]
+show-source=true
+statistics=true
+max-line-length=80
+exclude =
+  .git,
+
+ignore =
+  # E127 continuation line over-indented for visual indent
+  E127,
+  # F401, import but not used
+  F401,
+  # W504, line break after binary operator
+  W504,
