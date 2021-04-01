@@ -8,17 +8,17 @@
 import argparse
 
 import logging
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import sys
 
 sys.path.insert(0, './local/')
-sys.path.insert(0, './scripts/')
-from lexicon import Lexicon
 
 from dataset import LMDataset, CollateFunc
 from model import TransformerModel
+from pathlib import Path
 from trainer import Trainer
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
@@ -27,21 +27,30 @@ from torch.utils.data import DataLoader
 def get_args():
     parser = argparse.ArgumentParser(
         description='training Neural Language Model')
-    parser.add_argument('--train_text',
-                        default='data/nnlm/text/librispeech.txt',
+    parser.add_argument('--train_token',
+                        default='data/nnlm/text/librispeech.txt.tokens',
                         help='train data file')
-    parser.add_argument('--dev_text',
-                        default='data/nnlm/text/dev.txt',
+    parser.add_argument('--dev_token',
+                        default='data/nnlm/text/dev.txt.tokens',
                         help='dev data file')
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=60)
     parser.add_argument('--ntokens', type=int, default=10000)
-    parser.add_argument('--emsize', type=int, default=128)
-    parser.add_argument('--nhead', type=int, default=4)
-    parser.add_argument('--nhid', type=int, default=128)
-    parser.add_argument('--nlayers', type=int, default=6)
+    parser.add_argument('--emsize', type=int, default=200)
+    parser.add_argument('--nhead', type=int, default=2)
+    parser.add_argument('--nhid', type=int, default=200)
+    parser.add_argument('--nlayers', type=int, default=2)
+    parser.add_argument('--num_epochs', type=int, default=50)
     parser.add_argument('--dropout', type=int, default=0.2)
+    parser.add_argument('--lr',
+                        type=float,
+                        default=1e-2,
+                        help='initial learning rate')
+    parser.add_argument('--clip',
+                        type=float,
+                        default=50.0,
+                        help='gradient clipping')
     parser.add_argument('--model_dir',
-                        default='./exp/',
+                        default='./exp-nnlm/models/',
                         help='path to save model')
     parser.add_argument('--tensorboard_dir',
                         default='tensorboard',
@@ -50,10 +59,6 @@ def get_args():
                         type=int,
                         default=1,
                         help='gpu id for this local rank, -1 for cpu')
-    parser.add_argument('--lexicon-path',
-                        default='data/nnlm/lexicon',
-                        type=str,
-                        help="path to save lexicon files")
 
     args = parser.parse_args()
 
@@ -68,22 +73,18 @@ def main():
     #Set random seed
     torch.manual_seed(2021)
     collate_func = CollateFunc()
-    lexicon_filename = '{}/lexicon.txt'.format(args.lexicon_path)
-    word2id_filename = '{}/words.txt'.format(args.lexicon_path)
-    piece2id_filename = '{}/tokens.txt'.format(args.lexicon_path)
 
-    lexicon = Lexicon(lexicon_filename, word2id_filename, piece2id_filename)
-    train_dataset = LMDataset(args.train_text, lexicon)
-    dev_dataset = LMDataset(args.dev_text, lexicon)
+    train_dataset = LMDataset(args.train_token)
+    dev_dataset = LMDataset(args.dev_token)
 
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=args.batch_size,
                                    shuffle=False,
-                                   num_workers=0,
+                                   num_workers=10,
                                    collate_fn=collate_func)
 
     dev_data_loader = DataLoader(dev_dataset,
-                                 batch_size=args.batch_size,
+                                 batch_size=20,
                                  shuffle=False,
                                  num_workers=0,
                                  collate_fn=collate_func)
@@ -91,12 +92,15 @@ def main():
     ntokens = args.ntokens
     model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid,
                              args.nlayers, args.dropout)
-    optimizer = optim.Adam(model.parameters())
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
     device = torch.device('cuda' if use_cuda else 'cpu')
+    print(device)
     criterion = nn.NLLLoss(ignore_index=0)
     exp_dir = 'exp-nnlm'
     writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+
+    Path(os.path.dirname(args.model_dir)).mkdir(parents=True, exist_ok=True)
     trainer = Trainer(device,
                       model,
                       criterion,
@@ -106,6 +110,9 @@ def main():
                       ntokens=ntokens,
                       batch_size=args.batch_size,
                       epoch=0,
+                      num_epochs=args.num_epochs,
+                      clip=args.clip,
+                      model_dir=args.model_dir,
                       writer=writer)
     trainer.run()
 

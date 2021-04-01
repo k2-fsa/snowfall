@@ -15,37 +15,88 @@
 set -e
 stage=$1
 
-lm_train=data/lm_train/
-tokenizer=$lm_train/tokenizer-librispeech.json
+exp=exp-nnlm
+tokenizer=$exp/tokenizer-librispeech.json
 
 text=data/local/lm/librispeech-lm-norm.txt.gz
 text_dir=data/nnlm/text
-train_text=$text_dir/librispeech.txt
+all_train_text=$text_dir/librispeech.txt
+# there are 40,398,052 pieces in all_train_text, which will take 50 MINUTES to be tokenized, with a single process.
+# Now only $train_pieces data is used for debugging pipeline
+train_pieces=100000 # 5 times of dev.txt
+# uncomment follwoing line to use all_train_text
+# train_pieces=
+dev_text=$text_dir/dev.txt
+
+
+mkdir -p $text_dir
+
+if [ $stage -eq -1 ]; then
+  # env for experiment ../simple_v1 is expected to have been built.
+  echo "Install extra dependencies"
+  pip install -r requirements.txt
+fi
+
 if [ $stage -eq 0 ]; then
-  mkdir -p $text_dir
+  # reference:
+  # https://github.com/kaldi-asr/kaldi/blob/pybind11/egs/librispeech/s5/local/rnnlm/tuning/run_tdnn_lstm_1a.sh#L75
+  # use the same data seperation method to kaldi whose result can be used as a baseline
   if [ ! -f $text ]; then
-    wget http://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz -P data/local/lm 
+    wget http://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz -P data/local/lm
   fi
   echo -n >$text_dir/dev.txt
   # hold out one in every 2000 lines as dev data.
-  gunzip -c $text | cut -d ' ' -f2- | awk -v text_dir=$text_dir '{if(NR%2000 == 0) { print >text_dir"/dev.txt"; } else {print;}}' >$train_text
+  gunzip -c $text | cut -d ' ' -f2- | awk -v text_dir=$text_dir '{if(NR%2000 == 0) { print >text_dir"/dev.txt"; } else {print;}}' >$all_train_text
+fi
+
+if [ ! -z "$train_pieces" ]; then
+  train_text=$text_dir/${train_pieces}_librispeech.txt
+  if [ $train_text -ot $all_train_text ] || [  ! -f $train_text ]; then
+  # if [ ! -f $train_text) || $train_text -ot $all_train_text ]; then
+    head -n $train_pieces $all_train_text > $train_text
+  fi
+else
+  train_text=$all_train_text
 fi
 
 
-if [ $stage -eq 2 ]; then
+if [ $stage -eq 1 ]; then
   echo "training tokenizer"
   python3 local/huggingface_tokenizer.py \
     --train-file=$train_text \
     --tokenizer-path=$tokenizer
 fi
 
-if [ $stage -eq 3 ]; then
-  echo "generate lexicon"
-  python local/generate_lexicon.py
+
+if [ $stage -eq 2 ]; then
+  echo "tokenize train and dev files"
+  for text in $dev_text $train_text; do
+    python3 local/huggingface_tokenizer.py \
+      --test-file=$text \
+      --tokenizer-path=$tokenizer
+  done
 fi
 
-if [ $stage -eq 5 ]; then
+if [ $stage -eq 3 ]; then
+  echo "start to train"
   python main.py \
-    --cuda \
+    --train_token ${train_text}.tokens \
     --model Transformer
+fi
+
+if [ $stage -eq 4 ]; then
+  # generate words.txt tokens.txt and lexicion.txt
+  # which is used in future rescore process
+  lexicon_path=./data/nnlm/lexicon
+  mkdir -p $lexicon_path
+  words_txt=../simple_v1/data/lang_nosp/words.txt
+  if [ -f $words_txt ]; then
+    cp $words_txt $lexicon_path
+  else
+    echo "please set words_txt path of your previous experiment"
+    echo "the NN-LM trained LM is used as a rescore module, \
+      currently the same words.txt with previous experiment is prefered"
+  fi
+  echo "generate lexicon"
+  python local/generate_lexicon.py
 fi

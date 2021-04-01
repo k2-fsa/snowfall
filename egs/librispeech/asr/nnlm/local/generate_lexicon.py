@@ -4,6 +4,7 @@
 # Apache 2.0
 
 import argparse
+import collections
 from tokenizers import Tokenizer
 from tokenizers.models import WordPiece
 from tokenizers import decoders
@@ -29,17 +30,41 @@ def get_args():
 
 
 def generate_tokens(args):
+    ''' Extract symbols and there corresponding ids from a tokenizer,
+        and save as tokens.txt.
+        An example file looks like:
+        a 1
+        b 2
+        c 3
+        ...
+        it 100
+        sh 101
+
+    '''
+
     tokenizer = Tokenizer.from_file(args.tokenizer_path)
     symbols = tokenizer.get_vocab()
     tokens_file = '{}/tokens.txt'.format(args.lexicon_path)
     tokens_f = open(tokens_file, 'w')
-    for idx, sym in enumerate(symbols):
-        tokens_f.write('{} {}\n'.format(sym.lower(), idx))
+    id2sym = dict((v, k.lower()) for k, v in symbols.items())
+    for idx in range(len(symbols)):
+        assert idx in id2sym
+        tokens_f.write('{} {}\n'.format(id2sym[idx], idx))
 
     tokens_f.close()
 
 
 def generate_lexicon(args, words):
+    ''' Tokenize every word in words.txt and save as lexicont.txt. 
+        Each line represents a word and its tokenized representation, i.e. a sequence of tokens. a word and its tokens are seprated by a table.
+ 
+        An example file looks like:
+
+        abbreviating	abb ##re ##via ##ting
+        abbreviation	abb ##re ##via ##t ##ion
+        abbreviations	abb ##re ##via ##t ##ions
+ 
+    '''
     special_words = [
         '<eps>', '!SIL', '<SPOKEN_NOISE>', '<UNK>', '<s>', '</s>', '#0'
     ]
@@ -48,7 +73,8 @@ def generate_lexicon(args, words):
     tokenizer = Tokenizer.from_file(args.tokenizer_path)
     tokenizer.decoder = decoders.WordPiece()
     for word in words:
-        if word not in special_words:
+        if not (word.upper() in special_words or
+                word.lower() in special_words):
             output = tokenizer.encode(word)
             tokens = ' '.join(output.tokens)
         else:
@@ -60,16 +86,11 @@ def generate_lexicon(args, words):
 def load_words(args):
     words = []
     tokens_file = '{}/words.txt'.format(args.lexicon_path)
-    # special_words = [
-    #     '<eps>', '!SIL', '<SPOKEN_NOISE>', '<UNK>', '<s>', '</s>', '#0'
-    # ]
-    # special_words = []
 
     with open(tokens_file) as f:
         for line in f:
             arr = line.strip().split()
-            # if arr[0] not in special_words:
-            words.append(arr[0])
+            words.append(arr[0].lower())
 
     return words
 

@@ -41,8 +41,8 @@ def get_args():
 def train_tokenizer(train_files, save_path, vocab_size):
     if os.path.exists(save_path):
         logging.warning(
-            "{} already exists. Please check that.".format(save_path))
-        return
+            "{} already exists. Backing up that.".format(save_path))
+        shutil.move(save_path, '{}'.format(save_path))
     else:
         Path(os.path.dirname(save_path)).mkdir(parents=True, exist_ok=True)
 
@@ -52,34 +52,42 @@ def train_tokenizer(train_files, save_path, vocab_size):
     tokenizer.pre_tokenizer = Whitespace()
 
     # default vocab_size=30000
-    # here set vocab_size=1000 for accelerating
     trainer = WordPieceTrainer(vocab_size=vocab_size, special_tokens=['[UNK]'])
     tokenizer.train(train_files, trainer)
     tokenizer.save(save_path)
 
 
 def tokenize_text(test_file, tokenizer_path):
+    '''
+    tokenize text
+    input format looks like:
+        BOY IS BETTER UNBORN THAN
+        BRAVE OFFICER
+
+
+    output format looks like:
+        355 127 794 4824 346 370
+        1330 1898
+    '''
     if not os.path.exists(tokenizer_path):
-        logging.warning(
-            "Tokenizer {} does not exist. Please check that.".format(
-                tokenizer_path))
+        logging.warning("Tokenizer {} does not exist.".format(tokenizer_path))
         return
     tokenizer = Tokenizer.from_file(tokenizer_path)
     tokenizer.decoder = decoders.WordPiece()
     tokenized_file = "{}.tokens".format(test_file)
-    # tokenized_ids = "{}.ids".format(test_file)
     if os.path.exists(tokenized_file):
         logging.warning(
             "The input file seems already tokenized. Buckupping previous result"
         )
-        shutil.copyfile(tokenized_file, "{}.bk".format(tokenized_file))
+        shutil.move(tokenized_file, "{}.bk".format(tokenized_file))
     logging.warning("Tokenizing {}.".format(test_file))
     fout = open(tokenized_file, 'w')
     with open(test_file) as f:
         for line in f:
             line = line.strip()
             output = tokenizer.encode(line)
-            fout.write(" ".join(output.tokens) + '\n')
+            if len(output.ids) > 0:
+                fout.write(' '.join([str(i) for i in output.ids]) + '\n')
 
     fout.close()
 
