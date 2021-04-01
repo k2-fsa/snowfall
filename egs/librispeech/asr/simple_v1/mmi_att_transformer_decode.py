@@ -21,6 +21,7 @@ from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
+from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_HLG
@@ -318,19 +319,14 @@ def main():
         recog_path = exp_dir / f'recogs-{test_set}.txt'
         store_transcripts(path=recog_path, texts=results)
         logging.info(f'The transcripts are stored in {recog_path}')
-        # compute WER
-        dists = [edit_distance(r, h) for r, h in results]
-        errors = {
-            key: sum(dist[key] for dist in dists)
-            for key in ['sub', 'ins', 'del', 'total']
-        }
-        total_words = sum(len(ref) for ref, _ in results)
-        # Print Kaldi-like message:
-        # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-        logging.info(
-            f'[{test_set}] %WER {errors["total"] / total_words:.2%} '
-            f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
-        )
+
+        # The following prints out WERs, per-word error statistics and aligned
+        # ref/hyp pairs.
+        errs_filename = exp_dir / f'errs-{test_set}.txt'
+        with open(errs_filename, 'w') as f:
+            write_error_stats(f, test_set, results)
+        logging.info('Wrote detailed error stats to {}'.format(errs_filename))
+
 
 
 torch.set_num_threads(1)
