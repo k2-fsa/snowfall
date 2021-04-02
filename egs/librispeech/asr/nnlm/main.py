@@ -16,8 +16,9 @@ import sys
 
 sys.path.insert(0, './local/')
 
+from common import load_checkpoint
 from dataset import LMDataset, CollateFunc
-from model import TransformerModel
+from model import TransformerModel, RNNModel
 from pathlib import Path
 from trainer import Trainer
 from torch.utils.tensorboard import SummaryWriter
@@ -34,7 +35,7 @@ def get_args():
                         default='data/nnlm/text/dev.txt.tokens',
                         help='dev data file')
     parser.add_argument('--batch_size', type=int, default=60)
-    parser.add_argument('--ntokens', type=int, default=10000)
+    parser.add_argument('--vocab_size', type=int, default=10000)
     parser.add_argument('--emsize', type=int, default=200)
     parser.add_argument('--nhead', type=int, default=2)
     parser.add_argument('--nhid', type=int, default=200)
@@ -59,6 +60,15 @@ def get_args():
                         type=int,
                         default=1,
                         help='gpu id for this local rank, -1 for cpu')
+    parser.add_argument(
+        '--model_iter',
+        type=int,
+        default=-1,
+        help='resume from trained model; if -1 training from scratch')
+    parser.add_argument('--model_type',
+                        type=str,
+                        default='Transformer',
+                        help='model type')
 
     args = parser.parse_args()
 
@@ -70,33 +80,53 @@ def main():
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(levelname)s %(message)s')
 
-    #Set random seed
+    # Set random seed
     torch.manual_seed(2021)
-    collate_func = CollateFunc()
+    # args.vocab_size: number of tokens in tokenizer.get_vocab
+    # + 2: one for eos_id, another for pad_idx
+    # i.e. token_idxs[0, 1, 2, ...., ntokens -3, ntokens - 2, ntokens - 1]
+    # bos_id: ntokens - 3
+    # eos_id: ntokens - 2
+    # pad_idx: ntokens - 1
+    ntokens = args.vocab_size + 3
+    pad_index = ntokens - 1
 
-    train_dataset = LMDataset(args.train_token)
-    dev_dataset = LMDataset(args.dev_token)
+    collate_func = CollateFunc(pad_index=pad_index)
 
+    train_dataset = LMDataset(args.train_token, ntokens=ntokens)
+    dev_dataset = LMDataset(args.dev_token, ntokens=ntokens)
+
+    # To debug dataset.py, set shuffle=False and num_workers=0
+    # then examples will be loaded as the sequence they are in {train, dev}.tokens
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=args.batch_size,
-                                   shuffle=False,
-                                   num_workers=10,
+                                   shuffle=True,
+                                   num_workers=0,
+                                   drop_last=True,
                                    collate_fn=collate_func)
 
     dev_data_loader = DataLoader(dev_dataset,
                                  batch_size=20,
                                  shuffle=False,
                                  num_workers=0,
+                                 drop_last=True,
                                  collate_fn=collate_func)
 
-    ntokens = args.ntokens
-    model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid,
-                             args.nlayers, args.dropout)
+    if 'Trasformer' == args.model_type:
+        model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid,
+                                 args.nlayers, args.dropout)
+    else:
+        model = RNNModel('LSTM', ntokens, args.emsize, args.nhid, args.nlayers,
+                         args.dropout, False)
+
+    if args.model_iter > 0:
+        model_path = '{}/epoch_{}.pt'.format(args.model_dir, args.model_iter)
+        load_checkpoint(model_path, model)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
     device = torch.device('cuda' if use_cuda else 'cpu')
     print(device)
-    criterion = nn.NLLLoss(ignore_index=0)
+    criterion = nn.NLLLoss(ignore_index=pad_index)
     exp_dir = 'exp-nnlm'
     writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -109,7 +139,7 @@ def main():
                       dev_data_loader=dev_data_loader,
                       ntokens=ntokens,
                       batch_size=args.batch_size,
-                      epoch=0,
+                      epoch=args.model_iter + 1,
                       num_epochs=args.num_epochs,
                       clip=args.clip,
                       model_dir=args.model_dir,

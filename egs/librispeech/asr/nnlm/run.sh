@@ -28,6 +28,14 @@ train_pieces=100000 # 5 times of dev.txt
 # train_pieces=
 dev_text=$text_dir/dev.txt
 
+# vocab_size of huggingface tokenizer
+vocab_size=2000
+# for neural models, number of final classes is:
+# ntokens = $vocab_size + 3
+# while: bos_id = ntokens - 3
+#        eos_id = ntokens - 2
+#        pad_index = ntokens - 1
+
 
 mkdir -p $text_dir
 
@@ -59,12 +67,12 @@ else
   train_text=$all_train_text
 fi
 
-
 if [ $stage -eq 1 ]; then
   echo "training tokenizer"
   python3 local/huggingface_tokenizer.py \
-    --train-file=$train_text \
-    --tokenizer-path=$tokenizer
+    --train-file $train_text \
+    --vocab-size $vocab_size \
+    --tokenizer-path $tokenizer
 fi
 
 
@@ -72,16 +80,21 @@ if [ $stage -eq 2 ]; then
   echo "tokenize train and dev files"
   for text in $dev_text $train_text; do
     python3 local/huggingface_tokenizer.py \
-      --test-file=$text \
-      --tokenizer-path=$tokenizer
+      --test-file $text \
+      --tokenizer-path $tokenizer
   done
 fi
 
 if [ $stage -eq 3 ]; then
   echo "start to train"
+  # model_iter if for resume training
+  # -1 means train from scratch
   python main.py \
+    --model_iter 48 \
     --train_token ${train_text}.tokens \
-    --model Transformer
+    --vocab_size $vocab_size \
+    --model_type Transformer
+
 fi
 
 if [ $stage -eq 4 ]; then
@@ -98,5 +111,7 @@ if [ $stage -eq 4 ]; then
       currently the same words.txt with previous experiment is prefered"
   fi
   echo "generate lexicon"
-  python local/generate_lexicon.py
+  python local/generate_lexicon.py \
+    --tokenizer-path $tokenizer
+
 fi

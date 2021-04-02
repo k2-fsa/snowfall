@@ -20,8 +20,7 @@ class RNNModel(nn.Module):
         super(RNNModel, self).__init__()
         self.ntoken = ntoken
         self.drop = nn.Dropout(dropout)
-        # import pdb; pdb.set_trace()
-        self.encoder = nn.Embedding(ntoken, ninp, padding_idx=0)
+        self.encoder = nn.Embedding(ntoken, ninp, padding_idx=ntoken - 1)
         if rnn_type in ['LSTM', 'GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp,
                                              nhid,
@@ -150,7 +149,7 @@ class TransformerModel(nn.Module):
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.encoder = nn.Embedding(ntoken, ninp)
+        self.encoder = nn.Embedding(ntoken, ninp, padding_idx=ntoken - 1)
         self.ninp = ninp
         self.decoder = nn.Linear(ninp, ntoken)
 
@@ -169,6 +168,8 @@ class TransformerModel(nn.Module):
         nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, src, has_mask=True):
+        # src: [seq—len, batch_size]
+        # len(src) is seq_len
         if has_mask:
             device = src.device
             if self.src_mask is None or self.src_mask.size(0) != len(src):
@@ -177,6 +178,16 @@ class TransformerModel(nn.Module):
                 self.src_mask = mask
         else:
             self.src_mask = None
+
+        # mask: [seq_len, seq_len]
+        # looks like:
+        #     tensor([[0., -inf, -inf,  ..., -inf, -inf, -inf],
+        #             [0., 0., -inf,  ..., -inf, -inf, -inf],
+        #             [0., 0., 0.,  ..., -inf, -inf, -inf],
+        #             ...,
+        #             [0., 0., 0.,  ..., 0., -inf, -inf],
+        #             [0., 0., 0.,  ..., 0., 0., -inf],
+        #             [0., 0., 0.,  ..., 0., 0., 0.]], device='cuda:0')
 
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
