@@ -5,6 +5,7 @@
 
 import logging
 import math
+import numpy as np
 import torch
 
 from common import load_checkpoint, save_checkpoint
@@ -134,6 +135,11 @@ class Trainer(object):
         total_loss = 0.0
         total_examples = 0
         for batch_idx, batch in enumerate(self.dev_data_loader):
+            # batch_input: [seq_len, batch_size]
+            # with contents: <bos> token_id token_id ....
+            #
+            # batch_target: [seq_len, batch_size]
+            # with contensts: token_id token_id ... <eos>
             batch_input, batch_target = batch
             batch_input = batch_input.to(self.device)
             batch_target = batch_target.to(self.device)
@@ -158,3 +164,66 @@ class Trainer(object):
         log_str = 'dev loss is {:.6f} and ppl {:.6f} at epoch {}'.format(
             loss.item(), ppl, self.epoch)
         logging.info(log_str)
+
+    def get_word_counts(self, dev_txt: str):
+        word_counts = []
+        with open(dev_txt, 'r') as f:
+            for line in f:
+                # +1: for append <eos>
+                word_counts.append(len(line.split()) + 1)
+
+        return word_counts
+
+    def compute_words_ppl(self, tokens_loss, tokens_counts, word_counts):
+        assert len(tokens_loss) == len(tokens_counts)
+        assert len(word_counts) == len(tokens_counts)
+        words_ppl = [
+            math.exp(tokens_loss[i] * tokens_counts[i] / word_counts[i])
+            for i in range(len(word_counts))
+        ]
+        word_ppl = np.mean(words_ppl)
+        return word_ppl
+
+    @torch.no_grad()
+    def get_word_ppl(self, dev_txt: str):
+        word_counts = self.get_word_counts(dev_txt)
+        tokens_ppl = []
+        tokens_loss = []
+        tokens_counts = []
+
+        self.model.eval()
+        for batch_idx, batch in enumerate(self.dev_data_loader):
+            if batch_idx % 1000 == 0 and batch_idx > 0:
+                logging.info('{}/{} computed'.format(
+                    batch_idx, len(self.dev_data_loader)))
+            # batch_input: [seq_len, batch_size]
+            # with contents: <bos> token_id token_id ....
+            #
+            # batch_target: [seq_len, batch_size]
+            # with contensts: token_id token_id ... <eos>
+            batch_input, batch_target = batch
+            # batch_size == 1 to get loss and ppl for each seq
+            assert batch_input.shape[1] == 1
+            batch_input = batch_input.to(self.device)
+            batch_target = batch_target.to(self.device)
+            self.model.to(self.device)
+            if isinstance(self.model, TransformerModel):
+                batch_output = self.model(batch_input)
+
+                prediction = batch_output.view(-1, self.ntokens)
+            else:
+                hidden = self.model.init_hidden(batch_input.shape[1])
+                prediction, _ = self.model(batch_input, hidden)
+            # target: [max_seq_len * batch_size]
+            # example_1_token_1 example_2_token_1 example_3_token_1 .....
+            target = batch_target.view(-1)
+            loss = self.criterion(prediction, target).item()
+            ppl = math.exp(loss)
+            tokens_ppl.append(ppl)
+            tokens_loss.append(loss)
+            tokens_counts.append(len(target))
+        word_ppl = self.compute_words_ppl(tokens_loss, tokens_counts,
+                                          word_counts)
+        token_ppl = np.mean(tokens_ppl)
+        logging.info('token_ppl: {}, word_ppl: {}'.format(token_ppl, word_ppl))
+        return word_ppl, token_ppl

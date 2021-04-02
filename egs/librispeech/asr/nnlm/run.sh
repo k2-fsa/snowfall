@@ -23,13 +23,13 @@ text_dir=data/nnlm/text
 all_train_text=$text_dir/librispeech.txt
 # there are 40,398,052 pieces in all_train_text, which will take 50 MINUTES to be tokenized, with a single process.
 # Now only $train_pieces data is used for debugging pipeline
-train_pieces=100000 # 5 times of dev.txt
+train_pieces=300000 # 15 times of dev.txt
 # uncomment follwoing line to use all_train_text
 # train_pieces=
 dev_text=$text_dir/dev.txt
 
 # vocab_size of huggingface tokenizer
-vocab_size=2000
+vocab_size=3000
 # for neural models, number of final classes is:
 # ntokens = $vocab_size + 3
 # while: bos_id = ntokens - 3
@@ -39,13 +39,13 @@ vocab_size=2000
 
 mkdir -p $text_dir
 
-if [ $stage -eq -1 ]; then
+if [ $stage -le -1 ]; then
   # env for experiment ../simple_v1 is expected to have been built.
   echo "Install extra dependencies"
   pip install -r requirements.txt
 fi
 
-if [ $stage -eq 0 ]; then
+if [ $stage -le 0 ]; then
   # reference:
   # https://github.com/kaldi-asr/kaldi/blob/pybind11/egs/librispeech/s5/local/rnnlm/tuning/run_tdnn_lstm_1a.sh#L75
   # use the same data seperation method to kaldi whose result can be used as a baseline
@@ -67,7 +67,7 @@ else
   train_text=$all_train_text
 fi
 
-if [ $stage -eq 1 ]; then
+if [ $stage -le 1 ]; then
   echo "training tokenizer"
   python3 local/huggingface_tokenizer.py \
     --train-file $train_text \
@@ -76,7 +76,7 @@ if [ $stage -eq 1 ]; then
 fi
 
 
-if [ $stage -eq 2 ]; then
+if [ $stage -le 2 ]; then
   echo "tokenize train and dev files"
   for text in $dev_text $train_text; do
     python3 local/huggingface_tokenizer.py \
@@ -85,19 +85,30 @@ if [ $stage -eq 2 ]; then
   done
 fi
 
-if [ $stage -eq 3 ]; then
+if [ $stage -le 3 ]; then
   echo "start to train"
   # model_iter if for resume training
   # -1 means train from scratch
   python main.py \
-    --model_iter 48 \
+    --model_iter -1 \
     --train_token ${train_text}.tokens \
     --vocab_size $vocab_size \
     --model_type Transformer
 
 fi
 
-if [ $stage -eq 4 ]; then
+if [ $stage -le 4 ]; then
+  echo "start to train"
+  # model_iter if for resume training
+  # -1 means train from scratch
+  python compute_word_ppl.py \
+    --model_iter 40 \
+    --vocab_size $vocab_size \
+    --model_type Transformer
+
+fi
+
+if [ $stage -le 5 ]; then
   # generate words.txt tokens.txt and lexicion.txt
   # which is used in future rescore process
   lexicon_path=./data/nnlm/lexicon
