@@ -14,9 +14,11 @@ import numpy as np
 import os
 import sys
 import torch
+import torch.multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
@@ -31,6 +33,7 @@ from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
@@ -63,11 +66,11 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
     if False:
         bad_indexes = torch.nonzero(~mask).squeeze(1)
         if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
+            logging.info('Bad indexes: ', bad_indexes, ', bad lengths: ',
+                         frames_per_seq[bad_indexes], ' vs. max length ',
+                         torch.max(frames_per_seq), ', avg ',
+                         (torch.sum(frames_per_seq) / frames_per_seq.numel()))
+    # print('finite_indexes = ', finite_indexes, ', tot_scores = ', tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
     all_frames = frames_per_seq.sum()
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
@@ -231,14 +234,14 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
                     global_batch_idx_train: int):
-    """One epoch training and validation.
+    '''One epoch training and validation.
 
     Args:
         dataloader: Training dataloader
         valid_dataloader: Validation dataloader
         model: Acoustic model to be trained
         P: An FSA representing the bigram phone LM
-        device: Training device, torch.device("cpu") or torch.device("cuda", device_id)
+        device: Training device, torch.device('cpu') or torch.device('cuda', device_id)
         graph_compiler: MMI training graph compiler
         optimizer: Training optimizer
         accum_grad: Number of gradient accumulation
@@ -254,7 +257,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         - `total_objf / total_frames` is the average training loss
         - `valid_average_objf` is the average validation loss
         - `global_batch_idx_train` is the global training batch index after this epoch
-    """
+   '''
     total_objf, total_frames, total_all_frames = 0., 0., 0.
     valid_average_objf = float('inf')
     time_waiting_for_batch = 0
@@ -275,7 +278,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
         if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.P_scores)
+            P.set_scores_stochastic_(model.module.P_scores)
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -320,7 +323,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                                      curr_batch_objf / (curr_batch_frames + 0.001),
                                      global_batch_idx_train)
             # if batch_idx >= 10:
-            #    print("Exiting early to get profile info")
+            #    print('Exiting early to get profile info')
             #    sys.exit(0)
 
         if batch_idx > 0 and batch_idx % 200 == 0:
@@ -342,7 +345,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -350,26 +353,31 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--world-size',
+        type=int,
+        default=1,
+        help='Number of GPUs for DDP training.')
+    parser.add_argument(
         '--model-type',
         type=str,
-        default="conformer",
-        choices=["transformer", "conformer"],
-        help="Model type.")
+        default='conformer',
+        choices=['transformer', 'conformer'],
+        help='Model type.')
     parser.add_argument(
         '--num-epochs',
         type=int,
         default=10,
-        help="Number of traning epochs.")
+        help='Number of traning epochs.')
     parser.add_argument(
         '--start-epoch',
         type=int,
         default=0,
-        help="Number of start epoch.")
+        help='Number of start epoch.')
     parser.add_argument(
         '--max-duration',
         type=int,
         default=500.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
+        help='Maximum pooled recordings duration (seconds) in a single batch.')
     parser.add_argument(
         '--warm-step',
         type=int,
@@ -380,27 +388,27 @@ def get_parser():
         '--accum-grad',
         type=int,
         default=1,
-        help="Number of gradient accumulation.")
+        help='Number of gradient accumulation.')
     parser.add_argument(
         '--den-scale',
         type=float,
         default=1.0,
-        help="denominator scale in mmi loss.")
+        help='denominator scale in mmi loss.')
     parser.add_argument(
         '--att-rate',
         type=float,
         default=0.0,
-        help="Attention loss rate.")
+        help='Attention loss rate.')
     parser.add_argument(
         '--nhead',
         type=int,
         default=4,
-        help="Number of attention heads in transformer.")
+        help='Number of attention heads in transformer.')
     parser.add_argument(
         '--attention-dim',
         type=int,
         default=256,
-        help="Number of units in transformer attention layers.")
+        help='Number of units in transformer attention layers.')
     parser.add_argument(
         '--bucketing_sampler',
         type=str2bool,
@@ -452,9 +460,18 @@ def get_parser():
     return parser
 
 
-def main():
-    args = get_parser().parse_args()
-
+def run(rank, world_size, args):
+    '''
+    Args:
+      rank:
+        It is a value between 0 and `world_size-1`, which is
+        passed automatically by `mp.spawn()` in :func:`main`.
+        The node with rank 0 is responsible for saving checkpoint.
+      world_size:
+        Number of GPUs for DDP training.
+      args:
+        The return value of get_parser().parse_args()
+    '''
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
@@ -464,26 +481,32 @@ def main():
     att_rate = args.att_rate
 
     fix_random_seed(42)
+    setup_dist(rank, world_size)
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
+    setup_logger(f'{exp_dir}/log/log-train-{rank}')
+    if args.tensorboard and rank == 0:
+        tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+    else:
+        tb_writer = None
+    #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
-    logging.info("Loading L.fst")
+    logging.info('Loading L.fst')
     if (lang_dir / 'Linv.pt').exists():
         L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
         with open(lang_dir / 'L.fst.txt') as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
             L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+            if rank == 0:
+                torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
 
-    device_id = 0
+    device_id = rank
     device = torch.device('cuda', device_id)
 
     graph_compiler = MmiTrainingGraphCompiler(
@@ -499,7 +522,7 @@ def main():
 
     # load dataset
     feature_dir = Path('exp/data')
-    logging.info("About to get train cuts")
+    logging.info('About to get train cuts')
     cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
     if args.full_libri:
         cuts_train = (
@@ -507,15 +530,15 @@ def main():
             load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
             load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
         )
-    logging.info("About to get dev cuts")
+    logging.info('About to get dev cuts')
     cuts_dev = (
         load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
         load_manifest(feature_dir / 'cuts_dev-other.json.gz')
     )
-    logging.info("About to get Musan cuts")
+    logging.info('About to get Musan cuts')
     cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
 
-    logging.info("About to create train dataset")
+    logging.info('About to create train dataset')
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
     if args.concatenate_cuts:
         logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
@@ -564,7 +587,7 @@ def main():
             max_duration=max_duration,
             shuffle=True,
         )
-    logging.info("About to create train dataloader")
+    logging.info('About to create train dataloader')
     train_dl = torch.utils.data.DataLoader(
         train,
         sampler=train_sampler,
@@ -572,7 +595,7 @@ def main():
         num_workers=4,
     )
 
-    logging.info("About to create dev dataset")
+    logging.info('About to create dev dataset')
     if args.on_the_fly_feats:
         cuts_dev = cuts_dev.drop_features()
         validate = K2SpeechRecognitionDataset(
@@ -585,7 +608,7 @@ def main():
         cuts_dev,
         max_duration=max_duration,
     )
-    logging.info("About to create dev dataloader")
+    logging.info('About to create dev dataloader')
     valid_dl = torch.utils.data.DataLoader(
         validate,
         sampler=valid_sampler,
@@ -597,14 +620,14 @@ def main():
         logging.error('No GPU detected!')
         sys.exit(-1)
 
-    logging.info("About to create model")
+    logging.info('About to create model')
 
     if att_rate != 0.0:
         num_decoder_layers = 6
     else:
         num_decoder_layers = 0
 
-    if model_type == "transformer":
+    if model_type == 'transformer':
         model = Transformer(
             num_features=80,
             nhead=args.nhead,
@@ -625,6 +648,9 @@ def main():
 
     model.to(device)
     describe(model)
+
+    model = DDP(model, device_ids=[rank])
+
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
@@ -683,7 +709,8 @@ def main():
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
-                            global_batch_idx_train=global_batch_idx_train)
+                            global_batch_idx_train=global_batch_idx_train,
+                            local_rank=rank)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -692,7 +719,8 @@ def main():
                                best_objf=best_objf,
                                valid_objf=valid_objf,
                                best_valid_objf=best_valid_objf,
-                               best_epoch=best_epoch)
+                               best_epoch=best_epoch,
+                               local_rank=rank)
 
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
@@ -704,7 +732,8 @@ def main():
                         learning_rate=curr_learning_rate,
                         objf=objf,
                         valid_objf=valid_objf,
-                        global_batch_idx_train=global_batch_idx_train)
+                        global_batch_idx_train=global_batch_idx_train,
+                        local_rank=rank)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
@@ -714,9 +743,19 @@ def main():
                            best_objf=best_objf,
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
-                           best_epoch=best_epoch)
+                           best_epoch=best_epoch,
+                           local_rank=rank)
 
     logging.warning('Done')
+    # CAUTION(fangjun): We have to comment out the following statement.
+    # Otherwise, the training seems never to terminate and it gets stuck here.
+    #  cleanup_dist()
+
+def main():
+    args = get_parser().parse_args()
+    world_size = args.world_size
+    assert world_size >= 1
+    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
 
 
 torch.set_num_threads(1)
