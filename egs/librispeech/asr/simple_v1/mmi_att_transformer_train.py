@@ -33,6 +33,7 @@ from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
@@ -367,7 +368,7 @@ def get_parser():
         '--num-epochs',
         type=int,
         default=10,
-        help='Number of traning epochs.')
+        help='Number of training epochs.')
     parser.add_argument(
         '--start-epoch',
         type=int,
@@ -747,9 +748,24 @@ def run(rank, world_size, args):
                            local_rank=rank)
 
     logging.warning('Done')
-    # CAUTION(fangjun): We have to comment out the following statement.
-    # Otherwise, the training seems never to terminate and it gets stuck here.
-    #  cleanup_dist()
+    torch.distributed.barrier()
+    # NOTE: The training process is very likely to hang at this point.
+    # If you press ctrl + c, your GPU memory will not be freed.
+    # To free you GPU memory, you can run:
+    #
+    #  $ ps aux | grep multi
+    #
+    # And it will print something like below:
+    #
+    # kuangfa+  430518 98.9  0.6 57074236 3425732 pts/21 Rl Apr02 639:01 /root/fangjun/py38/bin/python3 -c from multiprocessing.spawn
+    #
+    # You can kill the process manually by:
+    #
+    # $ kill -9 430518
+    #
+    # And you will see that your GPU is now not occupied anymore.
+    cleanup_dist()
+
 
 def main():
     args = get_parser().parse_args()
