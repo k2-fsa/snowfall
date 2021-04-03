@@ -179,16 +179,6 @@ class Trainer(object):
 
         return word_counts
 
-    def compute_words_ppl(self, tokens_loss, tokens_counts, word_counts):
-        assert len(tokens_loss) == len(tokens_counts)
-        assert len(word_counts) == len(tokens_counts)
-        words_ppl = [
-            math.exp(tokens_loss[i] * tokens_counts[i] / word_counts[i])
-            for i in range(len(word_counts))
-        ]
-        word_ppl = np.mean(words_ppl)
-        return word_ppl
-
     @torch.no_grad()
     def get_word_ppl(self, dev_txt: str):
         word_counts = self.get_word_counts(dev_txt)
@@ -227,8 +217,18 @@ class Trainer(object):
             tokens_ppl.append(ppl)
             tokens_loss.append(loss)
             tokens_counts.append(len(target))
-        word_ppl = self.compute_words_ppl(tokens_loss, tokens_counts,
-                                          word_counts)
-        token_ppl = np.mean(tokens_ppl)
+
+        assert len(tokens_loss) == len(tokens_counts)
+        assert len(word_counts) == len(tokens_counts)
+        sentence_log_prob = [
+            tokens_loss[i] * tokens_counts[i]
+            for i in range(len(tokens_counts))
+        ]
+        total_log_prob = np.sum(sentence_log_prob)
+        total_words = np.sum(word_counts)
+        total_tokens = np.sum(tokens_counts)
+
+        word_ppl = math.exp(total_log_prob / total_words)
+        token_ppl = math.exp(total_log_prob / total_tokens)
         logging.info('token_ppl: {}, word_ppl: {}'.format(token_ppl, word_ppl))
         return word_ppl, token_ppl
