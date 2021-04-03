@@ -62,16 +62,21 @@ class Trainer(object):
         self.num_infinite_grad_norm = 0
 
     def run(self):
-        for epoch in range(self.num_epochs):
+        # save and eval initialized moel
+        if 0 == self.epoch:
+            save_checkpoint("{}/epoch_0.pt".format(self.model_dir), self.model)
+            self.eval()
+
+        for epoch in range(self.epoch, self.num_epochs):
             if self.train_data_loader is not None:
                 self.train()
 
+            self.epoch += 1
             if self.dev_data_loader is not None:
                 self.eval()
+
             save_checkpoint("{}/epoch_{}.pt".format(self.model_dir, epoch),
                             self.model)
-
-            self.epoch += 1
 
     def train(self):
         self.model.train()

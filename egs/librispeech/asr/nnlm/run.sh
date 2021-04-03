@@ -98,7 +98,8 @@ if [ $stage -le 3 ]; then
 fi
 
 if [ $stage -le 4 ]; then
-  echo "start to train"
+  # TODO: this module is in developing
+  echo "compute word ppl from token ppl"
   # model_iter if for resume training
   # -1 means train from scratch
   python compute_word_ppl.py \

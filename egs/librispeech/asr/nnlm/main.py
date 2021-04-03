@@ -101,7 +101,7 @@ def main():
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=args.batch_size,
                                    shuffle=True,
-                                   num_workers=0,
+                                   num_workers=10,
                                    drop_last=True,
                                    collate_fn=collate_func)
 
@@ -131,6 +131,7 @@ def main():
     writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
     Path(os.path.dirname(args.model_dir)).mkdir(parents=True, exist_ok=True)
+    log_interval = max(100, len(train_data_loader) // 20)
     trainer = Trainer(device,
                       model,
                       criterion,
@@ -142,6 +143,7 @@ def main():
                       epoch=args.model_iter + 1,
                       num_epochs=args.num_epochs,
                       clip=args.clip,
+                      log_interval=log_interval,
                       model_dir=args.model_dir,
                       writer=writer)
     trainer.run()
