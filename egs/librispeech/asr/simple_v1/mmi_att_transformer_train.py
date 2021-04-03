@@ -67,11 +67,11 @@ def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
     if False:
         bad_indexes = torch.nonzero(~mask).squeeze(1)
         if bad_indexes.shape[0] > 0:
-            logging.info('Bad indexes: ', bad_indexes, ', bad lengths: ',
-                         frames_per_seq[bad_indexes], ' vs. max length ',
-                         torch.max(frames_per_seq), ', avg ',
-                         (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print('finite_indexes = ', finite_indexes, ', tot_scores = ', tot_scores)
+            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
+                  frames_per_seq[bad_indexes], " vs. max length ",
+                  torch.max(frames_per_seq), ", avg ",
+                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
+    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
     ok_frames = frames_per_seq[finite_indexes].sum()
     all_frames = frames_per_seq.sum()
     return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
@@ -235,14 +235,14 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
                     global_batch_idx_train: int):
-    '''One epoch training and validation.
+    """One epoch training and validation.
 
     Args:
         dataloader: Training dataloader
         valid_dataloader: Validation dataloader
         model: Acoustic model to be trained
         P: An FSA representing the bigram phone LM
-        device: Training device, torch.device('cpu') or torch.device('cuda', device_id)
+        device: Training device, torch.device("cpu") or torch.device("cuda", device_id)
         graph_compiler: MMI training graph compiler
         optimizer: Training optimizer
         accum_grad: Number of gradient accumulation
@@ -258,7 +258,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         - `total_objf / total_frames` is the average training loss
         - `valid_average_objf` is the average validation loss
         - `global_batch_idx_train` is the global training batch index after this epoch
-   '''
+    """
     total_objf, total_frames, total_all_frames = 0., 0., 0.
     valid_average_objf = float('inf')
     time_waiting_for_batch = 0
@@ -324,7 +324,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                                      curr_batch_objf / (curr_batch_frames + 0.001),
                                      global_batch_idx_train)
             # if batch_idx >= 10:
-            #    print('Exiting early to get profile info')
+            #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
         if batch_idx > 0 and batch_idx % 200 == 0:
@@ -361,24 +361,24 @@ def get_parser():
     parser.add_argument(
         '--model-type',
         type=str,
-        default='conformer',
-        choices=['transformer', 'conformer'],
-        help='Model type.')
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
     parser.add_argument(
         '--num-epochs',
         type=int,
         default=10,
-        help='Number of training epochs.')
+        help="Number of training epochs.")
     parser.add_argument(
         '--start-epoch',
         type=int,
         default=0,
-        help='Number of start epoch.')
+        help="Number of start epoch.")
     parser.add_argument(
         '--max-duration',
         type=int,
         default=500.0,
-        help='Maximum pooled recordings duration (seconds) in a single batch.')
+        help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--warm-step',
         type=int,
@@ -389,27 +389,27 @@ def get_parser():
         '--accum-grad',
         type=int,
         default=1,
-        help='Number of gradient accumulation.')
+        help="Number of gradient accumulation.")
     parser.add_argument(
         '--den-scale',
         type=float,
         default=1.0,
-        help='denominator scale in mmi loss.')
+        help="denominator scale in mmi loss.")
     parser.add_argument(
         '--att-rate',
         type=float,
         default=0.0,
-        help='Attention loss rate.')
+        help="Attention loss rate.")
     parser.add_argument(
         '--nhead',
         type=int,
         default=4,
-        help='Number of attention heads in transformer.')
+        help="Number of attention heads in transformer.")
     parser.add_argument(
         '--attention-dim',
         type=int,
         default=256,
-        help='Number of units in transformer attention layers.')
+        help="Number of units in transformer attention layers.")
     parser.add_argument(
         '--bucketing_sampler',
         type=str2bool,
@@ -497,7 +497,7 @@ def run(rank, world_size, args):
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
-    logging.info('Loading L.fst')
+    logging.info("Loading L.fst")
     if (lang_dir / 'Linv.pt').exists():
         L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
     else:
@@ -523,7 +523,7 @@ def run(rank, world_size, args):
 
     # load dataset
     feature_dir = Path('exp/data')
-    logging.info('About to get train cuts')
+    logging.info("About to get train cuts")
     cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
     if args.full_libri:
         cuts_train = (
@@ -531,15 +531,15 @@ def run(rank, world_size, args):
             load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
             load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
         )
-    logging.info('About to get dev cuts')
+    logging.info("About to get dev cuts")
     cuts_dev = (
         load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
         load_manifest(feature_dir / 'cuts_dev-other.json.gz')
     )
-    logging.info('About to get Musan cuts')
+    logging.info("About to get Musan cuts")
     cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
 
-    logging.info('About to create train dataset')
+    logging.info("About to create train dataset")
     transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
     if args.concatenate_cuts:
         logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
@@ -588,7 +588,7 @@ def run(rank, world_size, args):
             max_duration=max_duration,
             shuffle=True,
         )
-    logging.info('About to create train dataloader')
+    logging.info("About to create train dataloader")
     train_dl = torch.utils.data.DataLoader(
         train,
         sampler=train_sampler,
@@ -596,7 +596,7 @@ def run(rank, world_size, args):
         num_workers=4,
     )
 
-    logging.info('About to create dev dataset')
+    logging.info("About to create dev dataset")
     if args.on_the_fly_feats:
         cuts_dev = cuts_dev.drop_features()
         validate = K2SpeechRecognitionDataset(
@@ -609,7 +609,7 @@ def run(rank, world_size, args):
         cuts_dev,
         max_duration=max_duration,
     )
-    logging.info('About to create dev dataloader')
+    logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate,
         sampler=valid_sampler,
@@ -621,14 +621,14 @@ def run(rank, world_size, args):
         logging.error('No GPU detected!')
         sys.exit(-1)
 
-    logging.info('About to create model')
+    logging.info("About to create model")
 
     if att_rate != 0.0:
         num_decoder_layers = 6
     else:
         num_decoder_layers = 0
 
-    if model_type == 'transformer':
+    if model_type == "transformer":
         model = Transformer(
             num_features=80,
             nhead=args.nhead,
