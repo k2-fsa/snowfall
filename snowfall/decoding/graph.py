@@ -79,4 +79,11 @@ def compile_HLG(
     logging.info(
         f'LG is arc sorted: {(HLG.properties & k2.fsa_properties.ARC_SORTED) != 0}'
     )
+
+    # Attach a new attribute `lm_scores` so that we can recover
+    # the `am_scores` later.
+    # The scores on an arc consists of two parts:
+    #  scores = am_scores + lm_scores
+    # NOTE: we assume that both kinds of scores are in log-space.
+    HLG.lm_scores = HLG.scores.clone()
     return HLG

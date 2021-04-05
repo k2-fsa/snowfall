@@ -21,10 +21,12 @@ from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
-from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.common import str2bool
+from snowfall.common import write_error_stats
 from snowfall.decoding.graph import compile_HLG
+from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
@@ -34,7 +36,9 @@ from snowfall.training.mmi_graph import get_phone_symbols
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
+        device: Union[str, torch.device], HLG: Fsa, G: Fsa, num_paths: int,
+        symbols: SymbolTable):
+    G = k2.arc_sort(G)  # It is a no-op if it is already sorted.
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -72,8 +76,10 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        # lattices = k2.intersect_dense(HLG, dense_fsa_vec, 10.0)
-        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        if G is None:
+            best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        else:
+            best_paths = decode_with_lm_rescoring(lattices, G, num_paths=num_paths)
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
         assert len(hyps) == len(texts)
@@ -178,7 +184,7 @@ def get_parser():
         '--avg',
         type=int,
         default=5,
-        help="Number of checkpionts to average. Automaticly select "
+        help="Number of checkpionts to average. Automatically select "
              "consecutive checkpoints before checkpoint specified by'--epoch'. ")
     parser.add_argument(
         '--att-rate',
@@ -195,6 +201,19 @@ def get_parser():
         type=int,
         default=256,
         help="Number of units in transformer attention layers.")
+    parser.add_argument(
+        '--use-lm-rescoring',
+        type=str2bool,
+        default=True,
+        help='When enabled, it uses LM for rescoring')
+    parser.add_argument(
+        '--num-paths',
+        type=int,
+        default=100,
+        help='Number of paths for rescoring using n-best list.' \
+             'If it is negative, then rescore without using n-best list.'\
+             'CAUTION: You have to reduce max_duration in case of error "Problem size is too large"'
+             )
     return parser
 
 
@@ -206,6 +225,12 @@ def main():
     max_duration = args.max_duration
     avg = args.avg
     att_rate = args.att_rate
+    use_lm_rescoring = args.use_lm_rescoring
+    num_paths = args.num_paths
+    if num_paths < 0:
+        num_paths = None
+    else:
+        assert num_paths > 1
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
@@ -288,6 +313,40 @@ def main():
         d = torch.load(lang_dir / 'HLG.pt')
         HLG = k2.Fsa.from_dict(d)
 
+    if args.use_lm_rescoring:
+        logging.debug(f'Rescoring with num_paths: {num_paths}')
+        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
+        logging.debug('Loading G_4_gram')
+        if not os.path.exists(lang_dir / 'G_4_gram.pt'):
+            with open(lang_dir / 'G_4_gram.fst.txt') as f:
+                G = k2.Fsa.from_openfst(f.read(), acceptor=False)
+                del G.aux_labels
+                # CAUTION(fangjun): The following line is crucial.
+                # Arcs entering the back-off state have label equal to #0.
+                # We have to change it to 0 here.
+                G.labels[G.labels >= first_word_disambig_id] = 0
+                G = k2.create_fsa_vec([G]).to(device)
+                G = k2.arc_sort(G)
+                torch.save(G.as_dict(), lang_dir / 'G_4_gram.pt')
+        else:
+            logging.debug('Loading pre-compiled G_4_gram')
+            d = torch.load(lang_dir / 'G_4_gram.pt')
+            G = k2.Fsa.from_dict(d).to(device)
+
+        if num_paths is None:
+            # TODO(fangjun): remove this
+            assert False, 'Rescoring with whole lattice is currently not supported'
+            # We are not going to use n-best list for rescoring.
+            # Add epsilon self-loops to G.
+            G = k2.add_epsilon_self_loops(G)
+            G = k2.arc_sort(G)
+            G = G.to(device)
+
+            logging.debug('Use whole lattice for rescoring')
+    else:
+        logging.debug('Decoding without LM rescoring')
+        G = None
+
     logging.debug("convert HLG to device")
     HLG = HLG.to(device)
     HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
@@ -309,11 +368,16 @@ def main():
         logging.debug("About to create test dataloader")
         test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
+        if not hasattr(HLG, 'lm_scores'):
+            HLG.lm_scores = HLG.scores.clone()
+
         logging.debug("About to decode")
         results = decode(dataloader=test_dl,
                          model=model,
                          device=device,
                          HLG=HLG,
+                         G=G,
+                         num_paths=num_paths,
                          symbols=symbol_table)
 
         recog_path = exp_dir / f'recogs-{test_set}.txt'
