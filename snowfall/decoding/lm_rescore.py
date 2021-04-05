@@ -168,7 +168,6 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
 
     # Use k2.index here since argmax_indexes' dtype is torch.int32
     best_path_indexes = k2.index(new2old, argmax_indexes)
-    #  best_path_indexes = argmax_indexes
 
     paths = k2.ragged.remove_axis(paths, 0)
 

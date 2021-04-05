@@ -38,7 +38,6 @@ from snowfall.training.mmi_graph import get_phone_symbols
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         device: Union[str, torch.device], HLG: Fsa, G: Fsa, num_paths: int,
         symbols: SymbolTable):
-    G = k2.arc_sort(G)  # It is a no-op if it is already sorted.
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
