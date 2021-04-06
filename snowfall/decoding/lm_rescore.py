@@ -227,9 +227,8 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
     # inverted rescoring_lats has phone IDs as labels
     # and word IDs as aux_labels.
 
-    # FIXME(fangjun): Use it when k2 is updated to support
-    # removing epsilon-self-loops
-    assert False, 'k2.shortest_path requires an acyclic FSA'
+    inverted_rescoring_lats = k2.remove_epsilon_self_loops(
+        inverted_rescoring_lats)
     best_paths = k2.shortest_path(inverted_rescoring_lats,
                                   use_double_scores=True)
     return best_paths

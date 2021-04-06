@@ -333,8 +333,6 @@ def main():
             G = k2.Fsa.from_dict(d).to(device)
 
         if num_paths is None:
-            # TODO(fangjun): remove this
-            assert False, 'Rescoring with whole lattice is currently not supported'
             # We are not going to use n-best list for rescoring.
             # Add epsilon self-loops to G.
             G = k2.add_epsilon_self_loops(G)
