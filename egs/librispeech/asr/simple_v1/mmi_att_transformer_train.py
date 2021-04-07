@@ -18,19 +18,16 @@ from datetime import datetime
 from pathlib import Path
 from torch import nn
 from torch.nn.utils import clip_grad_value_
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet, Fbank, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
-    SpecAugment
-from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
-from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from lhotse.utils import fix_random_seed
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.data.librispeech import LibriSpeechDataModule
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
@@ -366,11 +363,6 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-duration',
-        type=int,
-        default=500.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
-    parser.add_argument(
         '--warm-step',
         type=int,
         default=5000,
@@ -402,48 +394,6 @@ def get_parser():
         default=256,
         help="Number of units in transformer attention layers.")
     parser.add_argument(
-        '--bucketing_sampler',
-        type=str2bool,
-        default=False,
-        help='When enabled, the batches will come from buckets of '
-             'similar duration (saves padding frames).')
-    parser.add_argument(
-        '--num-buckets',
-        type=int,
-        default=30,
-        help='The number of buckets for the BucketingSampler'
-             '(you might want to increase it for larger datasets).')
-    parser.add_argument(
-        '--concatenate-cuts',
-        type=str2bool,
-        default=True,
-        help='When enabled, utterances (cuts) will be concatenated '
-             'to minimize the amount of padding.')
-    parser.add_argument(
-        '--duration-factor',
-        type=float,
-        default=1.0,
-        help='Determines the maximum duration of a concatenated cut '
-             'relative to the duration of the longest cut in a batch.')
-    parser.add_argument(
-        '--gap',
-        type=float,
-        default=1.0,
-        help='The amount of padding (in seconds) inserted between concatenated cuts. '
-             'This padding is filled with noise when noise augmentation is used.')
-    parser.add_argument(
-        '--full-libri',
-        type=str2bool,
-        default=False,
-        help='When enabled, use 960h LibriSpeech.')
-    parser.add_argument(
-        '--on-the-fly-feats',
-        type=str2bool,
-        default=False,
-        help='When enabled, use on-the-fly cut mixing and feature extraction. '
-             'Will drop existing precomputed feature manifests if available.'
-    )
-    parser.add_argument(
         '--tensorboard',
         type=str2bool,
         default=True,
@@ -453,12 +403,13 @@ def get_parser():
 
 
 def main():
-    args = get_parser().parse_args()
+    parser = get_parser()
+    LibriSpeechDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_duration = args.max_duration
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
@@ -497,101 +448,9 @@ def main():
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
 
-    # load dataset
-    feature_dir = Path('exp/data')
-    logging.info("About to get train cuts")
-    cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
-    if args.full_libri:
-        cuts_train = (
-            cuts_train +
-            load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
-            load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
-        )
-    logging.info("About to get dev cuts")
-    cuts_dev = (
-        load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
-        load_manifest(feature_dir / 'cuts_dev-other.json.gz')
-    )
-    logging.info("About to get Musan cuts")
-    cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
-
-    logging.info("About to create train dataset")
-    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if args.concatenate_cuts:
-        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
-        # Cut concatenation should be the first transform in the list,
-        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
-        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=transforms,
-        input_transforms=[
-             SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-        ]
-    )
-
-    if args.on_the_fly_feats:
-        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
-        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
-        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
-        # # Speed perturbation probably should come first before concatenation,
-        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
-        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
-        # Drop feats to be on the safe side.
-        cuts_train = cuts_train.drop_features()
-        from lhotse.features.fbank import FbankConfig
-        train = K2SpeechRecognitionDataset(
-            cuts=cuts_train,
-            cut_transforms=transforms,
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
-            input_transforms=[
-                SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-            ]
-        )
-
-    if args.bucketing_sampler:
-        logging.info('Using BucketingSampler.')
-        train_sampler = BucketingSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-            num_buckets=args.num_buckets
-        )
-    else:
-        logging.info('Using SingleCutSampler.')
-        train_sampler = SingleCutSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-        )
-    logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(
-        train,
-        sampler=train_sampler,
-        batch_size=None,
-        num_workers=4,
-    )
-
-    logging.info("About to create dev dataset")
-    if args.on_the_fly_feats:
-        cuts_dev = cuts_dev.drop_features()
-        validate = K2SpeechRecognitionDataset(
-            cuts_dev.drop_features(),
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
-        )
-    else:
-        validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(
-        cuts_dev,
-        max_duration=max_duration,
-    )
-    logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(
-        validate,
-        sampler=valid_sampler,
-        batch_size=None,
-        num_workers=1
-    )
+    librispeech = LibriSpeechDataModule(args)
+    train_dl = librispeech.train_dataloaders()
+    valid_dl = librispeech.valid_dataloaders()
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
@@ -647,7 +506,7 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     for epoch in range(start_epoch, num_epochs):
-        train_sampler.set_epoch(epoch)
+        train_dl.sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
         if tb_writer is not None:
             tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
