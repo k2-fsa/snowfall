@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import argparse
 
 from typing import List, Union
@@ -38,6 +40,12 @@ class AsrDataModule(DataModule):
             description='These options are used for the preparation of PyTorch DataLoaders '
                         'from Lhotse CutSet\'s -- they control the effective batch sizes, '
                         'sampling strategies, applied data augmentations, etc.'
+        )
+        group.add_argument(
+            '--feature-dir',
+            type=Path,
+            default=Path('exp/data'),
+            help='Path to directory with train/valid/test cuts.'
         )
         group.add_argument(
             '--max-duration',
