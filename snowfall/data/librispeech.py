@@ -42,8 +42,8 @@ class LibriSpeechAsrDataModule(AsrDataModule):
     def valid_cuts(self) -> CutSet:
         logging.info("About to get dev cuts")
         cuts_valid = (
-                load_manifest(self.feature_dir / 'cuts_dev-clean.json.gz') +
-                load_manifest(self.feature_dir / 'cuts_dev-other.json.gz')
+                load_manifest(self.args.feature_dir / 'cuts_dev-clean.json.gz') +
+                load_manifest(self.args.feature_dir / 'cuts_dev-other.json.gz')
         )
         return cuts_valid
 
