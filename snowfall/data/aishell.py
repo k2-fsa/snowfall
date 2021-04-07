@@ -2,7 +2,7 @@ import logging
 from functools import lru_cache
 
 from lhotse import CutSet, load_manifest
-from snowfall.data import AsrDataModule
+from snowfall.data.asr_datamodule import AsrDataModule
 
 
 class AishellAsrDataModule(AsrDataModule):
