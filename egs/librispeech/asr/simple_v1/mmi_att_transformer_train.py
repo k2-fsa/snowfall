@@ -27,7 +27,7 @@ from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.data.librispeech import LibriSpeechAsrDataModule, LibriSpeechDataModule
+from snowfall.data.librispeech import LibriSpeechAsrDataModule
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer

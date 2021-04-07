@@ -11,13 +11,10 @@ import numpy as np
 import os
 import torch
 from k2 import Fsa, SymbolTable
-from kaldialign import edit_distance
 from pathlib import Path
 from typing import List
 from typing import Union
 
-from lhotse import CutSet, load_manifest
-from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts

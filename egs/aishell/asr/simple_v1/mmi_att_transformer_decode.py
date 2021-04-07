@@ -17,8 +17,6 @@ from pathlib import Path
 from typing import List
 from typing import Union
 
-from lhotse import CutSet
-from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
