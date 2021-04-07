@@ -1,2 +1,4 @@
+from .aishell import AishellAsrDataModule
+from .asr_datamodule import AsrDataModule
 from .datamodule import DataModule
-from .librispeech import LibriSpeechDataModule
+from .librispeech import LibriSpeechAsrDataModule
