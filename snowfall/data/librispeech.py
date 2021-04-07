@@ -16,7 +16,8 @@ class LibriSpeechAsrDataModule(AsrDataModule):
     The train and valid cuts for standard Libri splits are concatenated into a single CutSet/DataLoader.
     """
 
-    def add_arguments(self, parser: argparse.ArgumentParser):
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser):
         super().add_arguments(parser)
         group = parser.add_argument_group(title='LibriSpeech specific options')
         group.add_argument(

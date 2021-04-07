@@ -30,7 +30,8 @@ class AsrDataModule(DataModule):
     This class should be derived for specific corpora used in ASR tasks.
     """
 
-    def add_arguments(self, parser: argparse.ArgumentParser):
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser):
         super().add_arguments(parser)
         group = parser.add_argument_group(
             title='ASR data related options',

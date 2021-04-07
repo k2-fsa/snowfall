@@ -19,7 +19,8 @@ class DataModule:
     def __init__(self, args: argparse.Namespace):
         self.args = args
 
-    def add_arguments(self, parser: argparse.ArgumentParser):
+    @classmethod
+    def add_arguments(cls, parser: argparse.ArgumentParser):
         pass
 
     def train_cuts(self) -> Union[CutSet, List[CutSet]]:
