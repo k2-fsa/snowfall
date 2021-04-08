@@ -22,52 +22,20 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse.utils import fix_random_seed
+from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.data.librispeech import LibriSpeechAsrDataModule
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
-from snowfall.training.mmi_graph import get_phone_symbols
-
-
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
 def get_objf(batch: Dict,
@@ -84,68 +52,31 @@ def get_objf(batch: Dict,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['inputs']
-    supervisions = batch['supervisions']
-    supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-         (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
-    supervision_segments = torch.clamp(supervision_segments, min=0)
-    indices = torch.argsort(supervision_segments[:, 2], descending=True)
-    supervision_segments = supervision_segments[indices]
-
-    texts = supervisions['text']
-    texts = [texts[idx] for idx in indices]
-    assert feature.ndim == 3
-    # print(supervision_segments[:, 1] + supervision_segments[:, 2])
-
-    feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions)
+
+    loss_fn = LFMMILoss(
+        graph_compiler=graph_compiler,
+        P=P,
+        den_scale=den_scale
+    )
+
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
-    else:
-        with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
-            if att_rate != 0.0:
-                att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
-
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
-
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
-
-    num_tot_scores = num.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -157,9 +88,9 @@ def get_objf(batch: Dict,
                 )
 
         if att_rate != 0.0:
-            loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
+            loss = (- (1.0 - att_rate) * mmi_loss + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
-            loss = (-tot_score) / (len(texts) * accum_grad)
+            loss = (-mmi_loss) / (len(texts) * accum_grad)
         loss.backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
@@ -178,7 +109,7 @@ def get_objf(batch: Dict,
                 optimizer.step()
             optimizer.zero_grad()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
+    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
     return ans
 
@@ -420,30 +351,18 @@ def main():
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
 
-    # load L, G, symbol_table
+    logging.info("Loading lexicon and symbol tables")
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
-    else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    lexicon = Lexicon(lang_dir)
 
     device_id = 0
     device = torch.device('cuda', device_id)
 
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
+        lexicon=lexicon,
         device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
