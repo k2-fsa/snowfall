@@ -290,7 +290,7 @@ def main():
     # load dataset
     librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
-    for test_set, test_dl in zip(test_sets, librispeech.train_dataloaders()):
+    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
         results = decode(dataloader=test_dl,
