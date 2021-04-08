@@ -32,8 +32,7 @@ from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
-from snowfall.objectives.common import encode_supervisions
-from snowfall.objectives.mmi import LFMMILoss
+from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
