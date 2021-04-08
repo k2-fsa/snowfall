@@ -9,6 +9,7 @@ import torch
 
 from .ctc_graph import build_ctc_topo
 from snowfall.common import get_phone_symbols
+from ..lexicon import Lexicon
 
 
 def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
@@ -42,12 +43,12 @@ def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
 
 class MmiTrainingGraphCompiler(object):
 
-    def __init__(self,
-                 L_inv: k2.Fsa,
-                 phones: k2.SymbolTable,
-                 words: k2.SymbolTable,
-                 device: torch.device,
-                 oov: str = '<UNK>'):
+    def __init__(
+            self,
+            lexicon: Lexicon,
+            device: torch.device,
+            oov: str = '<UNK>'
+    ):
         '''
         Args:
           L_inv:
@@ -59,23 +60,21 @@ class MmiTrainingGraphCompiler(object):
         oov:
           Out of vocabulary word.
         '''
-
-        L_inv = L_inv.to(device)
+        self.lexicon = lexicon
+        L_inv = self.lexicon.L_inv.to(device)
 
         if L_inv.properties & k2.fsa_properties.ARC_SORTED != 0:
             L_inv = k2.arc_sort(L_inv)
 
         assert L_inv.requires_grad is False
 
-        assert oov in words
+        assert oov in self.lexicon.words
 
         self.L_inv = L_inv
-        self.phones = phones
-        self.words = words
-        self.oov_id = self.words[oov]
+        self.oov_id = self.lexicon.words[oov]
         self.device = device
 
-        phone_symbols = get_phone_symbols(phones)
+        phone_symbols = get_phone_symbols(self.lexicon.phones)
         phone_symbols_with_blank = [0] + phone_symbols
 
         ctc_topo = build_ctc_topo(phone_symbols_with_blank).to(device)
@@ -149,8 +148,8 @@ class MmiTrainingGraphCompiler(object):
         for text in texts:
             word_ids = []
             for word in text.split(' '):
-                if word in self.words:
-                    word_ids.append(self.words[word])
+                if word in self.lexicon.words:
+                    word_ids.append(self.lexicon.words[word])
                 else:
                     word_ids.append(self.oov_id)
             word_ids_list.append(word_ids)
