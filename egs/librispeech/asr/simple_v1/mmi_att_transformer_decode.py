@@ -11,19 +11,17 @@ import numpy as np
 import os
 import torch
 from k2 import Fsa, SymbolTable
-from kaldialign import edit_distance
 from pathlib import Path
 from typing import List
 from typing import Union
 
-from lhotse import CutSet, load_manifest
-from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
@@ -170,11 +168,6 @@ def get_parser():
         default=10,
         help="Decoding epoch.")
     parser.add_argument(
-        '--max-duration',
-        type=int,
-        default=1000.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
-    parser.add_argument(
         '--avg',
         type=int,
         default=5,
@@ -199,11 +192,12 @@ def get_parser():
 
 
 def main():
-    args = get_parser().parse_args()
+    parser = get_parser()
+    LibriSpeechAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     epoch = args.epoch
-    max_duration = args.max_duration
     avg = args.avg
     att_rate = args.att_rate
 
@@ -294,22 +288,11 @@ def main():
     HLG.requires_grad_(False)
 
     # load dataset
-    feature_dir = Path('exp/data')
+    librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
-    for test_set in test_sets:
+    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
-        logging.debug("About to get test cuts")
-        cuts_test = load_manifest(feature_dir / f'cuts_{test_set}.json.gz')
-        logging.debug("About to create test dataset")
-        from lhotse.dataset.input_strategies import OnTheFlyFeatures
-        from lhotse import Fbank, FbankConfig
-        test = K2SpeechRecognitionDataset(cuts_test, input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))))
-        sampler = SingleCutSampler(cuts_test, max_duration=max_duration)
-        logging.debug("About to create test dataloader")
-        test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
-
-        logging.debug("About to decode")
         results = decode(dataloader=test_dl,
                          model=model,
                          device=device,
@@ -326,7 +309,6 @@ def main():
         with open(errs_filename, 'w') as f:
             write_error_stats(f, test_set, results)
         logging.info('Wrote detailed error stats to {}'.format(errs_filename))
-
 
 
 torch.set_num_threads(1)
