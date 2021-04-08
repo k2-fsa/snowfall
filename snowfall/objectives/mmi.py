@@ -32,17 +32,17 @@ class LFMMILoss(nn.Module):
             texts: List,
             supervision_segments: torch.Tensor
     ) -> Tuple[torch.Tensor, int, int]:
-        num, den = self.graph_compiler.compile(texts, self.P)
+        num_graphs, den_graphs = self.graph_compiler.compile(texts, self.P)
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
 
-        num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-        den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
+        num_lats = k2.intersect_dense(num_graphs, dense_fsa_vec, 10.0)
+        den_lats = k2.intersect_dense(den_graphs, dense_fsa_vec, 10.0)
 
-        num_tot_scores = num.get_tot_scores(
+        num_tot_scores = num_lats.get_tot_scores(
             log_semiring=True,
             use_double_scores=True
         )
-        den_tot_scores = den.get_tot_scores(
+        den_tot_scores = den_lats.get_tot_scores(
             log_semiring=True,
             use_double_scores=True
         )

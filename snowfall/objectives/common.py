@@ -10,7 +10,7 @@ def encode_supervisions(supervisions: Dict[str, Tensor]) -> Tuple[Tensor, List[s
     and a list of transcription strings.
 
     The supervision tensor has shape ``(batch_size, 3)``.
-    It's second dimension contains information about sequence index [0],
+    Its second dimension contains information about sequence index [0],
     start frames [1] and num frames [2].
 
     The batch items might become re-ordered during this operation -- the returned tensor
