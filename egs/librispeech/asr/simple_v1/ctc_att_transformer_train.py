@@ -9,24 +9,22 @@
 import argparse
 import k2
 import logging
-import math
 import numpy as np
 import os
 import sys
 import torch
 from datetime import datetime
 from pathlib import Path
-from torch import nn
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from lhotse import CutSet, Fbank, load_manifest
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
     SpecAugment
 from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
-from lhotse.utils import fix_random_seed
+from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
@@ -34,42 +32,10 @@ from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.objectives import CTCLoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 from snowfall.training.mmi_graph import get_phone_symbols
-
-
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
 def get_objf(batch: Dict,
@@ -84,56 +50,23 @@ def get_objf(batch: Dict,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['inputs']
-    supervisions = batch['supervisions']
-    supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-         (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
-    supervision_segments = torch.clamp(supervision_segments, min=0)
-    indices = torch.argsort(supervision_segments[:, 2], descending=True)
-    supervision_segments = supervision_segments[indices]
-
-    texts = supervisions['text']
-    texts = [texts[idx] for idx in indices]
-    assert feature.ndim == 3
-    # print(supervision_segments[:, 1] + supervision_segments[:, 2])
-
     feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions)
+
+    loss_fn = CTCLoss(graph_compiler)
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
-    else:
-        with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
-            if att_rate != 0.0:
-                att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
-
-    decoding_graph = graph_compiler.compile(texts).to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert decoding_graph.is_cuda()
-    assert decoding_graph.device == device
-    assert nnet_output.device == device
-
-    target_graph = k2.intersect_dense(decoding_graph, dense_fsa_vec, 10.0)
-
-    tot_scores = target_graph.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        tot_score, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
