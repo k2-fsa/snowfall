@@ -43,15 +43,15 @@ class CollateFunc(object):
 
 class LMDataset(Dataset):
 
-    def __init__(self, text_file: str, ntokens=None):
+    def __init__(self, text_file: str, ntoken:int):
         '''Dataset to load Language Model train/dev text data
 
         Args:
             text_file: text file, text for one utt per line.
         '''
-        self.bos_id = ntokens - 3
-        self.eos_id = ntokens - 2
-        self.pad_index = ntokens - 1
+        self.bos_id = ntoken - 3
+        self.eos_id = ntoken - 2
+        self.pad_index = ntoken - 1
         assert os.path.exists(
             text_file
         ), "text_file: {} does not exist, please check that.".format(text_file)
@@ -59,6 +59,7 @@ class LMDataset(Dataset):
         with open(text_file, 'r') as f:
             for idx, line in enumerate(f):
                 token_id = [int(i) for i in line.strip().split()]
+                # https://github.com/espnet/espnet/blob/master/espnet/lm/lm_utils.py#L179
                 # add bos_id and eos_id to each piece of example
                 # then each valid example should be longer than 2
                 token_id.insert(0, self.bos_id)

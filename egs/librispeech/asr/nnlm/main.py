@@ -4,6 +4,7 @@
 # Apache 2.0
 
 # Reference:
+# https://github.com/espnet/espnet/blob/master/espnet/lm/pytorch_backend/lm.py
 # https://github.com/mobvoi/wenet/blob/main/wenet/bin/train.py
 import argparse
 
@@ -13,139 +14,126 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import sys
+import yaml
 
 sys.path.insert(0, './local/')
 
 from common import load_checkpoint
 from dataset import LMDataset, CollateFunc
-from model import TransformerModel, RNNModel
+from model import TransformerModel
 from pathlib import Path
 from trainer import Trainer
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from typing import List, Dict
 
 
 def get_args():
     parser = argparse.ArgumentParser(
         description='training Neural Language Model')
-    parser.add_argument('--train_token',
-                        default='data/nnlm/text/librispeech.txt.tokens',
-                        help='train data file')
-    parser.add_argument('--dev_token',
-                        default='data/nnlm/text/dev.txt.tokens',
-                        help='dev data file')
-    parser.add_argument('--batch_size', type=int, default=60)
-    parser.add_argument('--vocab_size', type=int, default=10000)
-    parser.add_argument('--emsize', type=int, default=200)
-    parser.add_argument('--nhead', type=int, default=2)
-    parser.add_argument('--nhid', type=int, default=200)
-    parser.add_argument('--nlayers', type=int, default=2)
-    parser.add_argument('--num_epochs', type=int, default=50)
-    parser.add_argument('--dropout', type=int, default=0.2)
-    parser.add_argument('--lr',
-                        type=float,
-                        default=1e-2,
-                        help='initial learning rate')
-    parser.add_argument('--clip',
-                        type=float,
-                        default=50.0,
-                        help='gradient clipping')
-    parser.add_argument('--model_dir',
-                        default='./exp-nnlm/models/',
-                        help='path to save model')
-    parser.add_argument('--tensorboard_dir',
-                        default='tensorboard',
-                        help='path to save tensorboard log')
-    parser.add_argument('--gpu',
+    parser.add_argument('--config', required=True, help='config file')
+    parser.add_argument('--vocab_size', type=int, default=3000)
+    parser.add_argument('--resume_model_iter',
                         type=int,
-                        default=1,
-                        help='gpu id for this local rank, -1 for cpu')
-    parser.add_argument(
-        '--model_iter',
-        type=int,
-        default=-1,
-        help='resume from trained model; if -1 training from scratch')
-    parser.add_argument('--model_type',
-                        type=str,
-                        default='Transformer',
-                        help='model type')
+                        default=-1,
+                        help='resume from trained model;')
 
     args = parser.parse_args()
 
     return args
 
 
+def validate_configs(configs: Dict, required_fields: List) -> bool:
+    not_exist_fields = []
+    for field in required_fields:
+        if field not in configs or configs[field] is None:
+            not_exist_fields.append(field)
+    if len(not_exist_fields) > 0:
+        assert False, 'set following required fields {}'.format(
+            ' '.join(not_exist_fields))
+    return True
+
+
+def extract_configs(args) -> Dict:
+    assert os.path.exists(args.config), '{} does not exist'.format(args.cofnig)
+    required_fields = [
+        'model_module', 'shared_conf', 'optimizer_conf', 'trainer_conf',
+        'dataset_conf'
+    ]
+    with open(args.config, 'r') as f:
+        configs = yaml.load(f, Loader=yaml.FullLoader)
+    validate_configs(configs, required_fields)
+
+    model_conf = '{}_conf'.format(configs['model_module'])
+    ntoken = configs['shared_conf']['ntoken']
+
+    configs[model_conf]['ntoken'] = ntoken
+    configs['trainer_conf']['ntoken'] = ntoken
+
+    assert 'model_dir' in configs['trainer_conf']
+    model_dir = configs['trainer_conf']['model_dir']
+    Path(os.path.dirname(model_dir)).mkdir(parents=True, exist_ok=True)
+
+    return configs
+
+
 def main():
     args = get_args()
+    configs = extract_configs(args)
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(levelname)s %(message)s')
 
     # Set random seed
     torch.manual_seed(2021)
-    # args.vocab_size: number of tokens in tokenizer.get_vocab
-    # + 2: one for eos_id, another for pad_idx
-    # i.e. token_idxs[0, 1, 2, ...., ntokens -3, ntokens - 2, ntokens - 1]
-    # bos_id: ntokens - 3
-    # eos_id: ntokens - 2
-    # pad_idx: ntokens - 1
-    ntokens = args.vocab_size + 3
-    pad_index = ntokens - 1
 
+    ntoken = args.vocab_size + 3
+    assert ntoken == configs['shared_conf']['ntoken']
+
+    # Data
+    pad_index = ntoken - 1
     collate_func = CollateFunc(pad_index=pad_index)
 
-    train_dataset = LMDataset(args.train_token, ntokens=ntokens)
-    dev_dataset = LMDataset(args.dev_token, ntokens=ntokens)
+    train_dataset = LMDataset(configs['dataset_conf']['train_token'],
+                              ntoken=ntoken)
+    dev_dataset = LMDataset(configs['dataset_conf']['dev_token'],
+                            ntoken=ntoken)
 
-    # To debug dataset.py, set shuffle=False and num_workers=0
-    # then examples will be loaded as the sequence they are in {train, dev}.tokens
     train_data_loader = DataLoader(train_dataset,
-                                   batch_size=args.batch_size,
-                                   shuffle=True,
-                                   num_workers=10,
-                                   drop_last=True,
-                                   collate_fn=collate_func)
+                                   collate_fn=collate_func,
+                                   **configs['dataloader_conf']['train'])
 
     dev_data_loader = DataLoader(dev_dataset,
-                                 batch_size=20,
-                                 shuffle=False,
-                                 num_workers=0,
-                                 drop_last=True,
-                                 collate_fn=collate_func)
+                                 collate_fn=collate_func,
+                                 **configs['dataloader_conf']['dev'])
 
-    if 'Trasformer' == args.model_type:
-        model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid,
-                                 args.nlayers, args.dropout)
-    else:
-        model = RNNModel('LSTM', ntokens, args.emsize, args.nhid, args.nlayers,
-                         args.dropout, False)
+    # initialize or resume model
+    if configs['model_module'] == 'transformer':
+        model = TransformerModel(**configs['transformer_conf'])
 
-    if args.model_iter > 0:
-        model_path = '{}/epoch_{}.pt'.format(args.model_dir, args.model_iter)
+    if args.resume_model_iter > 0:
+        model_dir = configs['trainer_conf']['model_dir']
+        model_path = '{}/epoch_{}.pt'.format(model_dir, args.resume_model_iter)
+        assert os.path.exists(model_path)
         load_checkpoint(model_path, model)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
-    use_cuda = args.gpu >= 0 and torch.cuda.is_available()
-    device = torch.device('cuda' if use_cuda else 'cpu')
-    print(device)
-    criterion = nn.NLLLoss(ignore_index=pad_index)
-    exp_dir = 'exp-nnlm'
-    writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
-    Path(os.path.dirname(args.model_dir)).mkdir(parents=True, exist_ok=True)
+    optimizer = optim.AdamW(model.parameters(), **configs['optimizer_conf'])
+    use_cuda = configs['gpu'] >= 0 and torch.cuda.is_available()
+    device = torch.device('cuda' if use_cuda else 'cpu')
+    criterion = nn.NLLLoss(ignore_index=pad_index)
+
+    writer = SummaryWriter(log_dir=configs['tensorboard_dir'])
+
     log_interval = max(100, len(train_data_loader) // 20)
-    trainer = Trainer(device,
-                      model,
-                      criterion,
-                      optimizer,
+    trainer = Trainer(device=device,
+                      model=model,
+                      criterion=criterion,
+                      optimizer=optimizer,
                       train_data_loader=train_data_loader,
                       dev_data_loader=dev_data_loader,
-                      ntokens=ntokens,
-                      batch_size=args.batch_size,
-                      epoch=args.model_iter + 1,
-                      num_epochs=args.num_epochs,
-                      clip=args.clip,
+                      epoch=args.resume_model_iter + 1,
                       log_interval=log_interval,
-                      model_dir=args.model_dir,
-                      writer=writer)
+                      writer=writer,
+                      **configs['trainer_conf'])
     trainer.run()
 
 

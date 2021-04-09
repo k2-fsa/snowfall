@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from common import load_checkpoint, save_checkpoint
-from model import TransformerModel, RNNModel
+from model import TransformerModel
 
 # references:
 # https://github.com/Hiroshiba/pytorch-trainer/blob/master/pytorch_trainer/training/trainer.py
@@ -36,8 +36,7 @@ class Trainer(object):
                  optimizer=None,
                  train_data_loader=None,
                  dev_data_loader=None,
-                 ntokens=None,
-                 batch_size=1,
+                 ntoken=None,
                  epoch=0,
                  num_epochs=10,
                  clip=0.25,
@@ -48,8 +47,7 @@ class Trainer(object):
         self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
-        self.ntokens = ntokens
-        self.batch_size = batch_size
+        self.ntoken = ntoken
         self.epoch = epoch
         self.num_epochs = num_epochs
         self.train_data_loader = train_data_loader
@@ -67,16 +65,13 @@ class Trainer(object):
             save_checkpoint("{}/epoch_0.pt".format(self.model_dir), self.model)
             self.eval()
 
-        for epoch in range(self.epoch, self.num_epochs):
+        for _ in range(self.epoch, self.num_epochs):
             if self.train_data_loader is not None:
                 self.train()
 
-            self.epoch += 1
             if self.dev_data_loader is not None:
                 self.eval()
 
-            save_checkpoint("{}/epoch_{}.pt".format(self.model_dir, epoch),
-                            self.model)
 
     def train(self):
         self.model.train()
@@ -86,15 +81,13 @@ class Trainer(object):
             # batch_input, batch_target: [max_seq_len, batch_size]
             # max_seq_len is the maximum lenght in current batch
             batch_input, batch_target = batch
-            assert batch_input.shape[1] == self.batch_size
-            assert batch_target.shape[1] == self.batch_size
             batch_input = batch_input.to(self.device)
             batch_target = batch_target.to(self.device)
             self.model.to(self.device)
             if isinstance(self.model, TransformerModel):
                 batch_output = self.model(batch_input)
 
-                prediction = batch_output.view(-1, self.ntokens)
+                prediction = batch_output.view(-1, self.ntoken)
             else:
                 # reinitiate hidden for everch batch
                 # as batches are independent on each other
@@ -128,11 +121,16 @@ class Trainer(object):
                 logging.info('infinite grad_norm detected {} times'.format(
                     self.num_infinite_grad_norm))
                 total_loss = 0.0
-            if batch_idx % 10000 == 0 and batch_idx > 0:
                 save_checkpoint(
                     "{}/epoch_{}-batch_{}.pt".format(self.model_dir,
                                                      self.epoch, batch_idx),
                     self.model)
+
+        save_checkpoint(
+            "{}/epoch_{}.pt".format(self.model_dir, self.epoch),
+            self.model)
+
+        self.epoch += 1
 
     @torch.no_grad()
     def eval(self):
@@ -152,7 +150,7 @@ class Trainer(object):
             if isinstance(self.model, TransformerModel):
                 batch_output = self.model(batch_input)
 
-                prediction = batch_output.view(-1, self.ntokens)
+                prediction = batch_output.view(-1, self.ntoken)
             else:
                 hidden = self.model.init_hidden(batch_input.shape[1])
                 prediction, _ = self.model(batch_input, hidden)
@@ -205,7 +203,7 @@ class Trainer(object):
             if isinstance(self.model, TransformerModel):
                 batch_output = self.model(batch_input)
 
-                prediction = batch_output.view(-1, self.ntokens)
+                prediction = batch_output.view(-1, self.ntoken)
             else:
                 hidden = self.model.init_hidden(batch_input.shape[1])
                 prediction, _ = self.model(batch_input, hidden)

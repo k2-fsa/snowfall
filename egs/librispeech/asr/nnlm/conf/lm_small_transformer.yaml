@@ -1,0 +1,43 @@
+
+gpu: 1
+tensorboard_dir: 'exp-nnlm/tensorobard'
+
+# network architecture equivalent configuration to 
+# https://github.com/pytorch/examples/blob/master/word_language_model/main.py
+model_module: transformer
+transformer_conf:
+  embed_unit: 200
+  attention_heads: 2
+  nlayers: 2
+  linear_units: 200
+  dropout: 0.2
+
+shared_conf:
+  ntoken: 5003
+  batch_size: 30
+
+optimizer_conf:
+  lr: 0.02
+  weight_decay: 0.005
+
+trainer_conf:
+  num_epochs: 50
+  clip: 0.25
+  model_dir: './exp-nnlm/models/'
+
+
+dataset_conf:
+  train_token: 'data/nnlm/text/300000_librispeech.txt.tokens'
+  dev_token: 'data/nnlm/text/dev.txt.tokens'
+
+dataloader_conf:
+  train:
+    batch_size: 20
+    shuffle: True
+    num_workers: 10
+    drop_last: True
+  dev:
+    batch_size: 20
+    shuffle: False
+    num_workers: 10
+    drop_last: False

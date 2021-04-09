@@ -3,14 +3,8 @@
 # Copyright 2020 Xiaomi Corporation (Author: Liyong Guo)
 # Apache 2.0
 
-# References:
-# https://github.com/kaldi-asr/kaldi/blob/master/scripts/rnnlm/train_rnnlm.sh
-# https://github.com/kaldi-asr/kaldi/blob/pybind11/egs/librispeech/s5/local/rnnlm/tuning/run_tdnn_lstm_1a.sh#L75
-# https://github.com/kaldi-asr/kaldi/blob/master/scripts/rnnlm/prepare_rnnlm_dir.sh
-# https://github.com/pytorch/examples/tree/master/word_language_model
-# https://huggingface.co/docs/tokenizers/python/latest/quicktour.html
 
-# Example of how to use HuggingFace tokenizer and train {RNN, Transformer} based LMs
+# Example of how to use HuggingFace tokenizer and train Transformer based LMs
 
 set -e
 stage=$1
@@ -22,20 +16,22 @@ text=data/local/lm/librispeech-lm-norm.txt.gz
 text_dir=data/nnlm/text
 all_train_text=$text_dir/librispeech.txt
 # there are 40,398,052 pieces in all_train_text, which will take 50 MINUTES to be tokenized, with a single process.
-# Now only $train_pieces data is used for debugging pipeline
+# use $train_pieces data to validate pipeline
 train_pieces=300000 # 15 times of dev.txt
 # uncomment follwoing line to use all_train_text
 # train_pieces=
 dev_text=$text_dir/dev.txt
 
 # vocab_size of huggingface tokenizer
-vocab_size=3000
+vocab_size=5000
 # for neural models, number of final classes is:
 # ntokens = $vocab_size + 3
 # while: bos_id = ntokens - 3
 #        eos_id = ntokens - 2
 #        pad_index = ntokens - 1
 
+# lm_config=conf/lm_transformer.yaml
+lm_config=conf/lm_small_transformer.yaml
 
 mkdir -p $text_dir
 
@@ -60,13 +56,14 @@ fi
 if [ ! -z "$train_pieces" ]; then
   train_text=$text_dir/${train_pieces}_librispeech.txt
   if [ $train_text -ot $all_train_text ] || [  ! -f $train_text ]; then
-  # if [ ! -f $train_text) || $train_text -ot $all_train_text ]; then
     head -n $train_pieces $all_train_text > $train_text
   fi
 else
   train_text=$all_train_text
 fi
 
+# Reference: huggingface tokenizer
+# https://huggingface.co/docs/tokenizers/python/latest/quicktour.html
 if [ $stage -le 1 ]; then
   echo "training tokenizer"
   python3 local/huggingface_tokenizer.py \
@@ -87,13 +84,12 @@ fi
 
 if [ $stage -le 3 ]; then
   echo "start to train"
-  # model_iter if for resume training
+  # resume_model_iter is for resume training
   # -1 means train from scratch
   python main.py \
-    --model_iter -1 \
-    --train_token ${train_text}.tokens \
-    --vocab_size $vocab_size \
-    --model_type Transformer
+    --config $lm_config \
+    --vocab_size $vocab_size
+    --resume_model_iter -1
 
 fi
 
