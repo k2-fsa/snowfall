@@ -35,7 +35,7 @@ class CollateFunc(object):
             self.pad_index)
         data_pad = data_pad.t().contiguous()
         # xs_pad, ys_pad: [max_seq_len, batch_size]
-        # max_seq_len is the maximum lenght in current batch
+        # max_seq_len is the maximum length in current batch
         xs_pad = data_pad[:-1, :]
         ys_pad = data_pad[1:, :]
         return xs_pad, ys_pad
@@ -43,20 +43,30 @@ class CollateFunc(object):
 
 class LMDataset(Dataset):
 
-    def __init__(self, text_file: str, ntoken: int):
+    def __init__(self, token_file: str, ntoken: int):
         '''Dataset to load Language Model train/dev text data
 
         Args:
-            text_file: text file, text for one utt per line.
+            token_file: each line is a tokenized text, looks like:
+                token_id token_id *** token_id token_id
+
+                A real example is:
+
+                485 135 974 255 1220 33 35 377
+                2130 1960
+
+            when loaded, <bos_id>/<eos_id> is added to compose input/target
+
         '''
         self.bos_id = ntoken - 3
         self.eos_id = ntoken - 2
         self.pad_index = ntoken - 1
         assert os.path.exists(
-            text_file
-        ), "text_file: {} does not exist, please check that.".format(text_file)
+            token_file
+        ), "token_file: {} does not exist, please check that.".format(
+            token_file)
         self.data = []
-        with open(text_file, 'r') as f:
+        with open(token_file, 'r') as f:
             for line in f:
                 token_id = [int(i) for i in line.strip().split()]
                 # Empty line exists in librispeech.txt. Disregrad that.

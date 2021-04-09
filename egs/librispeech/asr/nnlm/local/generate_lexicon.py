@@ -51,7 +51,7 @@ def generate_tokens(args):
     symbols = tokenizer.get_vocab()
     tokens_file = '{}/tokens.txt'.format(args.lexicon_path)
     tokens_f = open(tokens_file, 'w')
-    id2sym = dict((v, k.lower()) for k, v in symbols.items())
+    id2sym = {idx: sym.lower() for sym, idx in symbols.items()}
     for idx in range(len(symbols)):
         assert idx in id2sym
         tokens_f.write('{} {}\n'.format(id2sym[idx], idx))
