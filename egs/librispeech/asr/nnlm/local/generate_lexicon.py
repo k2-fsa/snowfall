@@ -30,16 +30,21 @@ def get_args():
 
 
 def generate_tokens(args):
-    ''' Extract symbols and there corresponding ids from a tokenizer,
+    ''' Extract symbols and the corresponding ids from a tokenizer,
         and save as tokens.txt.
-        An example file looks like:
-        a 1
-        b 2
-        c 3
+        A real token.txt with nvocab=10000 is:
+        [unk] 0
+        ' 1
+        a 2
+        b 3
+        c 4
         ...
-        it 100
-        sh 101
-
+        patty 9994
+        neatly 9995
+        stormy 9996
+        daddy 9997
+        ##enon 9998
+        remarkably 9999
     '''
 
     tokenizer = Tokenizer.from_file(args.tokenizer_path)

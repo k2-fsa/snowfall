@@ -43,7 +43,7 @@ class CollateFunc(object):
 
 class LMDataset(Dataset):
 
-    def __init__(self, text_file: str, ntoken:int):
+    def __init__(self, text_file: str, ntoken: int):
         '''Dataset to load Language Model train/dev text data
 
         Args:
@@ -57,15 +57,16 @@ class LMDataset(Dataset):
         ), "text_file: {} does not exist, please check that.".format(text_file)
         self.data = []
         with open(text_file, 'r') as f:
-            for idx, line in enumerate(f):
+            for line in f:
                 token_id = [int(i) for i in line.strip().split()]
+                # Empty line exists in librispeech.txt. Disregrad that.
+                if len(token_id) == 0:
+                    continue
                 # https://github.com/espnet/espnet/blob/master/espnet/lm/lm_utils.py#L179
                 # add bos_id and eos_id to each piece of example
-                # then each valid example should be longer than 2
                 token_id.insert(0, self.bos_id)
                 token_id.append(self.eos_id)
-                if len(token_id) > 2:
-                    self.data.append(token_id)
+                self.data.append(token_id)
 
     def __len__(self):
         return len(self.data)

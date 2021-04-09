@@ -88,7 +88,6 @@ class TransformerModel(nn.Module):
         attention_head_dim = embed_unit / attention_heads
         assert attention_head_dim * attention_heads == embed_unit, "embed_dim must be divisible by num_attention_headss"
 
-        self.model_type = 'Transformer'
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(embed_unit, dropout)
         encoder_layers = TransformerEncoderLayer(embed_unit, attention_heads,
@@ -135,9 +134,11 @@ class TransformerModel(nn.Module):
         #             [0., 0., 0.,  ..., 0., 0., 0.]], device='cuda:0')
 
         # after self.encoder
-        # src: [seq_len, batch_size, channel]
+        # src: [seq_len, batch_size, embed_unit]
         src = self.encoder(src) * math.sqrt(self.embed_unit)
         src = self.pos_encoder(src)
+
+        # output: [seq_len, batch_size, ntoken]
         output = self.transformer_encoder(src, self.src_mask)
         output = self.decoder(output)
         return F.log_softmax(output, dim=-1)

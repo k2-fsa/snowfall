@@ -58,6 +58,7 @@ class Trainer(object):
         self.clip = clip
         self.model_dir = model_dir
         self.num_infinite_grad_norm = 0
+        self.model.to(device)
 
     def run(self):
         # save and eval initialized moel
@@ -72,7 +73,6 @@ class Trainer(object):
             if self.dev_data_loader is not None:
                 self.eval()
 
-
     def train(self):
         self.model.train()
         total_loss = 0
@@ -83,7 +83,6 @@ class Trainer(object):
             batch_input, batch_target = batch
             batch_input = batch_input.to(self.device)
             batch_target = batch_target.to(self.device)
-            self.model.to(self.device)
             if isinstance(self.model, TransformerModel):
                 batch_output = self.model(batch_input)
 
@@ -126,9 +125,8 @@ class Trainer(object):
                                                      self.epoch, batch_idx),
                     self.model)
 
-        save_checkpoint(
-            "{}/epoch_{}.pt".format(self.model_dir, self.epoch),
-            self.model)
+        save_checkpoint("{}/epoch_{}.pt".format(self.model_dir, self.epoch),
+                        self.model)
 
         self.epoch += 1
 

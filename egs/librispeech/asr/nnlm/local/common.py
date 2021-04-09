@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 Pathlike = Union[str, Path]
-Info = Union[dict, None]
+Info = Optional[dict]
 
 
 def load_checkpoint(filename: Pathlike,
