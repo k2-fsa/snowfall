@@ -29,6 +29,7 @@ from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.dist import cleanup_dist, setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.objectives.common import encode_supervisions
@@ -248,27 +249,15 @@ def main():
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
-    else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    lexicon = Lexicon(lang_dir)
 
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
-        device=device
+        lexicon=lexicon,
+        device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
