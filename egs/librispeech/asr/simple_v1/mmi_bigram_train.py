@@ -19,7 +19,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 from lhotse import CutSet
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
@@ -29,9 +29,9 @@ from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.dist import cleanup_dist, setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
-from snowfall.objectives.common import encode_supervisions
 from snowfall.objectives.mmi import LFMMILoss
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -39,6 +39,34 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
+
+def encode_supervisions(supervisions: Dict[str, torch.Tensor],
+                        subsampling_factor) -> Tuple[torch.Tensor, List[str]]:
+    """
+    Encodes Lhotse's ``batch["supervisions"]`` dict into a pair of torch Tensor,
+    and a list of transcription strings.
+
+    The supervision tensor has shape ``(batch_size, 3)``.
+    Its second dimension contains information about sequence index [0],
+    start frames [1] and num frames [2].
+
+    The batch items might become re-ordered during this operation -- the returned tensor
+    and list of strings are guaranteed to be consistent with each other.
+
+    This mimics subsampling by a factor of 4 with Conv1D layer with no padding.
+    """
+    supervision_segments = torch.stack(
+        (supervisions['sequence_idx'],
+         torch.floor_divide(supervisions['start_frame'],
+                            subsampling_factor),
+         torch.floor_divide(supervisions['num_frames'],
+                            subsampling_factor)), 1).to(torch.int32)
+    supervision_segments = torch.clamp(supervision_segments, min=0)
+    indices = torch.argsort(supervision_segments[:, 2], descending=True)
+    supervision_segments = supervision_segments[indices]
+    texts = supervisions['text']
+    texts = [texts[idx] for idx in indices]
+    return supervision_segments, texts
 
 
 def get_objf(batch: Dict,
@@ -57,7 +85,8 @@ def get_objf(batch: Dict,
     feature = feature.to(device)
 
     supervisions = batch['supervisions']
-    supervision_segments, texts = encode_supervisions(supervisions)
+    supervision_segments, texts = encode_supervisions(supervisions,
+                                                      model.subsampling_factor)
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
@@ -248,27 +277,15 @@ def main():
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
-    else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    lexicon = Lexicon(lang_dir)
 
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
-        device=device
+        lexicon=lexicon,
+        device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
