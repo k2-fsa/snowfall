@@ -217,10 +217,30 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
     inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(inverted_lats)
 
     b_to_a_map = torch.zeros(num_seqs, device=device, dtype=torch.int32)
-    rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
-                                         inverted_lats_with_epsilon_loops,
-                                         b_to_a_map,
-                                         sorted_match_a=True)
+    try:
+        rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
+                                             inverted_lats_with_epsilon_loops,
+                                             b_to_a_map,
+                                             sorted_match_a=True)
+    except RuntimeError as e:
+        print(f'Caught exception:\n{e}\n')
+        print(f'Number of FSAs: {inverted_lats.shape[0]}')
+        print('num_arcs before pruning: ',
+              inverted_lats_with_epsilon_loops.arcs.num_elements())
+
+        # NOTE(fangjun): The choice of the threshold 0.01 is arbitrary here
+        # to avoid OOM. We may need to fine tune it.
+        inverted_lats = k2.prune_on_arc_post(inverted_lats, 0.001, True)
+        inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(
+            inverted_lats)
+        print('num_arcs after pruning: ',
+              inverted_lats_with_epsilon_loops.arcs.num_elements())
+
+        rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
+                                             inverted_lats_with_epsilon_loops,
+                                             b_to_a_map,
+                                             sorted_match_a=True)
+
     rescoring_lats = k2.top_sort(k2.connect(
         rescoring_lats.to('cpu'))).to(device)
     inverted_rescoring_lats = k2.invert(rescoring_lats)
