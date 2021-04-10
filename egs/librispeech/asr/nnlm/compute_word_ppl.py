@@ -18,7 +18,7 @@ sys.path.insert(0, './local/')
 
 from common import load_checkpoint
 from dataset import LMDataset, CollateFunc
-from model import TransformerModel, RNNModel
+from model import TransformerModel
 from pathlib import Path
 from trainer import Trainer
 from torch.utils.tensorboard import SummaryWriter

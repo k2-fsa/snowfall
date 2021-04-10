@@ -34,7 +34,7 @@ def save_checkpoint(filename: Pathlike,
         Path(os.path.dirname(filename)).mkdir(parents=True, exist_ok=True)
     logging.info(f'Save checkpoint to {filename}')
     checkpoint = {
-        'state_dict': model.state_dict(),
+        'state_dict': model.module.state_dict(),
     }
     if info is not None:
         checkpoint.update(info)

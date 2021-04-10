@@ -86,9 +86,11 @@ if [ $stage -le 3 ]; then
   echo "start to train"
   # resume_model_iter is for resume training
   # -1 means train from scratch
-  python main.py \
+  # python main.py \
+  export CUDA_VISIBLE_DEVICES=0,1,2,3
+  python -m torch.distributed.launch --nproc_per_node=4 main.py \
     --config $lm_config \
-    --vocab_size $vocab_size
+    --vocab_size $vocab_size \
     --resume_model_iter -1
 
 fi

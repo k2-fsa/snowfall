@@ -11,6 +11,7 @@ import argparse
 import logging
 import os
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 import sys
@@ -33,6 +34,7 @@ def get_args():
         description='training Neural Language Model')
     parser.add_argument('--config', required=True, help='config file')
     parser.add_argument('--vocab_size', type=int, default=3000)
+    parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--resume_model_iter',
                         type=int,
                         default=-1,
@@ -89,6 +91,11 @@ def main():
     ntoken = args.vocab_size + 3
     assert ntoken == configs['shared_conf']['ntoken']
 
+    dist.init_process_group('nccl')
+    torch.cuda.set_device(args.local_rank)
+    device = torch.device("cuda", args.local_rank)
+    print(device)
+
     # Data
     pad_index = ntoken - 1
     collate_func = CollateFunc(pad_index=pad_index)
@@ -98,27 +105,33 @@ def main():
     dev_dataset = LMDataset(configs['dataset_conf']['dev_token'],
                             ntoken=ntoken)
 
+    train_sampler = torch.utils.data.distributed.DistributedSampler(
+        train_dataset, shuffle=True)
     train_data_loader = DataLoader(train_dataset,
+                                   sampler=train_sampler,
                                    collate_fn=collate_func,
                                    **configs['dataloader_conf']['train'])
 
+    dev_sampler = torch.utils.data.distributed.DistributedSampler(
+        dev_dataset, shuffle=False)
     dev_data_loader = DataLoader(dev_dataset,
+                                 sampler=dev_sampler,
                                  collate_fn=collate_func,
                                  **configs['dataloader_conf']['dev'])
 
     # initialize or resume model
     if configs['model_module'] == 'transformer':
         model = TransformerModel(**configs['transformer_conf'])
+        if args.resume_model_iter > 0:
+            model_dir = configs['trainer_conf']['model_dir']
+            model_path = '{}/epoch_{}.pt'.format(model_dir, args.resume_model_iter)
+            assert os.path.exists(model_path)
+            load_checkpoint(model_path, model)
+        model = torch.nn.parallel.DistributedDataParallel(
+            model.to(device), [args.local_rank])
 
-    if args.resume_model_iter > 0:
-        model_dir = configs['trainer_conf']['model_dir']
-        model_path = '{}/epoch_{}.pt'.format(model_dir, args.resume_model_iter)
-        assert os.path.exists(model_path)
-        load_checkpoint(model_path, model)
 
     optimizer = optim.AdamW(model.parameters(), **configs['optimizer_conf'])
-    use_cuda = configs['gpu'] >= 0 and torch.cuda.is_available()
-    device = torch.device('cuda' if use_cuda else 'cpu')
     criterion = nn.NLLLoss(ignore_index=pad_index)
 
     writer = SummaryWriter(log_dir=configs['tensorboard_dir'])

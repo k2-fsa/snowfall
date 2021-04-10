@@ -15,7 +15,6 @@ transformer_conf:
 
 shared_conf:
   ntoken: 5003
-  batch_size: 30
 
 optimizer_conf:
   lr: 0.02
@@ -33,12 +32,10 @@ dataset_conf:
 
 dataloader_conf:
   train:
-    batch_size: 20
-    shuffle: True
+    batch_size: 60
     num_workers: 10
     drop_last: True
   dev:
-    batch_size: 20
-    shuffle: False
+    batch_size: 60
     num_workers: 10
     drop_last: False

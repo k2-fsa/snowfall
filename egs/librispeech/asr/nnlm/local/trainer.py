@@ -7,6 +7,7 @@ import logging
 import math
 import numpy as np
 import torch
+import torch.distributed as dist
 
 from common import load_checkpoint, save_checkpoint
 from model import TransformerModel
@@ -44,7 +45,6 @@ class Trainer(object):
                  model_dir="exp-nnlm/models/",
                  writer=None):
         self.device = device
-        self.model = model
         self.criterion = criterion
         self.optimizer = optimizer
         self.ntoken = ntoken
@@ -58,12 +58,16 @@ class Trainer(object):
         self.clip = clip
         self.model_dir = model_dir
         self.num_infinite_grad_norm = 0
-        self.model.to(device)
+        self.model = model
+        self.world_size = dist.get_world_size()
+        self.local_rank = dist.get_rank()
 
     def run(self):
         # save and eval initialized moel
         if 0 == self.epoch:
-            save_checkpoint("{}/epoch_0.pt".format(self.model_dir), self.model)
+            if self.local_rank == 0:
+                save_checkpoint("{}/epoch_0.pt".format(self.model_dir),
+                                self.model)
             self.eval()
 
         for _ in range(self.epoch, self.num_epochs):
@@ -83,15 +87,8 @@ class Trainer(object):
             batch_input, batch_target = batch
             batch_input = batch_input.to(self.device)
             batch_target = batch_target.to(self.device)
-            if isinstance(self.model, TransformerModel):
-                batch_output = self.model(batch_input)
-
-                prediction = batch_output.view(-1, self.ntoken)
-            else:
-                # reinitiate hidden for everch batch
-                # as batches are independent on each other
-                hidden = self.model.init_hidden(batch_input.shape[1])
-                prediction, _ = self.model(batch_input, hidden)
+            batch_output = self.model(batch_input)
+            prediction = batch_output.view(-1, self.ntoken)
 
             # target: [max_seq_len * batch_size]
             # example_1_token_1 example_2_token_1 example_3_token_1 .....
@@ -117,24 +114,26 @@ class Trainer(object):
                     batch_idx, num_total_batch, cur_loss, math.exp(cur_loss),
                     self.epoch)
                 logging.info(log_str)
-                logging.info('infinite grad_norm detected {} times'.format(
-                    self.num_infinite_grad_norm))
+                if self.num_infinite_grad_norm > 0:
+                    logging.info('infinite grad_norm detected {} times'.format(
+                        self.num_infinite_grad_norm))
                 total_loss = 0.0
-                save_checkpoint(
-                    "{}/epoch_{}-batch_{}.pt".format(self.model_dir,
-                                                     self.epoch, batch_idx),
-                    self.model)
-
-        save_checkpoint("{}/epoch_{}.pt".format(self.model_dir, self.epoch),
-                        self.model)
+                if self.local_rank == 0:
+                    save_checkpoint(
+                        "{}/epoch_{}-batch_{}.pt".format(
+                            self.model_dir, self.epoch, batch_idx), self.model)
 
         self.epoch += 1
+        if self.local_rank == 0:
+            save_checkpoint(
+                "{}/epoch_{}.pt".format(self.model_dir, self.epoch),
+                self.model)
 
     @torch.no_grad()
     def eval(self):
         self.model.eval()
-        total_loss = 0.0
-        total_examples = 0
+        total_loss = torch.tensor([0.0]).to(self.device)
+        total_examples = torch.tensor([0.0]).to(self.device)
         for batch_idx, batch in enumerate(self.dev_data_loader):
             # batch_input: [seq_len, batch_size]
             # with contents: <bos> token_id token_id ....
@@ -144,14 +143,9 @@ class Trainer(object):
             batch_input, batch_target = batch
             batch_input = batch_input.to(self.device)
             batch_target = batch_target.to(self.device)
-            self.model.to(self.device)
-            if isinstance(self.model, TransformerModel):
-                batch_output = self.model(batch_input)
+            batch_output = self.model(batch_input)
 
-                prediction = batch_output.view(-1, self.ntoken)
-            else:
-                hidden = self.model.init_hidden(batch_input.shape[1])
-                prediction, _ = self.model(batch_input, hidden)
+            prediction = batch_output.view(-1, self.ntoken)
             # target: [max_seq_len * batch_size]
             # example_1_token_1 example_2_token_1 example_3_token_1 .....
             target = batch_target.view(-1)
@@ -159,12 +153,27 @@ class Trainer(object):
             total_loss += loss * batch_input.shape[1]
             total_examples += batch_input.shape[1]
 
-        loss = total_loss / total_examples
-        ppl = math.exp(loss)
-        self.writer.add_scalar('dev_ppl', ppl, self.epoch)
-        log_str = 'dev loss is {:.6f} and ppl {:.6f} at epoch {}'.format(
-            loss.item(), ppl, self.epoch)
-        logging.info(log_str)
+        total_loss_list = [
+            torch.zeros_like(total_loss) for _ in range(self.world_size)
+        ]
+        total_examples_list = [
+            torch.zeros_like(total_examples) for _ in range(self.world_size)
+        ]
+        dist.all_gather(total_loss_list, total_loss)
+        dist.all_gather(total_examples_list, total_examples)
+        total_loss = 0
+        total_examples = 0
+        for loss, examples in zip(total_loss_list, total_examples_list):
+            total_loss += loss
+            total_examples += examples
+
+        if self.local_rank == 0:
+            loss = total_loss / total_examples
+            ppl = math.exp(loss)
+            self.writer.add_scalar('dev_ppl', ppl, self.epoch)
+            log_str = 'dev examples: {} dev loss is {:.6f} and ppl {:.6f} at epoch {}'.format(
+                int(total_examples.item()), loss.item(), ppl, self.epoch)
+            logging.info(log_str)
 
     def get_word_counts(self, dev_txt: str):
         word_counts = []
