@@ -398,15 +398,21 @@ By Fangjun.
 
 #### LM rescoring with whole lattice
 
+```
 $ ./mmi_att_transformer_decode.py --use-lm-rescoring=1 --num-path=-1 --max-duration=10 --output-beam-size=8
+
 2021-04-11 10:37:58,913 INFO [common.py:356] [test-clean] %WER 5.72% [3008 / 52576, 562 ins, 164 del, 2282 sub ]
 2021-04-11 10:46:03,670 INFO [common.py:356] [test-other] %WER 15.71% [8224 / 52343, 1331 ins, 562 del, 6331 sub ]
+```
 
 #### LM rescoring with n-best list
 
+```
 $ ./mmi_att_transformer_decode.py --use-lm-rescoring=1 --num-path=100 --max-duration=500 --output-beam-size=20
+
 2021-04-11 15:17:07,792 INFO [common.py:356] [test-clean] %WER 6.31% [3316 / 52576, 746 ins, 160 del, 2410 sub ]
 2021-04-11 15:19:48,583 INFO [common.py:356] [test-other] %WER 16.93% [8863 / 52343, 1649 ins, 514 del, 6700 sub ]
+```
 
 
 
