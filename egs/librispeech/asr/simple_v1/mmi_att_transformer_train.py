@@ -18,59 +18,24 @@ from datetime import datetime
 from pathlib import Path
 from torch import nn
 from torch.nn.utils import clip_grad_value_
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet, Fbank, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
-    SpecAugment
-from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
-from lhotse.dataset.input_strategies import OnTheFlyFeatures
-from lhotse.utils import fix_random_seed
+from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.data.librispeech import LibriSpeechAsrDataModule
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
-from snowfall.training.mmi_graph import get_phone_symbols
-
-
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
 def get_objf(batch: Dict,
@@ -87,68 +52,31 @@ def get_objf(batch: Dict,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['inputs']
-    supervisions = batch['supervisions']
-    supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-         (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
-    supervision_segments = torch.clamp(supervision_segments, min=0)
-    indices = torch.argsort(supervision_segments[:, 2], descending=True)
-    supervision_segments = supervision_segments[indices]
-
-    texts = supervisions['text']
-    texts = [texts[idx] for idx in indices]
-    assert feature.ndim == 3
-    # print(supervision_segments[:, 1] + supervision_segments[:, 2])
-
-    feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions)
+
+    loss_fn = LFMMILoss(
+        graph_compiler=graph_compiler,
+        P=P,
+        den_scale=den_scale
+    )
+
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
-    else:
-        with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
-            if att_rate != 0.0:
-                att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
-
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
-
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
-
-    num_tot_scores = num.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -160,9 +88,9 @@ def get_objf(batch: Dict,
                 )
 
         if att_rate != 0.0:
-            loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
+            loss = (- (1.0 - att_rate) * mmi_loss + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
-            loss = (-tot_score) / (len(texts) * accum_grad)
+            loss = (-mmi_loss) / (len(texts) * accum_grad)
         loss.backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
@@ -181,7 +109,7 @@ def get_objf(batch: Dict,
                 optimizer.step()
             optimizer.zero_grad()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
+    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
     return ans
 
@@ -366,11 +294,6 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-duration',
-        type=int,
-        default=500.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
-    parser.add_argument(
         '--warm-step',
         type=int,
         default=5000,
@@ -402,48 +325,6 @@ def get_parser():
         default=256,
         help="Number of units in transformer attention layers.")
     parser.add_argument(
-        '--bucketing_sampler',
-        type=str2bool,
-        default=False,
-        help='When enabled, the batches will come from buckets of '
-             'similar duration (saves padding frames).')
-    parser.add_argument(
-        '--num-buckets',
-        type=int,
-        default=30,
-        help='The number of buckets for the BucketingSampler'
-             '(you might want to increase it for larger datasets).')
-    parser.add_argument(
-        '--concatenate-cuts',
-        type=str2bool,
-        default=True,
-        help='When enabled, utterances (cuts) will be concatenated '
-             'to minimize the amount of padding.')
-    parser.add_argument(
-        '--duration-factor',
-        type=float,
-        default=1.0,
-        help='Determines the maximum duration of a concatenated cut '
-             'relative to the duration of the longest cut in a batch.')
-    parser.add_argument(
-        '--gap',
-        type=float,
-        default=1.0,
-        help='The amount of padding (in seconds) inserted between concatenated cuts. '
-             'This padding is filled with noise when noise augmentation is used.')
-    parser.add_argument(
-        '--full-libri',
-        type=str2bool,
-        default=False,
-        help='When enabled, use 960h LibriSpeech.')
-    parser.add_argument(
-        '--on-the-fly-feats',
-        type=str2bool,
-        default=False,
-        help='When enabled, use on-the-fly cut mixing and feature extraction. '
-             'Will drop existing precomputed feature manifests if available.'
-    )
-    parser.add_argument(
         '--tensorboard',
         type=str2bool,
         default=True,
@@ -453,12 +334,13 @@ def get_parser():
 
 
 def main():
-    args = get_parser().parse_args()
+    parser = get_parser()
+    LibriSpeechAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_duration = args.max_duration
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
@@ -469,129 +351,25 @@ def main():
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
 
-    # load L, G, symbol_table
+    logging.info("Loading lexicon and symbol tables")
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
-    else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    lexicon = Lexicon(lang_dir)
 
     device_id = 0
     device = torch.device('cuda', device_id)
 
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
+        lexicon=lexicon,
         device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
 
-    # load dataset
-    feature_dir = Path('exp/data')
-    logging.info("About to get train cuts")
-    cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
-    if args.full_libri:
-        cuts_train = (
-            cuts_train +
-            load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
-            load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
-        )
-    logging.info("About to get dev cuts")
-    cuts_dev = (
-        load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
-        load_manifest(feature_dir / 'cuts_dev-other.json.gz')
-    )
-    logging.info("About to get Musan cuts")
-    cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
-
-    logging.info("About to create train dataset")
-    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if args.concatenate_cuts:
-        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
-        # Cut concatenation should be the first transform in the list,
-        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
-        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=transforms,
-        input_transforms=[
-             SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-        ]
-    )
-
-    if args.on_the_fly_feats:
-        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
-        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
-        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
-        # # Speed perturbation probably should come first before concatenation,
-        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
-        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
-        # Drop feats to be on the safe side.
-        cuts_train = cuts_train.drop_features()
-        from lhotse.features.fbank import FbankConfig
-        train = K2SpeechRecognitionDataset(
-            cuts=cuts_train,
-            cut_transforms=transforms,
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
-            input_transforms=[
-                SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-            ]
-        )
-
-    if args.bucketing_sampler:
-        logging.info('Using BucketingSampler.')
-        train_sampler = BucketingSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-            num_buckets=args.num_buckets
-        )
-    else:
-        logging.info('Using SingleCutSampler.')
-        train_sampler = SingleCutSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-        )
-    logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(
-        train,
-        sampler=train_sampler,
-        batch_size=None,
-        num_workers=4,
-    )
-
-    logging.info("About to create dev dataset")
-    if args.on_the_fly_feats:
-        cuts_dev = cuts_dev.drop_features()
-        validate = K2SpeechRecognitionDataset(
-            cuts_dev.drop_features(),
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
-        )
-    else:
-        validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(
-        cuts_dev,
-        max_duration=max_duration,
-    )
-    logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(
-        validate,
-        sampler=valid_sampler,
-        batch_size=None,
-        num_workers=1
-    )
+    librispeech = LibriSpeechAsrDataModule(args)
+    train_dl = librispeech.train_dataloaders()
+    valid_dl = librispeech.valid_dataloaders()
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
@@ -647,7 +425,7 @@ def main():
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     for epoch in range(start_epoch, num_epochs):
-        train_sampler.set_epoch(epoch)
+        train_dl.sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
         if tb_writer is not None:
             tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
