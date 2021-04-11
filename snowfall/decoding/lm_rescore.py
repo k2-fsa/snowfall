@@ -255,9 +255,8 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
 
 
 @torch.no_grad()
-def decode_with_lm_rescoring(lats: k2.Fsa,
-                             G: k2.Fsa,
-                             num_paths: Optional[int] = None) -> k2.Fsa:
+def decode_with_lm_rescoring(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
+                             use_whole_lattice: bool) -> k2.Fsa:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -275,13 +274,16 @@ def decode_with_lm_rescoring(lats: k2.Fsa,
         An FsaVec representing the language model (LM). Note that it
         is an FsaVec, but it contains only one Fsa.
       num_paths:
-        Optional, If not None, it is the size `n` in `n-best` list.
-        Otherwise, use the whole lattice for rescoring.
+        It is the size `n` in `n-best` list.
+        Used only if use_whole_lattice is False.
+      use_whole_lattice:
+        True to use whole lattice for rescoring. False to use n-best list
+        for rescoring.
     Returns:
       An FsaVec representing the best decoding path for each sequence
       in the lattice.
     '''
-    if num_paths is not None:
-        return rescore_with_n_best_list(lats, G, num_paths)
-    else:
+    if use_whole_lattice:
         return rescore_with_whole_lattice(lats, G)
+    else:
+        return rescore_with_n_best_list(lats, G, num_paths)
