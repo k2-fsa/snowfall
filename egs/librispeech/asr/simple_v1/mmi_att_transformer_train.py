@@ -14,9 +14,11 @@ import numpy as np
 import os
 import sys
 import torch
+import torch.multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
 from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -29,6 +31,8 @@ from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.data.librispeech import LibriSpeechAsrDataModule
 from snowfall.lexicon import Lexicon
+from snowfall.dist import cleanup_dist
+from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam, Transformer
@@ -203,7 +207,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
         if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.P_scores)
+            P.set_scores_stochastic_(model.module.P_scores)
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -270,13 +274,18 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
 def get_parser():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--world-size',
+        type=int,
+        default=1,
+        help='Number of GPUs for DDP training.')
     parser.add_argument(
         '--model-type',
         type=str,
@@ -287,7 +296,7 @@ def get_parser():
         '--num-epochs',
         type=int,
         default=10,
-        help="Number of traning epochs.")
+        help="Number of training epochs.")
     parser.add_argument(
         '--start-epoch',
         type=int,
@@ -333,11 +342,18 @@ def get_parser():
     return parser
 
 
-def main():
-    parser = get_parser()
-    LibriSpeechAsrDataModule.add_arguments(parser)
-    args = parser.parse_args()
-
+def run(rank, world_size, args):
+    '''
+    Args:
+      rank:
+        It is a value between 0 and `world_size-1`, which is
+        passed automatically by `mp.spawn()` in :func:`main`.
+        The node with rank 0 is responsible for saving checkpoint.
+      world_size:
+        Number of GPUs for DDP training.
+      args:
+        The return value of get_parser().parse_args()
+    '''
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
@@ -346,16 +362,21 @@ def main():
     att_rate = args.att_rate
 
     fix_random_seed(42)
+    setup_dist(rank, world_size)
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
+    setup_logger(f'{exp_dir}/log/log-train-{rank}')
+    if args.tensorboard and rank == 0:
+        tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
+    else:
+        tb_writer = None
+    #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
 
     logging.info("Loading lexicon and symbol tables")
     lang_dir = Path('data/lang_nosp')
     lexicon = Lexicon(lang_dir)
 
-    device_id = 0
+    device_id = rank
     device = torch.device('cuda', device_id)
 
     graph_compiler = MmiTrainingGraphCompiler(
@@ -403,6 +424,9 @@ def main():
 
     model.to(device)
     describe(model)
+
+    model = DDP(model, device_ids=[rank])
+
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
@@ -461,7 +485,8 @@ def main():
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
-                            global_batch_idx_train=global_batch_idx_train)
+                            global_batch_idx_train=global_batch_idx_train,
+                            local_rank=rank)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -470,7 +495,8 @@ def main():
                                best_objf=best_objf,
                                valid_objf=valid_objf,
                                best_valid_objf=best_valid_objf,
-                               best_epoch=best_epoch)
+                               best_epoch=best_epoch,
+                               local_rank=rank)
 
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
@@ -482,7 +508,8 @@ def main():
                         learning_rate=curr_learning_rate,
                         objf=objf,
                         valid_objf=valid_objf,
-                        global_batch_idx_train=global_batch_idx_train)
+                        global_batch_idx_train=global_batch_idx_train,
+                        local_rank=rank)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
@@ -492,9 +519,36 @@ def main():
                            best_objf=best_objf,
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
-                           best_epoch=best_epoch)
+                           best_epoch=best_epoch,
+                           local_rank=rank)
 
     logging.warning('Done')
+    torch.distributed.barrier()
+    # NOTE: The training process is very likely to hang at this point.
+    # If you press ctrl + c, your GPU memory will not be freed.
+    # To free you GPU memory, you can run:
+    #
+    #  $ ps aux | grep multi
+    #
+    # And it will print something like below:
+    #
+    # kuangfa+  430518 98.9  0.6 57074236 3425732 pts/21 Rl Apr02 639:01 /root/fangjun/py38/bin/python3 -c from multiprocessing.spawn
+    #
+    # You can kill the process manually by:
+    #
+    # $ kill -9 430518
+    #
+    # And you will see that your GPU is now not occupied anymore.
+    cleanup_dist()
+
+
+def main():
+    parser = get_parser()
+    LibriSpeechAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
+    world_size = args.world_size
+    assert world_size >= 1
+    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
 
 
 torch.set_num_threads(1)
