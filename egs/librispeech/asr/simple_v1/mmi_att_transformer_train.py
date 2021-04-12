@@ -287,6 +287,11 @@ def get_parser():
         default=1,
         help='Number of GPUs for DDP training.')
     parser.add_argument(
+        '--master-port',
+        type=int,
+        default=12354,
+        help='Master port to use for DDP training.')
+    parser.add_argument(
         '--model-type',
         type=str,
         default="conformer",
@@ -362,7 +367,7 @@ def run(rank, world_size, args):
     att_rate = args.att_rate
 
     fix_random_seed(42)
-    setup_dist(rank, world_size)
+    setup_dist(rank, world_size, args.master_port)
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
