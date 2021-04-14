@@ -11,19 +11,20 @@ import numpy as np
 import os
 import torch
 from k2 import Fsa, SymbolTable
-from kaldialign import edit_distance
 from pathlib import Path
 from typing import List
 from typing import Union
 
-from lhotse import CutSet, load_manifest
-from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
+from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.common import str2bool
+from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
+from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
@@ -31,9 +32,18 @@ from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
+from evaluator import Evaluator
 
-def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
+
+def decode(dataloader: torch.utils.data.DataLoader,
+           model: AcousticModel,
+           device: Union[str, torch.device],
+           HLG: Fsa,
+           symbols: SymbolTable,
+           num_paths: int,
+           G: k2.Fsa,
+           use_whole_lattice: bool,
+           evaluator=None):
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -43,7 +53,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         supervision_segments = torch.stack(
             (supervisions['sequence_idx'],
              (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-             (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
+             (((supervisions['num_frames'] - 1) // 2 - 1) // 2)),
+            1).to(torch.int32)
         supervision_segments = torch.clamp(supervision_segments, min=0)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
@@ -71,8 +82,22 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        # lattices = k2.intersect_dense(HLG, dense_fsa_vec, 10.0)
-        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        if G is None:
+            best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        elif evaluator is not None:
+            best_paths = decode_with_lm_rescoring(
+                lattices,
+                evaluator=evaluator,
+                G=None,
+                num_paths=num_paths,
+                use_whole_lattice=use_whole_lattice)
+        else:
+            best_paths = decode_with_lm_rescoring(
+                lattices,
+                G,
+                num_paths=num_paths,
+                use_whole_lattice=use_whole_lattice)
+
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
         assert len(hyps) == len(texts)
@@ -157,56 +182,82 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 def get_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--model-type',
-        type=str,
-        default="conformer",
-        choices=["transformer", "conformer"],
-        help="Model type.")
-    parser.add_argument(
-        '--epoch',
-        type=int,
-        default=10,
-        help="Decoding epoch.")
-    parser.add_argument(
-        '--max-duration',
-        type=int,
-        default=1000.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
+    parser.add_argument('--model-type',
+                        type=str,
+                        default="conformer",
+                        choices=["transformer", "conformer"],
+                        help="Model type.")
+    parser.add_argument('--epoch',
+                        type=int,
+                        default=10,
+                        help="Decoding epoch.")
     parser.add_argument(
         '--avg',
         type=int,
         default=5,
         help="Number of checkpionts to average. Automaticly select "
-             "consecutive checkpoints before checkpoint specified by'--epoch'. ")
-    parser.add_argument(
-        '--att-rate',
-        type=float,
-        default=0.0,
-        help="Attention loss rate.")
-    parser.add_argument(
-        '--nhead',
-        type=int,
-        default=4,
-        help="Number of attention heads in transformer.")
+        "consecutive checkpoints before checkpoint specified by'--epoch'. ")
+    parser.add_argument('--att-rate',
+                        type=float,
+                        default=0.0,
+                        help="Attention loss rate.")
+    parser.add_argument('--nhead',
+                        type=int,
+                        default=4,
+                        help="Number of attention heads in transformer.")
     parser.add_argument(
         '--attention-dim',
         type=int,
         default=256,
         help="Number of units in transformer attention layers.")
+    parser.add_argument(
+        '--output-beam-size',
+        type=int,
+        default=8,
+        help='Output beam size. Used in k2.intersect_dense_pruned.'\
+             'Choose a large value (e.g., 20), for 1-best decoding '\
+             'and n-best rescoring. Choose a small value (e.g., 8) for ' \
+             'rescoring with the whole lattice')
+    parser.add_argument('--use-lm-rescoring',
+                        type=str2bool,
+                        default=True,
+                        help='When enabled, it uses LM for rescoring')
+
+    parser.add_argument('--use-nnlm-rescoring',
+                        type=str2bool,
+                        default=True,
+                        help='When enabled, it uses LM for rescoring')
+    parser.add_argument(
+        '--num-paths',
+        type=int,
+        default=-1,
+        help='Number of paths for rescoring using n-best list.' \
+             'If it is negative, then rescore with the whole lattice.'\
+             'CAUTION: You have to reduce max_duration in case of CUDA OOM'
+             )
     return parser
 
 
 def main():
-    args = get_parser().parse_args()
+
+    parser = get_parser()
+    LibriSpeechAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     epoch = args.epoch
-    max_duration = args.max_duration
     avg = args.avg
     att_rate = args.att_rate
+    num_paths = args.num_paths
+    use_lm_rescoring = args.use_lm_rescoring
+    use_nnlm_rescoring = args.use_nnlm_rescoring
+    use_whole_lattice = False
+    if use_lm_rescoring and num_paths < 1:
+        # It doesn't make sense to use n-best list for rescoring
+        # when n is less than 1
+        use_whole_lattice = True
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -225,6 +276,23 @@ def main():
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
 
+    if use_nnlm_rescoring:
+        # now only support n-best rescoring with nnlm
+        use_whole_lattice = False
+        # TODO: make following paths configurable
+        model_path = '../nnlm/exp-nnlm/models/epoch_30.pt'
+        config_file = '../nnlm/conf/lm_small_transformer.yaml'
+        tokenizer_path = '../nnlm/exp-nnlm/tokenizer-librispeech.json'
+        words_txt = './data/lang_nosp/words.txt'
+
+        evaluator = Evaluator(device=device,
+                              words_txt=words_txt,
+                              model_path=model_path,
+                              config_file=config_file,
+                              tokenizer_path=tokenizer_path)
+    else:
+        evaluator = None
+
     if att_rate != 0.0:
         num_decoder_layers = 6
     else:
@@ -232,7 +300,7 @@ def main():
 
     if model_type == "transformer":
         model = Transformer(
-            num_features=40,
+            num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -240,7 +308,7 @@ def main():
             num_decoder_layers=num_decoder_layers)
     else:
         model = Conformer(
-            num_features=40,
+            num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
@@ -253,8 +321,10 @@ def main():
         checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')
         load_checkpoint(checkpoint, model)
     else:
-        checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
-                       range(epoch - avg, epoch)]
+        checkpoints = [
+            os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt')
+            for avg_epoch in range(epoch - avg, epoch)
+        ]
         average_checkpoint(checkpoints, model)
 
     model.to(device)
@@ -262,10 +332,16 @@ def main():
 
     assert P.requires_grad is False
     P.scores = model.P_scores.cpu()
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='model_P_scores.txt')
+    print_transition_probabilities(P,
+                                   phone_symbol_table,
+                                   phone_ids,
+                                   filename='model_P_scores.txt')
 
     P.set_scores_stochastic_(model.P_scores)
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
+    print_transition_probabilities(P,
+                                   phone_symbol_table,
+                                   phone_ids,
+                                   filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
@@ -274,61 +350,90 @@ def main():
         logging.debug("Loading G.fst.txt")
         with open(lang_dir / 'G.fst.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+        first_phone_disambig_id = find_first_disambig_symbol(
+            phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         HLG = compile_HLG(L=L,
-                         G=G,
-                         H=ctc_topo,
-                         labels_disambig_id_start=first_phone_disambig_id,
-                         aux_labels_disambig_id_start=first_word_disambig_id)
+                          G=G,
+                          H=ctc_topo,
+                          labels_disambig_id_start=first_phone_disambig_id,
+                          aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
     else:
         logging.debug("Loading pre-compiled HLG")
         d = torch.load(lang_dir / 'HLG.pt')
         HLG = k2.Fsa.from_dict(d)
 
+    if use_lm_rescoring:
+        if use_whole_lattice:
+            logging.info('Rescoring with the whole lattice')
+        else:
+            logging.info(f'Rescoring with n-best list, n is {num_paths}')
+        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
+        if not os.path.exists(lang_dir / 'G_4_gram.pt'):
+            logging.debug('Loading G_4_gram.fst.txt')
+            with open(lang_dir / 'G_4_gram.fst.txt') as f:
+                G = k2.Fsa.from_openfst(f.read(), acceptor=False)
+                # G.aux_labels is not needed in later computations, so
+                # remove it here.
+                del G.aux_labels
+                # CAUTION(fangjun): The following line is crucial.
+                # Arcs entering the back-off state have label equal to #0.
+                # We have to change it to 0 here.
+                G.labels[G.labels >= first_word_disambig_id] = 0
+                G = k2.create_fsa_vec([G]).to(device)
+                G = k2.arc_sort(G)
+                torch.save(G.as_dict(), lang_dir / 'G_4_gram.pt')
+        else:
+            logging.debug('Loading pre-compiled G_4_gram.pt')
+            d = torch.load(lang_dir / 'G_4_gram.pt')
+            G = k2.Fsa.from_dict(d).to(device)
+
+        if use_whole_lattice:
+            # Add epsilon self-loops to G as we will compose
+            # it with the whole lattice later
+            G = k2.add_epsilon_self_loops(G)
+            G = k2.arc_sort(G)
+            G = G.to(device)
+    else:
+        logging.debug('Decoding without LM rescoring')
+        G = None
+
     logging.debug("convert HLG to device")
     HLG = HLG.to(device)
     HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
     HLG.requires_grad_(False)
 
+    if not hasattr(HLG, 'lm_scores'):
+        HLG.lm_scores = HLG.scores.clone()
+
     # load dataset
-    feature_dir = Path('exp/data')
+    librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
-    for test_set in test_sets:
+    #  test_sets = ['test-other']
+    for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
-        logging.debug("About to get test cuts")
-        cuts_test = load_manifest(feature_dir / f'cuts_{test_set}.json.gz')
-        logging.debug("About to create test dataset")
-        test = K2SpeechRecognitionDataset(cuts_test)
-        sampler = SingleCutSampler(cuts_test, max_duration=max_duration)
-        logging.debug("About to create test dataloader")
-        test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
-
-        logging.debug("About to decode")
         results = decode(dataloader=test_dl,
                          model=model,
                          device=device,
                          HLG=HLG,
-                         symbols=symbol_table)
+                         symbols=symbol_table,
+                         num_paths=num_paths,
+                         G=G,
+                         evaluator=evaluator,
+                         use_whole_lattice=use_whole_lattice)
 
         recog_path = exp_dir / f'recogs-{test_set}.txt'
         store_transcripts(path=recog_path, texts=results)
         logging.info(f'The transcripts are stored in {recog_path}')
-        # compute WER
-        dists = [edit_distance(r, h) for r, h in results]
-        errors = {
-            key: sum(dist[key] for dist in dists)
-            for key in ['sub', 'ins', 'del', 'total']
-        }
-        total_words = sum(len(ref) for ref, _ in results)
-        # Print Kaldi-like message:
-        # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-        logging.info(
-            f'[{test_set}] %WER {errors["total"] / total_words:.2%} '
-            f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
-        )
+
+        # The following prints out WERs, per-word error statistics and aligned
+        # ref/hyp pairs.
+        errs_filename = exp_dir / f'errs-{test_set}.txt'
+        with open(errs_filename, 'w') as f:
+            write_error_stats(f, test_set, results)
+        logging.info('Wrote detailed error stats to {}'.format(errs_filename))
 
 
 torch.set_num_threads(1)

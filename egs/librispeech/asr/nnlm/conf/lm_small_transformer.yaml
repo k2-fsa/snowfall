@@ -7,34 +7,38 @@ tensorboard_dir: 'exp-nnlm/tensorobard'
 model_module: transformer
 transformer_conf:
   embed_unit: 200
-  attention_heads: 2
-  nlayers: 2
-  linear_units: 200
+  attention_heads: 8
+  nlayers: 8
+  linear_units: 2048
   dropout: 0.2
 
 shared_conf:
   ntoken: 5003
 
 optimizer_conf:
-  lr: 0.02
-  weight_decay: 0.005
+  # for Adam
+  lr: 0.0003
+  weight_decay: 0.001
+  # for SGD
+  # lr: 0.01
+  # weight_decay: 0.001
 
 trainer_conf:
-  num_epochs: 50
+  num_epochs: 60
   clip: 0.25
   model_dir: './exp-nnlm/models/'
 
 
 dataset_conf:
-  train_token: 'data/nnlm/text/300000_librispeech.txt.tokens'
+  train_token: 'data/nnlm/text/librispeech.txt.tokens'
   dev_token: 'data/nnlm/text/dev.txt.tokens'
 
 dataloader_conf:
   train:
-    batch_size: 60
-    num_workers: 10
+    batch_size: 256
+    num_workers: 0
     drop_last: True
   dev:
-    batch_size: 60
-    num_workers: 10
+    batch_size: 20
+    num_workers: 0
     drop_last: False

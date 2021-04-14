@@ -4,74 +4,45 @@
 # Apache 2.0
 
 # Reference:
+# https://github.com/espnet/espnet/blob/master/espnet/lm/pytorch_backend/lm.py
 # https://github.com/mobvoi/wenet/blob/main/wenet/bin/train.py
 import argparse
 
 import logging
 import os
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 import sys
+import yaml
 
 sys.path.insert(0, './local/')
 
 from common import load_checkpoint
-from dataset import LMDataset, CollateFunc
-from model import TransformerModel
+from evaluator import Evaluator
+# from model import TransformerModel
 from pathlib import Path
-from trainer import Trainer
-from torch.utils.tensorboard import SummaryWriter
-from torch.utils.data import DataLoader
+from typing import List, Dict
 
 
 def get_args():
     parser = argparse.ArgumentParser(
-        description='training Neural Language Model')
-    parser.add_argument('--train_token',
-                        default='data/nnlm/text/librispeech.txt.tokens',
-                        help='train token file')
-    parser.add_argument('--dev_token',
-                        default='data/nnlm/text/dev.txt.tokens',
-                        help='dev token file')
-    parser.add_argument('--dev_txt',
-                        default='data/nnlm/text/dev.txt',
-                        help='dev txt file, used to compute word ppl')
-    parser.add_argument('--batch_size', type=int, default=60)
-    parser.add_argument('--vocab_size', type=int, default=2000)
-    parser.add_argument('--emsize', type=int, default=200)
-    parser.add_argument('--nhead', type=int, default=2)
-    parser.add_argument('--nhid', type=int, default=200)
-    parser.add_argument('--nlayers', type=int, default=2)
-    parser.add_argument('--num_epochs', type=int, default=50)
-    parser.add_argument('--dropout', type=int, default=0.2)
-    parser.add_argument('--lr',
-                        type=float,
-                        default=1e-2,
-                        help='initial learning rate')
-    parser.add_argument('--clip',
-                        type=float,
-                        default=50.0,
-                        help='gradient clipping')
-    parser.add_argument('--model_dir',
-                        default='./exp-nnlm/models/',
-                        help='path to save model')
-    parser.add_argument('--tensorboard_dir',
-                        default='tensorboard',
-                        help='path to save tensorboard log')
-    parser.add_argument('--gpu',
-                        type=int,
-                        default=1,
-                        help='gpu id for this local rank, -1 for cpu')
-    parser.add_argument(
-        '--model_iter',
-        type=int,
-        default=19,
-        help='resume from trained model; if -1 training from scratch')
-    parser.add_argument('--model_type',
+        description='compute token/word ppl of txt')
+    parser.add_argument('--config',
+                        help='config file',
+                        default='conf/lm_small_transformer.yaml')
+    parser.add_argument('--vocab_size', type=int, default=5000)
+    parser.add_argument('--model',
                         type=str,
-                        default='Transformer',
-                        help='model type')
+                        default='exp-nnlm/models/epoch_30.pt',
+                        help='full path of loaded model')
+    parser.add_argument('--tokenizer_path',
+                        type=str,
+                        default='exp-nnlm/tokenizer-librispeech.json')
+    parser.add_argument('--txt_file',
+                        type=str,
+                        default='data/nnlm/text/dev.txt')
 
     args = parser.parse_args()
 
@@ -85,60 +56,16 @@ def main():
 
     # Set random seed
     torch.manual_seed(2021)
-    # args.vocab_size: number of tokens in tokenizer.get_vocab
-    # + 2: one for eos_id, another for pad_idx
-    # i.e. token_idxs[0, 1, 2, ...., ntokens -3, ntokens - 2, ntokens - 1]
-    # bos_id: ntokens - 3
-    # eos_id: ntokens - 2
-    # pad_idx: ntokens - 1
-    ntokens = args.vocab_size + 3
-    pad_index = ntokens - 1
 
-    collate_func = CollateFunc(pad_index=pad_index)
-
-    dev_dataset = LMDataset(args.dev_token, ntokens=ntokens)
-
-    dev_data_loader = DataLoader(dev_dataset,
-                                 batch_size=1,
-                                 shuffle=False,
-                                 num_workers=0,
-                                 drop_last=False,
-                                 collate_fn=collate_func)
-
-    if 'Trasformer' == args.model_type:
-        model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid,
-                                 args.nlayers, args.dropout)
-    else:
-        model = RNNModel('LSTM', ntokens, args.emsize, args.nhid, args.nlayers,
-                         args.dropout, False)
-
-    if args.model_iter > 0:
-        model_path = '{}/epoch_{}.pt'.format(args.model_dir, args.model_iter)
-        load_checkpoint(model_path, model)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=5e-4)
-    use_cuda = args.gpu >= 0 and torch.cuda.is_available()
-    device = torch.device('cuda' if use_cuda else 'cpu')
+    # device = torch.device("cuda", args.local_rank)
+    device = torch.device('cpu')
     print(device)
-    criterion = nn.NLLLoss(ignore_index=pad_index)
-    exp_dir = 'exp-nnlm'
-    writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
-    Path(os.path.dirname(args.model_dir)).mkdir(parents=True, exist_ok=True)
-    trainer = Trainer(device,
-                      model,
-                      criterion,
-                      optimizer,
-                      train_data_loader=None,
-                      dev_data_loader=dev_data_loader,
-                      ntokens=ntokens,
-                      batch_size=args.batch_size,
-                      epoch=args.model_iter + 1,
-                      num_epochs=args.num_epochs,
-                      clip=args.clip,
-                      model_dir=args.model_dir,
-                      writer=writer)
-
-    trainer.get_word_ppl(args.dev_txt)
+    evaluator = Evaluator(device=device,
+                          model_path=args.model,
+                          config_file=args.config,
+                          tokenizer_path=args.tokenizer_path)
+    evaluator.compute_ppl(txt_file=args.txt_file)
 
 
 if __name__ == '__main__':

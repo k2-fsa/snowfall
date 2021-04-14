@@ -17,9 +17,9 @@ text_dir=data/nnlm/text
 all_train_text=$text_dir/librispeech.txt
 # there are 40,398,052 pieces in all_train_text, which will take 50 MINUTES to be tokenized, with a single process.
 # use $train_pieces data to validate pipeline
-train_pieces=300000 # 15 times of dev.txt
+# train_pieces=300000 # 15 times of dev.txt
 # uncomment follwoing line to use all_train_text
-# train_pieces=
+train_pieces=
 dev_text=$text_dir/dev.txt
 
 # vocab_size of huggingface tokenizer
@@ -88,6 +88,7 @@ if [ $stage -le 3 ]; then
   # -1 means train from scratch
   # python main.py \
   export CUDA_VISIBLE_DEVICES=0,1,2,3
+  # python -m torch.distributed.launch --nproc_per_node=4 test.py \
   python -m torch.distributed.launch --nproc_per_node=4 main.py \
     --config $lm_config \
     --vocab_size $vocab_size \
@@ -96,14 +97,8 @@ if [ $stage -le 3 ]; then
 fi
 
 if [ $stage -le 4 ]; then
-  # TODO: this module is in developing
   echo "compute word ppl from token ppl"
-  # model_iter if for resume training
-  # -1 means train from scratch
-  python compute_word_ppl.py \
-    --model_iter 40 \
-    --vocab_size $vocab_size \
-    --model_type Transformer
+  python compute_word_ppl.py
 
 fi
 
@@ -125,3 +120,5 @@ if [ $stage -le 5 ]; then
     --tokenizer-path $tokenizer
 
 fi
+
+# cut -f 2- -d" " /home/storage15/huangying/tools/espnet/egs/librispeech/asr1/data/dev/text > data/dev/text
