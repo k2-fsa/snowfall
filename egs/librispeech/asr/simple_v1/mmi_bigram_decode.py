@@ -157,7 +157,7 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 def get_parser():
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--epoch', default=9, type=int)
     return parser
 

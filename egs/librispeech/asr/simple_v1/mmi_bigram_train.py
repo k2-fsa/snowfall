@@ -254,7 +254,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
 def get_parser():
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--world_size', default=1, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--bucketing_sampler', type=str2bool, default=True)

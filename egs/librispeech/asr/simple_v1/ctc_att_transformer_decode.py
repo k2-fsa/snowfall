@@ -93,7 +93,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--model-type',
         type=str,
