@@ -3,18 +3,19 @@
 # Copyright 2019-2020 Mobvoi AI Lab, Beijing, China (author: Fangjun Kuang)
 # Apache 2.0
 import argparse
-import k2
-import kaldialign
 import logging
 import os
 import re
-import torch
-import torch.distributed as dist
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, TextIO, Tuple, Union
+
+import k2
+import kaldialign
+import torch
+import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, TextIO
 
 from snowfall.models import AcousticModel
 
@@ -52,7 +53,12 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: b
         logging.getLogger('').addHandler(console)
 
 
-def load_checkpoint(filename: Pathlike, model: AcousticModel, optimizer: Optional[object] = None, scheduler: Optional[object] = None) -> Dict[str, Any]:
+def load_checkpoint(
+        filename: Pathlike,
+        model: AcousticModel,
+        optimizer: Optional[object] = None,
+        scheduler: Optional[object] = None
+) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
     checkpoint = torch.load(filename, map_location='cpu')
@@ -65,6 +71,9 @@ def load_checkpoint(filename: Pathlike, model: AcousticModel, optimizer: Optiona
     missing_keys = set(keys) - set(checkpoint.keys())
     if missing_keys:
         raise ValueError(f"Missing keys in checkpoint: {missing_keys}")
+
+    if isinstance(model, DistributedDataParallel):
+        model = model.module
 
     if not list(model.state_dict().keys())[0].startswith('module.') \
             and list(checkpoint['state_dict'])[0].startswith('module.'):
