@@ -32,20 +32,65 @@ class LFMMILoss(nn.Module):
             texts: List,
             supervision_segments: torch.Tensor
     ) -> Tuple[torch.Tensor, int, int]:
-        num_graphs, den_graphs = self.graph_compiler.compile(texts, self.P)
+        num_graphs, den_graphs = self.graph_compiler.compile(
+            texts, self.P, replicate_den=False)
+
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
 
-        num_lats = k2.intersect_dense(num_graphs, dense_fsa_vec, 10.0)
-        den_lats = k2.intersect_dense(den_graphs, dense_fsa_vec, 10.0)
+        device = num_graphs.device
 
-        num_tot_scores = num_lats.get_tot_scores(
-            log_semiring=True,
-            use_double_scores=True
-        )
-        den_tot_scores = den_lats.get_tot_scores(
-            log_semiring=True,
-            use_double_scores=True
-        )
+        num_fsas = num_graphs.shape[0]
+        assert dense_fsa_vec.dim0() == num_fsas
+
+        assert den_graphs.shape[0] == 1
+
+        # the aux_labels of num_graphs is k2.RaggedInt
+        # but it is torch.Tensor for den_graphs.
+        #
+        # The following converts den_graphs.aux_labels
+        # from torch.Tensor to k2.RaggedInt so that
+        # we can use k2.append() later
+        ragged_shape = k2.ragged.regular_ragged_shape(
+            dim0=den_graphs.aux_labels.numel(), dim1=1).to(device)
+
+        den_graphs.aux_labels = k2.RaggedInt(ragged_shape,
+                                             den_graphs.aux_labels)
+
+        num_den_graphs = k2.append([num_graphs, den_graphs])
+
+        # NOTE: The a_to_b_map in k2.intersect_dense must be sorted
+        # so the following reorders num_den_graphs.
+
+        # [0, 1, 2, ... ]
+        num_graphs_indexes = torch.arange(num_fsas, dtype=torch.int32)
+
+        # [num_fsas, num_fsas, num_fsas, ... ]
+        den_graphs_indexes = torch.tensor([num_fsas] * num_fsas,
+                                          dtype=torch.int32)
+
+        # [0, num_fsas, 1, num_fsas, 2, num_fsas, ... ]
+        num_den_graphs_indexes = torch.stack(
+            [num_graphs_indexes, den_graphs_indexes]).t().reshape(-1).to(device)
+
+        num_den_reordered_graphs = k2.index(num_den_graphs, num_den_graphs_indexes)
+
+        # [[0, 1, 2, ...]]
+        a_to_b_map = torch.arange(num_fsas, dtype=torch.int32).reshape(1, -1)
+
+        # [[0, 1, 2, ...]] -> [0, 0, 1, 1, 2, 2, ... ]
+        a_to_b_map = a_to_b_map.repeat(2, 1).t().reshape(-1).to(device)
+
+        num_den_lats = k2.intersect_dense(num_den_reordered_graphs,
+                                          dense_fsa_vec,
+                                          output_beam=10.0,
+                                          a_to_b_map=a_to_b_map)
+
+        num_den_tot_scores = num_den_lats.get_tot_scores(
+            log_semiring=True, use_double_scores=True)
+
+        num_tot_scores = num_den_tot_scores[::2]
+        den_tot_scores = num_den_tot_scores[1::2]
+
         tot_scores = num_tot_scores - self.den_scale * den_tot_scores
         tot_score, tot_frames, all_frames = get_tot_objf_and_num_frames(
             tot_scores,
