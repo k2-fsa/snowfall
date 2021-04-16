@@ -14,6 +14,7 @@ import numpy as np
 import os
 import sys
 import torch
+import torch.distributed as dist
 import torch.multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
@@ -162,7 +163,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int):
+                    global_batch_idx_train: int,
+                    world_size: int
+                    ):
     """One epoch training and validation.
 
     Args:
@@ -262,6 +265,15 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
+            if world_size > 1:
+                s = torch.tensor([
+                    total_valid_objf, total_valid_frames,
+                    total_valid_all_frames
+                ]).to(device)
+
+                dist.all_reduce(s, op=dist.ReduceOp.SUM)
+                total_valid_objf, total_valid_frames, total_valid_all_frames = s.cpu().tolist()
+
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             logging.info(
@@ -476,6 +488,7 @@ def run(rank, world_size, args):
             tb_writer=tb_writer,
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
+            world_size=world_size,
         )
         # the lower, the better
         if valid_objf < best_valid_objf:

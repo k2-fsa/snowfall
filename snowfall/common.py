@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import torch
+import torch.distributed as dist
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,14 @@ def setup_logger(log_filename: Pathlike, log_level: str = 'info', use_console: b
     date_time = now.strftime('%Y-%m-%d-%H-%M-%S')
     log_filename = '{}-{}'.format(log_filename, date_time)
     os.makedirs(os.path.dirname(log_filename), exist_ok=True)
-    formatter = '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
+
+    if dist.is_available() and dist.is_initialized():
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        formatter = f'%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] ({rank}/{world_size}) %(message)s'
+    else:
+        formatter = '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s'
+
     level = logging.ERROR
     if log_level == 'debug':
         level = logging.DEBUG
