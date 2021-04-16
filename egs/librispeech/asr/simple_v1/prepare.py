@@ -62,7 +62,7 @@ def locate_corpus(*corpus_dirs):
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--num-jobs',
         type=int,
