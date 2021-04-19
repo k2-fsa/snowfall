@@ -52,7 +52,7 @@ class LFMMILoss(nn.Module):
         # we can use k2.append() later
         den_graphs.convert_attr_to_ragged_(name='aux_labels')
 
-        num_den_graphs = k2.append([num_graphs, den_graphs])
+        num_den_graphs = k2.cat([num_graphs, den_graphs])
 
         # NOTE: The a_to_b_map in k2.intersect_dense must be sorted
         # so the following reorders num_den_graphs.
