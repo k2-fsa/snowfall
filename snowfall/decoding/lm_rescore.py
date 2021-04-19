@@ -45,7 +45,7 @@ def _intersect_device(a_fsas: k2.Fsa, b_fsas: k2.Fsa, b_to_a_map: torch.Tensor,
                                         sorted_match_a=sorted_match_a)
         ans.append(path_lats)
 
-    return k2.append(ans)
+    return k2.cat(ans)
 
 
 def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,

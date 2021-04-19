@@ -82,8 +82,10 @@ class MmiTrainingGraphCompiler(object):
 
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
 
-    def compile(self, texts: Iterable[str],
-                P: k2.Fsa) -> Tuple[k2.Fsa, k2.Fsa]:
+    def compile(self,
+                texts: Iterable[str],
+                P: k2.Fsa,
+                replicate_den: bool = True) -> Tuple[k2.Fsa, k2.Fsa]:
         '''Create numerator and denominator graphs from transcripts
         and the bigram phone LM.
 
@@ -93,6 +95,10 @@ class MmiTrainingGraphCompiler(object):
             separated by spaces.
           P:
             The bigram phone LM created by :func:`create_bigram_phone_lm`.
+          replicate_den:
+            If True, the returned den_graph is replicated to match the number
+            of FSAs in the returned num_graph; if False, the returned den_graph
+            contains only a single FSA
         Returns:
           A tuple (num_graph, den_graph), where
 
@@ -100,7 +106,8 @@ class MmiTrainingGraphCompiler(object):
               shape `(len(texts), None, None)`.
 
             - `den_graph` is the denominator graph. It is an FsaVec with the same
-              shape of the `num_graph`.
+              shape of the `num_graph` if replicate_den is True; otherwise, it
+              is an FsaVec containing only a single FSA.
         '''
         assert P.device == self.device
         P_with_self_loops = k2.add_epsilon_self_loops(P)
@@ -123,10 +130,13 @@ class MmiTrainingGraphCompiler(object):
         num = k2.arc_sort(num)
 
         ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
-        indexes = torch.zeros(len(texts),
-                              dtype=torch.int32,
-                              device=self.device)
-        den = k2.index_fsa(ctc_topo_P_vec, indexes)
+        if replicate_den:
+            indexes = torch.zeros(len(texts),
+                                  dtype=torch.int32,
+                                  device=self.device)
+            den = k2.index_fsa(ctc_topo_P_vec, indexes)
+        else:
+            den = ctc_topo_P_vec
 
         return num, den
 
