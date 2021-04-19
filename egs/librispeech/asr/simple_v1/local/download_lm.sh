@@ -63,11 +63,18 @@ function check_and_download () {
 
 mkdir -p $dst_dir
 
-for f in 3-gram.pruned.1e-7.arpa.gz librispeech-vocab.txt librispeech-lexicon.txt; do
+files_to_download=(
+3-gram.pruned.1e-7.arpa.gz
+4-gram.arpa.gz
+librispeech-vocab.txt
+librispeech-lexicon.txt
+)
+for f in ${files_to_download[@]}; do
   check_and_download $f || exit 1
 done
 
 cd $dst_dir
 gunzip -c 3-gram.pruned.1e-7.arpa.gz > lm_tgmed.arpa
+gunzip -c 4-gram.arpa.gz > lm_fglarge.arpa
 
 exit 0
