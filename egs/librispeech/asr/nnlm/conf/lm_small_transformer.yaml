@@ -2,7 +2,7 @@
 gpu: 1
 tensorboard_dir: 'exp-nnlm/tensorobard'
 
-# network architecture equivalent configuration to 
+# network architecture equivalent configuration to
 # https://github.com/pytorch/examples/blob/master/word_language_model/main.py
 model_module: transformer
 transformer_conf:
@@ -15,13 +15,14 @@ transformer_conf:
 shared_conf:
   ntoken: 5003
 
-optimizer_conf:
-  # for Adam
-  lr: 0.0003
-  weight_decay: 0.001
-  # for SGD
-  # lr: 0.01
-  # weight_decay: 0.001
+# Now using Noam optimizer and tuning configuration
+# optimizer_conf:
+#   # for Adam
+#   lr: 0.0003
+#   weight_decay: 0.001
+#   # for SGD
+#   # lr: 0.01
+#   # weight_decay: 0.001
 
 trainer_conf:
   num_epochs: 60

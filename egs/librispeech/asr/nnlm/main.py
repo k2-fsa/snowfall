@@ -28,6 +28,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from typing import List, Dict
 
+from snowfall.models.transformer import Noam
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -59,7 +61,7 @@ def validate_configs(configs: Dict, required_fields: List) -> bool:
 def extract_configs(args) -> Dict:
     assert os.path.exists(args.config), '{} does not exist'.format(args.cofnig)
     required_fields = [
-        'model_module', 'shared_conf', 'optimizer_conf', 'trainer_conf',
+        'model_module', 'shared_conf', 'trainer_conf',
         'dataset_conf'
     ]
     with open(args.config, 'r') as f:
@@ -124,17 +126,21 @@ def main():
         model = TransformerModel(**configs['transformer_conf'])
         if args.resume_model_iter > 0:
             model_dir = configs['trainer_conf']['model_dir']
-            model_path = '{}/epoch_{}.pt'.format(model_dir, args.resume_model_iter)
+            model_path = '{}/epoch_{}.pt'.format(model_dir,
+                                                 args.resume_model_iter)
             assert os.path.exists(model_path)
             load_checkpoint(model_path, model)
         model = torch.nn.parallel.DistributedDataParallel(
             model.to(device), [args.local_rank])
 
-
-    optimizer = optim.AdamW(model.parameters(), **configs['optimizer_conf'])
+    optimizer = Noam(model.parameters(),
+                     model.module.embed_unit,
+                     factor=1.0,
+                     warm_step=5000)
     criterion = nn.NLLLoss(ignore_index=pad_index)
 
-    writer = SummaryWriter(log_dir=configs['tensorboard_dir'])
+    writer = SummaryWriter(log_dir=configs['tensorboard_dir'] +
+                           str(args.local_rank))
 
     log_interval = max(100, len(train_data_loader) // 20)
     trainer = Trainer(device=device,
