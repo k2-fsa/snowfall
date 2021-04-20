@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import torch
-from lhotse import CutSet, Fbank, LilcomHdf5Writer, combine
+from lhotse import CutSet, Fbank, FbankConfig, LilcomHdf5Writer, combine
 from lhotse.recipes import prepare_librispeech, prepare_musan
 
 from snowfall.common import str2bool
@@ -62,7 +62,7 @@ def locate_corpus(*corpus_dirs):
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
         '--num-jobs',
         type=int,
@@ -89,6 +89,7 @@ def main():
     corpus_dir = locate_corpus(
         Path('/export/corpora5/LibriSpeech'),
         Path('/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech'),
+        Path('/root/fangjun/data/librispeech/LibriSpeech'),
         Path('/export/common/data/corpora/ASR/openslr/SLR12/LibriSpeech')
     )
     musan_dir = locate_corpus(
@@ -115,6 +116,7 @@ def main():
     )
 
     print('Feature extraction:')
+    extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in librispeech_manifests.items():
             if (output_dir / f'cuts_{partition}.json.gz').is_file():
@@ -128,7 +130,7 @@ def main():
             if 'train' in partition:
                 cut_set = cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
             cut_set = cut_set.compute_and_store_features(
-                extractor=Fbank(),
+                extractor=extractor,
                 storage_path=f'{output_dir}/feats_{partition}',
                 # when an executor is specified, make more partitions
                 num_jobs=args.num_jobs if ex is None else 80,
@@ -144,7 +146,7 @@ def main():
             musan_cuts = CutSet.from_manifests(
                 recordings=combine(part['recordings'] for part in musan_manifests.values())
             ).cut_into_windows(10.0).filter(lambda c: c.duration > 5).compute_and_store_features(
-                extractor=Fbank(),
+                extractor=extractor,
                 storage_path=f'{output_dir}/feats_musan',
                 num_jobs=args.num_jobs if ex is None else 80,
                 executor=ex,

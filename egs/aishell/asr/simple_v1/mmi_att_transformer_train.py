@@ -22,13 +22,12 @@ from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
-from lhotse import CutSet
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed
-from snowfall.common import describe, str2bool
+from snowfall.common import describe
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.data.aishell import AishellAsrDataModule
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.conformer import Conformer
@@ -367,11 +366,6 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-frames',
-        type=int,
-        default=25000,
-        help="Maximum number of feature frames in a single batch.")
-    parser.add_argument(
         '--warm-step',
         type=int,
         default=25000,
@@ -402,51 +396,17 @@ def get_parser():
         type=int,
         default=256,
         help="Number of units in transformer attention layers.")
-    parser.add_argument(
-        '--bucketing_sampler',
-        type=str2bool,
-        default=False,
-        help='When enabled, the batches will come from buckets of '
-             'similar duration (saves padding frames).')
-    parser.add_argument(
-        '--num-buckets',
-        type=int,
-        default=30,
-        help='The number of buckets for the BucketingSampler'
-             '(you might want to increase it for larger datasets).')
-    parser.add_argument(
-        '--concatenate-cuts',
-        type=str2bool,
-        default=True,
-        help='When enabled, utterances (cuts) will be concatenated '
-             'to minimize the amount of padding.')
-    parser.add_argument(
-        '--duration-factor',
-        type=float,
-        default=1.0,
-        help='Determines the maximum duration of a concatenated cut '
-             'relative to the duration of the longest cut in a batch.')
-    parser.add_argument(
-        '--gap',
-        type=float,
-        default=1.0,
-        help='The amount of padding (in seconds) inserted between concatenated cuts. '
-             'This padding is filled with noise when noise augmentation is used.')
-    parser.add_argument(
-        '--full-libri',
-        type=str2bool,
-        default=False,
-        help='When enabled, use 960h LibriSpeech.')
     return parser
 
 
 def main():
-    args = get_parser().parse_args()
+    parser = get_parser()
+    AishellAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
-    max_frames = args.max_frames
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
@@ -485,57 +445,9 @@ def main():
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
 
-    # load dataset
-    # feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
-    feature_dir = Path('exp/data')
-    logging.info("About to get train cuts")
-    cuts_train = CutSet.from_json(feature_dir /
-                                  'cuts_train.json.gz')
-    logging.info("About to get dev cuts")
-    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev.json.gz')
-    logging.info("About to get Musan cuts")
-    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
-
-    logging.info("About to create train dataset")
-    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if args.concatenate_cuts:
-        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
-        # Cut concatenation should be the first transform in the list,
-        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
-        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
-    train = K2SpeechRecognitionDataset(cuts_train, cut_transforms=transforms)
-    if args.bucketing_sampler:
-        logging.info('Using BucketingSampler.')
-        train_sampler = BucketingSampler(
-            cuts_train,
-            max_frames=max_frames,
-            shuffle=True,
-            num_buckets=args.num_buckets
-        )
-    else:
-        logging.info('Using SingleCutSampler.')
-        train_sampler = SingleCutSampler(
-            cuts_train,
-            max_frames=max_frames,
-            shuffle=True,
-        )
-    logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(
-        train,
-        sampler=train_sampler,
-        batch_size=None,
-        num_workers=4
-    )
-    logging.info("About to create dev dataset")
-    validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(cuts_dev, max_frames=max_frames)
-    logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(
-        validate,
-        sampler=valid_sampler,
-        batch_size=None,
-        num_workers=1
-    )
+    aishell = AishellAsrDataModule(args)
+    train_dl = aishell.train_dataloaders()
+    valid_dl = aishell.valid_dataloaders()
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')

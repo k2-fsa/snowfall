@@ -21,6 +21,7 @@ from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.decoding.graph import compile_HLG
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
@@ -42,6 +43,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                 model.subsampling_factor),
              torch.floor_divide(supervisions['num_frames'],
                                 model.subsampling_factor)), 1).to(torch.int32)
+        supervision_segments = torch.clamp(supervision_segments, min=0)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
@@ -60,15 +62,15 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         #  nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-        # assert LG.is_cuda()
+        # assert HLG.is_cuda()
         assert HLG.device == nnet_output.device, \
-            f"Check failed: LG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
+            f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
                                              10000)
 
-        # lattices = k2.intersect_dense(LG, dense_fsa_vec, 10.0)
+        # lattices = k2.intersect_dense(HLG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
@@ -88,6 +90,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         num_cuts += len(texts)
 
     return results
+
 
 
 def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
@@ -154,22 +157,21 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 def get_parser():
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--epoch', default=0, type=int)
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--epoch', default=9, type=int)
     return parser
 
 
 def main():
     args = get_parser().parse_args()
-    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan-bucket')
+    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan-dist')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    lexicon = Lexicon(lang_dir)
 
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
@@ -179,7 +181,7 @@ def main():
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
     device = torch.device('cuda')
-    model = TdnnLstm1b(num_features=40,
+    model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
@@ -191,10 +193,10 @@ def main():
 
     assert P.requires_grad is False
     P.scores = model.P_scores.cpu()
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='model_P_scores.txt')
+    print_transition_probabilities(P, lexicon.phones, phone_ids, filename='model_P_scores.txt')
 
     P.set_scores_stochastic_(model.P_scores)
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
+    print_transition_probabilities(P, lexicon.phones, phone_ids, filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
@@ -203,8 +205,8 @@ def main():
         logging.debug("Loading G.fst.txt")
         with open(lang_dir / 'G.fst.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
-        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
+        first_phone_disambig_id = find_first_disambig_symbol(lexicon.phones)
+        first_word_disambig_id = find_first_disambig_symbol(lexicon.words)
         HLG = compile_HLG(L=L,
                          G=G,
                          H=ctc_topo,
@@ -235,12 +237,13 @@ def main():
     HLG = HLG.to(device)
     HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
     HLG.requires_grad_(False)
+
     logging.debug("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
                      device=device,
                      HLG=HLG,
-                     symbols=symbol_table)
+                     symbols=lexicon.words)
     s = ''
     for ref, hyp in results:
         s += f'ref={ref}\n'

@@ -17,13 +17,12 @@ from pathlib import Path
 from typing import List
 from typing import Union
 
-from lhotse import CutSet
-from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
 from snowfall.common import average_checkpoint
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.data import AishellAsrDataModule
 from snowfall.decoding.graph import compile_LG
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
@@ -199,11 +198,12 @@ def get_parser():
 
 
 def main():
-    args = get_parser().parse_args()
+    parser = get_parser()
+    AishellAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
 
     model_type = args.model_type
     epoch = args.epoch
-    max_frames = args.max_frames
     avg = args.avg
     att_rate = args.att_rate
 
@@ -289,16 +289,8 @@ def main():
         LG = k2.Fsa.from_dict(d)
 
     # load dataset
-    # feature_dir = Path('/export/gpudisk2/data/hegc/audio_workspace/snowfall_aishell1/exp/data')
-    feature_dir = Path('exp/data')
-    logging.debug("About to get test cuts")
-    cuts_test = CutSet.from_json(feature_dir / 'cuts_test.json.gz')
-
-    logging.debug("About to create test dataset")
-    test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=max_frames)
-    logging.debug("About to create test dataloader")
-    test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
+    aishell = AishellAsrDataModule(args)
+    test_dl = aishell.test_dataloaders()
 
     #  if not torch.cuda.is_available():
     #  logging.error('No GPU detected!')

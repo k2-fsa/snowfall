@@ -19,18 +19,20 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 from lhotse import CutSet
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
-from lhotse.utils import fix_random_seed
+from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe
 from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.dist import cleanup_dist, setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.objectives.mmi import LFMMILoss
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -38,39 +40,33 @@ from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
 
+def encode_supervisions(supervisions: Dict[str, torch.Tensor],
+                        subsampling_factor) -> Tuple[torch.Tensor, List[str]]:
+    """
+    Encodes Lhotse's ``batch["supervisions"]`` dict into a pair of torch Tensor,
+    and a list of transcription strings.
 
+    The supervision tensor has shape ``(batch_size, 3)``.
+    Its second dimension contains information about sequence index [0],
+    start frames [1] and num frames [2].
 
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
+    The batch items might become re-ordered during this operation -- the returned tensor
+    and list of strings are guaranteed to be consistent with each other.
+
+    This mimics subsampling by a factor of 4 with Conv1D layer with no padding.
+    """
+    supervision_segments = torch.stack(
+        (supervisions['sequence_idx'],
+         torch.floor_divide(supervisions['start_frame'],
+                            subsampling_factor),
+         torch.floor_divide(supervisions['num_frames'],
+                            subsampling_factor)), 1).to(torch.int32)
+    supervision_segments = torch.clamp(supervision_segments, min=0)
+    indices = torch.argsort(supervision_segments[:, 2], descending=True)
+    supervision_segments = supervision_segments[indices]
+    texts = supervisions['text']
+    texts = [texts[idx] for idx in indices]
+    return supervision_segments, texts
 
 
 def get_objf(batch: Dict,
@@ -83,68 +79,28 @@ def get_objf(batch: Dict,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
     feature = batch['inputs']
-    supervisions = batch['supervisions']
-    subsampling_factor = model.module.subsampling_factor if isinstance(model, DDP) else model.subsampling_factor
-    supervision_segments = torch.stack(
-        (
-            supervisions['sequence_idx'],
-            torch.floor_divide(supervisions['start_frame'], subsampling_factor),
-            torch.floor_divide(supervisions['num_frames'], subsampling_factor)
-        ),
-        1
-    ).to(torch.int32)
-    indices = torch.argsort(supervision_segments[:, 2], descending=True)
-    supervision_segments = supervision_segments[indices]
-
-    texts = supervisions['text']
-    texts = [texts[idx] for idx in indices]
-    assert feature.ndim == 3
-    # print(supervision_segments[:, 1] + supervision_segments[:, 2])
-
-    feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions,
+                                                      model.subsampling_factor)
+
+    loss_fn = LFMMILoss(
+        graph_compiler=graph_compiler,
+        P=P,
+        den_scale=den_scale
+    )
+
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with grad_context():
         nnet_output = model(feature)
-    else:
-        with torch.no_grad():
-            nnet_output = model(feature)
-
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
-
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
-
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
-
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
-
-    num_tot_scores = num.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -160,7 +116,7 @@ def get_objf(batch: Dict,
                 )
 
         optimizer.zero_grad()
-        (-tot_score).backward()
+        (-mmi_loss).backward()
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
@@ -176,7 +132,7 @@ def get_objf(batch: Dict,
         else:
             optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
+    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
 
 
@@ -298,7 +254,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
 def get_parser():
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--world_size', default=1, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
     parser.add_argument('--bucketing_sampler', type=str2bool, default=True)
@@ -321,27 +277,15 @@ def main():
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
-    else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    lexicon = Lexicon(lang_dir)
 
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
-        device=device
+        lexicon=lexicon,
+        device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
+    phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
@@ -410,7 +354,7 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    model = TdnnLstm1b(num_features=40,
+    model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)

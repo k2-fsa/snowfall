@@ -181,16 +181,18 @@ def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model-type',
-                        type=str,
-                        default="conformer",
-                        choices=["transformer", "conformer"],
-                        help="Model type.")
-    parser.add_argument('--epoch',
-                        type=int,
-                        default=10,
-                        help="Decoding epoch.")
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument(
+        '--model-type',
+        type=str,
+        default="conformer",
+        choices=["transformer", "conformer"],
+        help="Model type.")
+    parser.add_argument(
+        '--epoch',
+        type=int,
+        default=10,
+        help="Decoding epoch.")
     parser.add_argument(
         '--avg',
         type=int,
@@ -239,7 +241,6 @@ def get_parser():
 
 
 def main():
-
     parser = get_parser()
     LibriSpeechAsrDataModule.add_arguments(parser)
     args = parser.parse_args()

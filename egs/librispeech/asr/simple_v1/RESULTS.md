@@ -163,9 +163,9 @@ Decoding results (WER) of each epoch are listed below. They are obtained using t
 2021-02-17 11:54:34,531 INFO [mmi_mbr_decode.py:252] %WER 12.95% [6810 / 52576, 831 ins, 728 del, 5251 sub ]
 ```
 
-# LibriSpeech CTC training results (Transformer)
+# LibriSpeech CTC training results
 
-## 2021-02-17
+## 2021-02-17 (Transformer)
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
 
@@ -241,6 +241,60 @@ listed below. They are obtained using the latest k2 and lhotse as of today (2021
 2021-02-17 08:39:22,562 INFO [ctc_att_transformer_decode.py:226] %WER 8.63% [4538 / 52576, 491 ins, 591 del, 3456 sub ]
 ```
 
+## 2021-03-29 (Conformer)
+
+(Fangjun): Results of <https://github.com/k2-fsa/snowfall/pull/143>
+
+Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
+best results were obtained with 80 rather than 40 filter banks.
+
+They are obtained using the latest k2 and lhotse as of today (2021-03-29).
+
+# average over last 5 epochs
+2021-03-30 10:25:17,347 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.32% [3849 / 52576, 438 ins, 413 del, 2998 sub ]
+2021-03-30 10:29:04,690 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 19.84% [10387 / 52343, 975 ins, 1552 del, 7860 sub ]
+
+Epoch 0:
+2021-03-30 14:05:50,210 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 23.23% [12212 / 52576, 691 ins, 2818 del, 8703 sub ]
+2021-03-30 14:09:40,577 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 47.27% [24742 / 52343, 931 ins, 6718 del, 17093 sub ]
+
+Epoch 1:
+2021-03-30 10:45:30,596 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 16.31% [8574 / 52576, 637 ins, 1643 del, 6294 sub ]
+2021-03-30 10:49:17,734 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 38.39% [20096 / 52343, 1092 ins, 4732 del, 14272 sub ]
+
+Epoch 2:
+2021-03-30 10:53:46,940 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 12.99% [6831 / 52576, 546 ins, 1192 del, 5093 sub ]
+2021-03-30 10:57:36,322 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 33.15% [17350 / 52343, 999 ins, 3996 del, 12355 sub ]
+
+Epoch 3:
+2021-03-30 11:02:07,617 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 10.19% [5356 / 52576, 474 ins, 845 del, 4037 sub ]
+2021-03-30 11:05:55,902 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 27.00% [14133 / 52343, 943 ins, 3082 del, 10108 sub ]
+
+Epoch 4:
+2021-03-30 11:10:27,557 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 9.56% [5026 / 52576, 447 ins, 792 del, 3787 sub ]
+2021-03-30 11:13:47,567 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 25.45% [13319 / 52343, 795 ins, 3154 del, 9370 sub ]
+
+Epoch 5:
+2021-03-30 11:18:17,627 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 9.06% [4763 / 52576, 431 ins, 718 del, 3614 sub ]
+2021-03-30 11:22:08,528 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 24.07% [12598 / 52343, 929 ins, 2538 del, 9131 sub ]
+
+Epoch 6:
+2021-03-30 11:26:39,332 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 8.63% [4535 / 52576, 463 ins, 579 del, 3493 sub ]
+2021-03-30 11:30:29,829 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 23.51% [12304 / 52343, 933 ins, 2296 del, 9075 sub ]
+
+Epoch 7:
+2021-03-30 11:35:03,633 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 8.54% [4488 / 52576, 414 ins, 596 del, 3478 sub ]
+2021-03-30 11:38:25,811 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 22.51% [11784 / 52343, 908 ins, 2152 del, 8724 sub ]
+
+Epoch 8:
+2021-03-30 11:42:56,193 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.78% [4091 / 52576, 455 ins, 481 del, 3155 sub ]
+2021-03-30 11:46:46,510 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 21.36% [11183 / 52343, 920 ins, 1912 del, 8351 sub ]
+
+Epoch 9:
+2021-03-30 11:51:15,704 INFO [ctc_att_transformer_decode.py:256] [test-clean] %WER 7.88% [4142 / 52576, 406 ins, 537 del, 3199 sub ]
+2021-03-30 11:55:06,389 INFO [ctc_att_transformer_decode.py:256] [test-other] %WER 21.54% [11275 / 52343, 865 ins, 2043 del, 8367 sub ]
+
+
 # LibriSpeech MMI training results (Transformer)
 
 ## 2021-03-08
@@ -289,6 +343,78 @@ listed below.
 ```
 
 # LibriSpeech MMI training results (Conformer)
+
+## 2021-03-26
+
+Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
+best results were obtained with 80 rather than 40 filter banks.
+
+Training log and tensorboard log can be found at <https://github.com/k2-fsa/snowfall/pull/143>.
+
+Average over last 5 epochs
+2021-03-26 19:23:07,097 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 6.90% [3627 / 52576, 502 ins, 310 del, 2815 sub ]
+2021-03-26 19:24:50,661 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 17.89% [9363 / 52343, 1141 ins, 908 del, 7314 sub ]
+
+Epoch 1:
+2021-03-26 17:28:44,723 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 21.89% [11511 / 52576, 1433 ins, 1149 del, 8929 sub ]
+2021-03-26 17:31:22,335 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 45.15% [23634 / 52343, 2475 ins, 2830 del, 18329 sub ]
+Epoch 2:
+2021-03-26 17:33:09,657 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 12.52% [6584 / 52576, 581 ins, 899 del, 5104 sub ]
+2021-03-26 17:34:32,237 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 29.97% [15689 / 52343, 1224 ins, 2419 del, 12046 sub ]
+Epoch 3:
+2021-03-26 17:36:27,185 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 9.96% [5234 / 52576, 680 ins, 433 del, 4121 sub ]
+2021-03-26 17:37:48,597 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 25.27% [13229 / 52343, 1615 ins, 1282 del, 10332 sub ]
+Epoch 4:
+2021-03-26 17:39:45,618 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 8.83% [4640 / 52576, 677 ins, 333 del, 3630 sub ]
+2021-03-26 17:41:08,419 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 23.00% [12038 / 52343, 1555 ins, 1070 del, 9413 sub ]
+Epoch 5:
+2021-03-26 17:43:01,038 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 8.65% [4548 / 52576, 595 ins, 415 del, 3538 sub ]
+2021-03-26 17:44:22,546 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 21.88% [11454 / 52343, 1312 ins, 1236 del, 8906 sub ]
+Epoch 6:
+2021-03-26 17:46:10,045 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.81% [4105 / 52576, 528 ins, 354 del, 3223 sub ]
+2021-03-26 17:47:30,558 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.72% [10844 / 52343, 1247 ins, 1133 del, 8464 sub ]
+Epoch 7:
+2021-03-26 17:49:34,328 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.94% [4174 / 52576, 534 ins, 355 del, 3285 sub ]
+2021-03-26 17:50:57,266 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.97% [10978 / 52343, 1220 ins, 1182 del, 8576 sub ]
+Epoch 8:
+2021-03-26 17:53:00,601 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.77% [4084 / 52576, 533 ins, 336 del, 3215 sub ]
+2021-03-26 17:54:21,968 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.42% [10687 / 52343, 1260 ins, 1059 del, 8368 sub ]
+Epoch 9:
+2021-03-26 18:02:31,839 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.52% [3954 / 52576, 497 ins, 374 del, 3083 sub ]
+2021-03-26 18:04:16,252 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 20.06% [10501 / 52343, 1075 ins, 1268 del, 8158 sub ]
+Epoch 10:
+2021-03-26 19:42:11,096 INFO [mmi_att_transformer_decode.py:331] [test-clean] %WER 7.62% [4005 / 52576, 562 ins, 316 del, 3127 sub ]
+2021-03-26 19:43:18,106 INFO [mmi_att_transformer_decode.py:331] [test-other] %WER 19.92% [10427 / 52343, 1250 ins, 1037 del, 8140 sub ]
+
+Average over last 5 epochs, When using 40 filter banks instead of 80 (also twice smaller feature mask sizes for specaug):
+2021-03-25 21:52:23,645 INFO [mmi_att_transformer_decode.py:329] [test-clean] %WER 6.93% [3645 / 52576, 529 ins, 308 del, 2808 sub ]
+2021-03-25 21:53:10,674 INFO [mmi_att_transformer_decode.py:329] [test-other] %WER 18.53% [9697 / 52343, 1136 ins, 929 del, 7632 sub ]
+
+## 2021-04-11
+
+By Fangjun.
+
+### Average over last 5 epochs
+
+#### LM rescoring with whole lattice
+
+```
+$ ./mmi_att_transformer_decode.py --use-lm-rescoring=1 --num-path=-1 --max-duration=10 --output-beam-size=8
+
+2021-04-11 10:37:58,913 INFO [common.py:356] [test-clean] %WER 5.72% [3008 / 52576, 562 ins, 164 del, 2282 sub ]
+2021-04-11 10:46:03,670 INFO [common.py:356] [test-other] %WER 15.71% [8224 / 52343, 1331 ins, 562 del, 6331 sub ]
+```
+
+#### LM rescoring with n-best list
+
+```
+$ ./mmi_att_transformer_decode.py --use-lm-rescoring=1 --num-path=100 --max-duration=500 --output-beam-size=20
+
+2021-04-11 15:17:07,792 INFO [common.py:356] [test-clean] %WER 6.31% [3316 / 52576, 746 ins, 160 del, 2410 sub ]
+2021-04-11 15:19:48,583 INFO [common.py:356] [test-other] %WER 16.93% [8863 / 52343, 1649 ins, 514 del, 6700 sub ]
+```
+
+
 
 ## 2021-03-08
 

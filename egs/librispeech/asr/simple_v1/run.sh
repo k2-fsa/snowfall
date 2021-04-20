@@ -43,6 +43,12 @@ if [ $stage -le 4 ]; then
     --max-order=3 \
     data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fst.txt
 
+  python3 -m kaldilm \
+    --read-symbol-table="data/lang_nosp/words.txt" \
+    --disambig-symbol='#0' \
+    --max-order=4 \
+    data/local/lm/lm_fglarge.arpa >data/lang_nosp/G_4_gram.fst.txt
+
   echo ""
   echo "To load G:"
   echo "Use::"
