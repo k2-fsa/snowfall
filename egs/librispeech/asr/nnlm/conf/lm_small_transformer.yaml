@@ -8,7 +8,7 @@ model_module: transformer
 transformer_conf:
   embed_unit: 200
   attention_heads: 8
-  nlayers: 8
+  nlayers: 16
   linear_units: 2048
   dropout: 0.2
 

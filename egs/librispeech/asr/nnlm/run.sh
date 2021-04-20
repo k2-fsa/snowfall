@@ -117,8 +117,24 @@ if [ $stage -le 4 ]; then
   python compute_word_ppl.py
 
 fi
-
 if [ $stage -le 5 ]; then
+  # this stage requires trained mmi models
+  export PYTHONPATH=$PWD/local:$PYTHONPATH
+
+  cd ../simple_v1
+
+  # TODO: Remove hard-code Transformer language mode path
+  ./mmi_att_transformer_decode.py \
+    --use-nnlm-rescoring=1 \
+    --num-path=100 \
+    --max-duration=500 \
+    --output-beam-size=20
+
+  cd ../nnlm
+
+fi
+
+if [ $stage -le 6 ]; then
   # generate words.txt tokens.txt and lexicion.txt
   # which is used in future rescore process
   lexicon_path=./data/nnlm/lexicon
@@ -130,6 +146,7 @@ if [ $stage -le 5 ]; then
     echo "please set words_txt path of your previous experiment"
     echo "the NN-LM trained LM is used as a rescore module, \
       currently the same words.txt with previous experiment is prefered"
+    exit 0
   fi
   echo "generate lexicon"
   python local/generate_lexicon.py \
