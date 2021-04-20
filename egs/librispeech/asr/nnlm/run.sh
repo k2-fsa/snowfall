@@ -83,12 +83,28 @@ if [ $stage -le 2 ]; then
 fi
 
 if [ $stage -le 3 ]; then
+  # TODO:Move following flollowig filtered by length module in Dataset
+  # The longest sample has 1344 tokens. Batchsize is quite small if training data contains these Long samples.
+  # Only 1.31% = 529,260/40,198,051 samples are filtered out by length 90.
+  maximum_length=90
+  echo "filter out sampels which longher than "$maximum_length" tokens"
+  data_dir=./data/nnlm/text
+  train_data_filtered_by_length=${data_dir}/length_${maximum_length}_librispeech.txt.tokens
+  train_data=${data_dir}/librispeech.txt.tokens
+  ori_train_data=${data_dir}/ori_librispeech.txt.tokens
+  if [ ! -f  $ori_train_data ]; then
+    mv ${train_data} ${ori_train_data}
+  fi
+
+  if [ ! -f $train_data_filtered_by_length ]; then
+    awk -v maximum_length=$maximum_length 'NF<maximum_length{print $0}' ${ori_train_data} > $train_data_filtered_by_length
+    ln -sf `realpath $train_data_filtered_by_length` ${train_data}
+  fi
+
   echo "start to train"
   # resume_model_iter is for resume training
   # -1 means train from scratch
-  # python main.py \
   export CUDA_VISIBLE_DEVICES=0,1,2,3
-  # python -m torch.distributed.launch --nproc_per_node=4 test.py \
   python -m torch.distributed.launch --nproc_per_node=4 main.py \
     --config $lm_config \
     --vocab_size $vocab_size \
