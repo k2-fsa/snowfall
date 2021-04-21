@@ -1,10 +1,7 @@
-from pathlib import Path
-
 import argparse
-
-from typing import List, Union
-
 import logging
+from pathlib import Path
+from typing import List, Union
 
 from torch.utils.data import DataLoader
 
@@ -158,6 +155,7 @@ class AsrDataModule(DataModule):
             sampler=train_sampler,
             batch_size=None,
             num_workers=4,
+            persistent_workers=True,
         )
         return train_dl
 
@@ -183,7 +181,8 @@ class AsrDataModule(DataModule):
             validate,
             sampler=valid_sampler,
             batch_size=None,
-            num_workers=1
+            num_workers=2,
+            persistent_workers=True,
         )
         return valid_dl
 
