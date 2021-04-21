@@ -451,9 +451,9 @@ class Noam(object):
         warm_step: warmup steps
     """
 
-    def __init__(self, params, model_size: int = 256, factor: float = 10.0, warm_step: int = 25000) -> None:
+    def __init__(self, params, model_size: int = 256, factor: float = 10.0, warm_step: int = 25000, weight_decay=0) -> None:
         """Construct an Noam object."""
-        self.optimizer = torch.optim.Adam(params, lr=0, betas=(0.9, 0.98), eps=1e-9)
+        self.optimizer = torch.optim.Adam(params, lr=0, betas=(0.9, 0.98), eps=1e-9, weight_decay=weight_decay)
         self._step = 0
         self.warmup = warm_step
         self.factor = factor
