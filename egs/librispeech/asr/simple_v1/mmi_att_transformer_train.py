@@ -117,6 +117,7 @@ def get_objf(batch: Dict,
             else:
                 scaler.step(optimizer)
             optimizer.zero_grad()
+            scaler.update()
 
     ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
@@ -169,7 +170,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     num_epochs: int,
                     global_batch_idx_train: int,
                     world_size: int,
-                    scaler: GradScaler = scaler
+                    scaler: GradScaler
                     ):
     """One epoch training and validation.
 
