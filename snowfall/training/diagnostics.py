@@ -1,7 +1,8 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import torch
 from torch import nn
+from torch.cuda.amp import GradScaler
 
 
 def l1_norm(x):
@@ -88,7 +89,8 @@ def measure_gradient_norms(model: nn.Module, norm: str = 'l1') -> Dict[str, floa
 
 def optim_step_and_measure_param_change(
         model: nn.Module,
-        optimizer: torch.optim.Optimizer
+        optimizer: torch.optim.Optimizer,
+        scaler: Optional[GradScaler] = None
 ) -> Dict[str, float]:
     """
     Perform model weight update and measure the "relative change in parameters per minibatch."
@@ -101,7 +103,10 @@ def optim_step_and_measure_param_change(
             \end{aligned}
     """
     param_copy = {n: p.detach().clone() for n, p in model.named_parameters()}
-    optimizer.step()
+    if scaler:
+        scaler.step(optimizer)
+    else:
+        optimizer.step()
     relative_change = {}
     with torch.no_grad():
         for n, p_new in model.named_parameters():
