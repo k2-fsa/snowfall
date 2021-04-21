@@ -76,7 +76,7 @@ def get_objf(batch: Dict,
 
     grad_context = nullcontext if is_training else torch.no_grad
 
-    with autocast(), grad_context():
+    with autocast(enabled=scaler.is_enabled()), grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
@@ -363,6 +363,12 @@ def get_parser():
         default=True,
         help='Should various information be logged in tensorboard.'
     )
+    parser.add_argument(
+        '--amp',
+        type=str2bool,
+        default=True,
+        help='Should we use automatic mixed precision (AMP) training.'
+    )
     return parser
 
 
@@ -456,7 +462,7 @@ def run(rank, world_size, args):
                      factor=1.0,
                      warm_step=args.warm_step)
 
-    scaler = GradScaler()
+    scaler = GradScaler(enabled=args.amp)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -553,21 +559,6 @@ def run(rank, world_size, args):
 
     logging.warning('Done')
     torch.distributed.barrier()
-    # NOTE: The training process is very likely to hang at this point.
-    # If you press ctrl + c, your GPU memory will not be freed.
-    # To free you GPU memory, you can run:
-    #
-    #  $ ps aux | grep multi
-    #
-    # And it will print something like below:
-    #
-    # kuangfa+  430518 98.9  0.6 57074236 3425732 pts/21 Rl Apr02 639:01 /root/fangjun/py38/bin/python3 -c from multiprocessing.spawn
-    #
-    # You can kill the process manually by:
-    #
-    # $ kill -9 430518
-    #
-    # And you will see that your GPU is now not occupied anymore.
     cleanup_dist()
 
 
