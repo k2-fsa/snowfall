@@ -25,6 +25,7 @@ class Lexicon:
                 L_inv = k2.arc_sort(L.invert_())
                 torch.save(L_inv.as_dict(), self.lang_dir / 'Linv.pt')
         self.L_inv = L_inv
+        self.L = k2.arc_sort(L_inv.invert())
 
     def phone_symbols(
             self,
