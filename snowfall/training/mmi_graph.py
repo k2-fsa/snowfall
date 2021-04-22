@@ -261,7 +261,6 @@ class MmiTrainingGraphCompiler(object):
                                          b_to_a_map,
                                          sorted_match_a=True)
         num_graphs = k2.invert(num_graphs)
-        assert num_graphs.requires_grad == P.requires_grad
 
         # TODO(fangjun): k2.connect supports only CPU.
         # Add CUDA support.
