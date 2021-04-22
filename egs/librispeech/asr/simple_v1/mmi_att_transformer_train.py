@@ -7,23 +7,24 @@
 # Apache 2.0
 
 import argparse
-import k2
 import logging
-import math
-import numpy as np
 import os
 import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Optional
+
+import k2
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from datetime import datetime
-from pathlib import Path
 from torch import nn
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
 
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
@@ -31,9 +32,9 @@ from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.data.librispeech import LibriSpeechAsrDataModule
-from snowfall.lexicon import Lexicon
 from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
@@ -57,7 +58,9 @@ def get_objf(batch: Dict,
              att_rate: float = 0.0,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
-             optimizer: Optional[torch.optim.Optimizer] = None):
+             optimizer: Optional[torch.optim.Optimizer] = None,
+             scaler: GradScaler = None
+             ):
     feature = batch['inputs']
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
@@ -75,7 +78,7 @@ def get_objf(batch: Dict,
 
     grad_context = nullcontext if is_training else torch.no_grad
 
-    with grad_context():
+    with autocast(enabled=scaler.is_enabled()), grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
@@ -111,23 +114,25 @@ def get_objf(batch: Dict,
             loss = (- (1.0 - att_rate) * mmi_loss + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-mmi_loss) / (len(texts) * accum_grad)
-        loss.backward()
+        scaler.scale(loss).backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
+            scaler.unscale_(optimizer)
             clip_grad_value_(model.parameters(), 5.0)
             maybe_log_gradients('train/clipped_grad_norms')
             if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
                 # to check the relative parameter change per minibatch.
-                deltas = optim_step_and_measure_param_change(model, optimizer)
+                deltas = optim_step_and_measure_param_change(model, optimizer, scaler)
                 tb_writer.add_scalars(
                     'train/relative_param_change_per_minibatch',
                     deltas,
                     global_step=global_batch_idx_train
                 )
             else:
-                optimizer.step()
+                scaler.step(optimizer)
             optimizer.zero_grad()
+            scaler.update()
 
     ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
@@ -183,7 +188,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
                     global_batch_idx_train: int,
-                    world_size: int
+                    world_size: int,
+                    scaler: GradScaler
                     ):
     """One epoch training and validation.
 
@@ -246,7 +252,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             att_rate=att_rate,
             tb_writer=tb_writer,
             global_batch_idx_train=global_batch_idx_train,
-            optimizer=optimizer
+            optimizer=optimizer,
+            scaler=scaler
         )
 
         total_objf += curr_batch_objf
@@ -378,6 +385,11 @@ def get_parser():
         help='Should various information be logged in tensorboard.'
     )
     parser.add_argument(
+        '--amp',
+        type=str2bool,
+        default=True,
+        help='Should we use automatic mixed precision (AMP) training.'
+    parser.add_argument(
         '--use-ali-model',
         type=str2bool,
         default=True,
@@ -503,12 +515,12 @@ def run(rank, world_size, args):
         ali_model = None
         logging.info('No ali_model')
 
-
-
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
                      factor=1.0,
                      warm_step=args.warm_step)
+
+    scaler = GradScaler(enabled=args.amp)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -519,7 +531,7 @@ def run(rank, world_size, args):
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scaler=scaler)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
@@ -550,6 +562,7 @@ def run(rank, world_size, args):
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
             world_size=world_size,
+            scaler=scaler
         )
         # the lower, the better
         if valid_objf < best_valid_objf:
@@ -559,6 +572,7 @@ def run(rank, world_size, args):
             save_checkpoint(filename=best_model_path,
                             optimizer=None,
                             scheduler=None,
+                            scaler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
@@ -582,6 +596,7 @@ def run(rank, world_size, args):
         save_checkpoint(filename=model_path,
                         optimizer=optimizer,
                         scheduler=None,
+                        scaler=scaler,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
@@ -603,21 +618,6 @@ def run(rank, world_size, args):
 
     logging.warning('Done')
     torch.distributed.barrier()
-    # NOTE: The training process is very likely to hang at this point.
-    # If you press ctrl + c, your GPU memory will not be freed.
-    # To free you GPU memory, you can run:
-    #
-    #  $ ps aux | grep multi
-    #
-    # And it will print something like below:
-    #
-    # kuangfa+  430518 98.9  0.6 57074236 3425732 pts/21 Rl Apr02 639:01 /root/fangjun/py38/bin/python3 -c from multiprocessing.spawn
-    #
-    # You can kill the process manually by:
-    #
-    # $ kill -9 430518
-    #
-    # And you will see that your GPU is now not occupied anymore.
     cleanup_dist()
 
 

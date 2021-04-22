@@ -15,6 +15,7 @@ import k2
 import kaldialign
 import torch
 import torch.distributed as dist
+from torch.cuda.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel
 
 from snowfall.models import AcousticModel
@@ -57,7 +58,8 @@ def load_checkpoint(
         filename: Pathlike,
         model: AcousticModel,
         optimizer: Optional[object] = None,
-        scheduler: Optional[object] = None
+        scheduler: Optional[object] = None,
+        scaler: Optional[GradScaler] = None,
 ) -> Dict[str, Any]:
     logging.info('load checkpoint from {}'.format(filename))
 
@@ -98,6 +100,9 @@ def load_checkpoint(
 
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler'])
+
+    if scaler is not None:
+        scaler.load_state_dict(checkpoint['grad_scaler'])
 
     return checkpoint
 
@@ -161,6 +166,7 @@ def save_checkpoint(
         model: Union[AcousticModel, DistributedDataParallel],
         optimizer: object,
         scheduler: object,
+        scaler: Optional[GradScaler],
         epoch: int,
         learning_rate: float,
         objf: float,
@@ -178,6 +184,7 @@ def save_checkpoint(
         'state_dict': model.state_dict(),
         'optimizer': optimizer.state_dict() if optimizer is not None else None,
         'scheduler': scheduler.state_dict() if scheduler is not None else None,
+        'grad_scaler': scaler.state_dict() if scaler is not None else None,
         'epoch': epoch,
         'learning_rate': learning_rate,
         'objf': objf,
