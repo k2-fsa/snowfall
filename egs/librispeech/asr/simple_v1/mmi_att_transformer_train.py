@@ -36,6 +36,7 @@ from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
+from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
@@ -45,6 +46,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 def get_objf(batch: Dict,
              model: AcousticModel,
+             ali_model: Optional[AcousticModel],
              P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
@@ -77,6 +79,19 @@ def get_objf(batch: Dict,
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+
+        if (ali_model is not None and global_batch_idx_train is not None and
+                global_batch_idx_train * accum_grad < 4000):
+            with torch.no_grad():
+                ali_model_output = ali_model(feature)
+            # subsampling is done slightly differently, may be small length
+            # differences.
+            min_len = min(ali_model_output.shape[2], nnet_output.shape[2])
+            # scale less than one so it will be encouraged
+            # to mimic ali_model's output
+            ali_model_scale = 500.0 / (global_batch_idx_train*accum_grad + 500)
+            nnet_output = nnet_output.clone()  # or log-softmax backprop will fail.
+            nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
 
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
@@ -121,6 +136,7 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
+                        ali_model: Optional[AcousticModel],
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
@@ -137,6 +153,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -153,7 +170,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
+                    ali_model: Optional[AcousticModel],
+                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -216,6 +235,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -262,6 +282,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                ali_model=ali_model,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler)
@@ -356,6 +377,24 @@ def get_parser():
         default=True,
         help='Should various information be logged in tensorboard.'
     )
+    parser.add_argument(
+        '--use-ali-model',
+        type=str2bool,
+        default=True,
+        help='If true, we assume that you have run ./ctc_train.py '
+             'and you have some checkpoints inside the directory '
+             'exp-lstm-adam-ctc-musan/ .'
+             'It will use exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt '
+             'as the pre-trained alignment model'
+    )
+    parser.add_argument(
+        '--ali-model-epoch',
+        type=int,
+        default=7,
+        help='If --use-ali-model is True, load '
+             'exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt as the alignment model.'
+             'Used only if --use-ali-model is True.'
+    )
     return parser
 
 
@@ -444,6 +483,27 @@ def run(rank, world_size, args):
 
     model = DDP(model, device_ids=[rank])
 
+    # Now for the aligment model, if any
+    if args.use_ali_model:
+        ali_model = TdnnLstm1b(
+            num_features=80,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4)
+
+        ali_model_fname = Path(f'exp-lstm-adam-ctc-musan/epoch-{args.ali_model_epoch}.pt')
+        assert ali_model_fname.is_file(), \
+                f'ali model filename {ali_model_fname} does not exist!'
+        ali_model.load_state_dict(torch.load(ali_model_fname, map_location='cpu')['state_dict'])
+        ali_model.to(device)
+
+        ali_model.eval()
+        ali_model.requires_grad_(False)
+        logging.info(f'Use ali_model: {ali_model_fname}')
+    else:
+        ali_model = None
+        logging.info('No ali_model')
+
+
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
@@ -477,6 +537,7 @@ def run(rank, world_size, args):
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
