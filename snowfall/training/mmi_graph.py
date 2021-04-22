@@ -125,7 +125,7 @@ class MmiTrainingGraphCompiler(object):
         #
         # We compute HPL = compose(ctc_topo, P, L) by setting P.scores to zero
         # and save an arc_map `hpl_to_p`. In this way, we can avoid invoking
-        # compose(ctc_topo, P, H) and all we need to do is to update the scores
+        # compose(ctc_topo, P, L) and all we need to do is to update the scores
         # of HPL with the help of `hpl_to_p`.
         #
         if not hasattr(self, 'HPL_inv_sorted'):
@@ -244,8 +244,10 @@ class MmiTrainingGraphCompiler(object):
                 assert self.lm_scores.requires_grad is False
 
         self.HPL_inv_sorted.scores = self.lm_scores + k2.index(P.scores, self.hpl_inv_sorted_to_p)
-        assert self.HPL_inv_sorted.requires_grad == P.requires_grad
 
+        # When this function is executed inside `with torch.no_grad()` context,
+        # The following assert will fail.
+        #  assert self.HPL_inv_sorted.requires_grad == P.requires_grad
 
         linear_fsas = self.build_linear_fsas(texts)
         linear_fsas_with_self_loops = k2.add_epsilon_self_loops(linear_fsas)
