@@ -145,7 +145,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
-                        den_scale: float = 1
+                        scaler: GradScaler,
+                        den_scale: float = 1,
                         ):
     total_objf = 0.
     total_frames = 0.  # for display only
@@ -164,7 +165,8 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             graph_compiler=graph_compiler,
             is_training=False,
             is_update=False,
-            den_scale=den_scale
+            den_scale=den_scale,
+            scaler=scaler
         )
         total_objf += objf
         total_frames += frames
@@ -292,7 +294,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 ali_model=ali_model,
                 P=P,
                 device=device,
-                graph_compiler=graph_compiler)
+                graph_compiler=graph_compiler,
+                scaler=scaler)
             if world_size > 1:
                 s = torch.tensor([
                     total_valid_objf, total_valid_frames,
@@ -389,6 +392,7 @@ def get_parser():
         type=str2bool,
         default=True,
         help='Should we use automatic mixed precision (AMP) training.'
+    )
     parser.add_argument(
         '--use-ali-model',
         type=str2bool,
