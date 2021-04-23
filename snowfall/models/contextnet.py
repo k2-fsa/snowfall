@@ -6,6 +6,7 @@
 
 import torch
 from torch import Tensor, nn
+from typing import List
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Swish
 
@@ -17,9 +18,12 @@ class ContextNet(AcousticModel):
         num_features (int): Number of input features
         num_classes (int): Number of output classes
         kernel_size (int): Kernel size of convolution layers (default 3).
-        num_blocks (int): Number of context block (default 23).
+        num_blocks (int): Number of context block (default 12).
         num_layers (int): Number of depthwise convolution layers for each 
                 context block (except first and last block) (default 5).
+        conv_out_channels (List[int]): Number of output channels produced by context blocks, 
+                len(conv_out_channels) = num_blocks (default [*[256] * 5, *[512] * 6, 640]).
+        subsampling_layers (List[int]): Indexs of subsampling layers (default [3, 6]).
         alpha (float): The factor to scale the output channel of the network (default 1).
         dropout (float): Dropout (default 0.1).
     """
@@ -29,8 +33,10 @@ class ContextNet(AcousticModel):
         num_features: int,
         num_classes: int,
         kernel_size: int = 3,
-        num_blocks: int = 23,
+        num_blocks: int = 12,
         num_layers: int = 5,
+        conv_out_channels: List[int] = [*[256] * 5, *[512] * 6, 640],
+        subsampling_layers: List[int] = [3, 6],
         alpha: int = 1,
         dropout: int = 0.1,
     ):
@@ -38,15 +44,14 @@ class ContextNet(AcousticModel):
 
         self.num_features = num_features
         self.num_classes = num_classes
-        self.subsampling_factor = 8
 
         conv_channels = [num_features] +  \
-                [channels * alpha for channels in [*[256] * 11, *[512] * 11, 640]]
+                [channels * alpha for channels in conv_out_channels]
 
         strides = [1] * num_blocks
-
-        strides[7] = 2
-        strides[14] = 2
+        for layer in subsampling_layers:
+            strides[layer] = 2
+            strides[layer] = 2
 
         residuals = [False, *[True] * (num_blocks - 2), False ] 
 
