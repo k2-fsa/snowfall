@@ -138,7 +138,7 @@ class Transformer(AcousticModel):
         Returns:
             Tensor: Decoder loss.
         """
-        batch_text = get_normal_transcripts(supervision, graph_compiler.words, graph_compiler.oov)
+        batch_text = get_normal_transcripts(supervision, graph_compiler.lexicon.words, graph_compiler.oov)
         ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
                                             self.decoder_num_class - 1)
         ys_in_pad = ys_in_pad.to(x.device)
@@ -580,7 +580,7 @@ def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> O
     """
     if supervisions == None:
         return None
-    
+
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
          supervisions['start_frame'],
@@ -589,7 +589,7 @@ def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> O
     lengths = [0 for _ in range(int(max(supervision_segments[:, 0])) + 1)]
     for sequence_idx, start_frame, num_frames in supervision_segments:
         lengths[sequence_idx] = start_frame + num_frames
-    
+
     lengths = [((i -1) // 2 - 1) // 2 for i in lengths]
     bs = int(len(lengths))
     seq_range = torch.arange(0, max_len, dtype=torch.int64)
@@ -725,11 +725,19 @@ def get_hierarchical_targets(ys: List[List[int]], lexicon: k2.Fsa) -> List[Tenso
 
     n_batch = len(ys)
     indices = torch.tensor(range(n_batch))
+    device = L_inv.device
 
-    transcripts = k2.create_fsa_vec([k2.linear_fsa(x) for x in ys])
-    transcripts_lexicon = k2.intersect(transcripts, L_inv)
-    transcripts_lexicon = k2.arc_sort(k2.connect(transcripts_lexicon))
+    transcripts = k2.create_fsa_vec([k2.linear_fsa(x, device=device) for x in ys])
+    transcripts_with_self_loops = k2.add_epsilon_self_loops(transcripts)
+
+    transcripts_lexicon = k2.intersect(
+        L_inv, transcripts_with_self_loops,
+        treat_epsilons_specially=False)
+    # Don't call invert_() above because we want to return phone IDs,
+    # which is the `aux_labels` of transcripts_lexicon
     transcripts_lexicon = k2.remove_epsilon(transcripts_lexicon)
+    transcripts_lexicon = k2.top_sort(transcripts_lexicon)
+
     transcripts_lexicon = k2.shortest_path(transcripts_lexicon, use_double_scores=True)
 
     ys = get_texts(transcripts_lexicon, indices)

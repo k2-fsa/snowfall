@@ -72,6 +72,7 @@ class MmiTrainingGraphCompiler(object):
 
         self.L_inv = L_inv
         self.oov_id = self.lexicon.words[oov]
+        self.oov = oov
         self.device = device
 
         phone_symbols = get_phone_symbols(self.lexicon.phones)
