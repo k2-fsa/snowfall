@@ -103,8 +103,10 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
 
 
 @torch.no_grad()
-def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
-                             num_paths: int) -> k2.Fsa:
+def rescore_with_n_best_list(lats: k2.Fsa,
+                             G: k2.Fsa,
+                             num_paths: int,
+                             evaluator=None) -> k2.Fsa:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -133,9 +135,10 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
     assert hasattr(lats, 'aux_labels')
     assert hasattr(lats, 'lm_scores')
 
-    assert G.shape == (1, None, None)
-    assert G.device == device
-    assert hasattr(G, 'aux_labels') is False
+    if evaluator is None:
+        assert G.shape == (1, None, None)
+        assert G.device == device
+        assert hasattr(G, 'aux_labels') is False
 
     # First, extract `num_paths` paths for each sequence.
     # paths is a k2.RaggedInt with axes [seq][path][arc_pos]
@@ -187,12 +190,16 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
 
     # Now compute lm_scores
     b_to_a_map = torch.zeros_like(path_to_seq_map)
-    lm_path_lats = _intersect_device(G,
-                                     word_fsas_with_epsilon_loops,
-                                     b_to_a_map=b_to_a_map,
-                                     sorted_match_a=True)
-    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu'))).to(device)
-    lm_scores = lm_path_lats.get_tot_scores(True, True)
+    if evaluator is None:
+        lm_path_lats = _intersect_device(G,
+                                         word_fsas_with_epsilon_loops,
+                                         b_to_a_map=b_to_a_map,
+                                         sorted_match_a=True)
+        lm_path_lats = k2.top_sort(k2.connect(
+            lm_path_lats.to('cpu'))).to(device)
+        lm_scores = lm_path_lats.get_tot_scores(True, True)
+    else:
+        lm_scores = -evaluator.score_word_seqs(unique_word_seqs)
 
     tot_scores = am_scores + lm_scores
 
@@ -297,8 +304,11 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
 
 
 @torch.no_grad()
-def decode_with_lm_rescoring(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
-                             use_whole_lattice: bool) -> k2.Fsa:
+def decode_with_lm_rescoring(lats: k2.Fsa,
+                             G: k2.Fsa,
+                             num_paths: int,
+                             use_whole_lattice: bool,
+                             evaluator=None) -> k2.Fsa:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -327,5 +337,7 @@ def decode_with_lm_rescoring(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
     '''
     if use_whole_lattice:
         return rescore_with_whole_lattice(lats, G)
+    elif evaluator is not None:
+        return rescore_with_n_best_list(lats, None, num_paths, evaluator)
     else:
         return rescore_with_n_best_list(lats, G, num_paths)

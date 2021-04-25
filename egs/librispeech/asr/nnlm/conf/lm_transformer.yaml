@@ -1,0 +1,41 @@
+# modified from:
+# https://github.com/espnet/espnet/blob/master/egs/librispeech/asr1/conf/tuning/lm_transformer.yaml
+
+gpu: 1
+tensorboard_dir: 'exp-nnlm/tensorobard'
+
+# network architecture
+model_module: transformer
+transformer_conf:
+  embed_unit: 128
+  attention_heads: 8
+  nlayers: 16
+  linear_units: 2048
+  dropout: 0.2
+
+shared_conf:
+  ntoken: 5003
+
+optimizer_conf:
+  lr: 0.02
+  weight_decay: 0.005
+
+trainer_conf:
+  num_epochs: 50
+  clip: 0.25
+  model_dir: './exp-nnlm/models/'
+
+
+dataset_conf:
+  train_token: 'data/nnlm/text/librispeech.txt.tokens'
+  dev_token: 'data/nnlm/text/dev.txt.tokens'
+
+dataloader_conf:
+  train:
+    batch_size: 60
+    num_workers: 10
+    drop_last: True
+  dev:
+    batch_size: 60
+    num_workers: 10
+    drop_last: False
