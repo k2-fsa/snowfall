@@ -210,7 +210,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
         if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.module.P_scores)
+            if hasattr(model, 'module'):
+                P.set_scores_stochastic_(model.module.P_scores)
+            else:
+                P.set_scores_stochastic_(model.P_scores)
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -286,7 +289,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                if hasattr(model, 'module'):
+                    model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                else:
+                    model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -356,6 +362,12 @@ def get_parser():
         default=True,
         help='Should various information be logged in tensorboard.'
     )
+    parser.add_argument(
+        '--use-ddp',
+        type=str2bool,
+        default=True,
+        help='True to use DDP. False to use single GPU for training'
+    )
     return parser
 
 
@@ -378,8 +390,11 @@ def run(rank, world_size, args):
     den_scale = args.den_scale
     att_rate = args.att_rate
 
+    use_ddp = args.use_ddp
+
     fix_random_seed(42)
-    setup_dist(rank, world_size, args.master_port)
+    if use_ddp:
+        setup_dist(rank, world_size, args.master_port)
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
@@ -388,6 +403,11 @@ def run(rank, world_size, args):
     else:
         tb_writer = None
     #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
+
+    if use_ddp:
+        logging.info('Use DDP.')
+    else:
+        logging.info('DDP is not used.')
 
     logging.info("Loading lexicon and symbol tables")
     lang_dir = Path('data/lang_nosp')
@@ -442,8 +462,8 @@ def run(rank, world_size, args):
     model.to(device)
     describe(model)
 
-    model = DDP(model, device_ids=[rank])
-
+    if use_ddp:
+        model = DDP(model, device_ids=[rank])
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
@@ -566,7 +586,10 @@ def main():
     args = parser.parse_args()
     world_size = args.world_size
     assert world_size >= 1
-    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    if args.use_ddp:
+        mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    else:
+        run(rank=0, world_size=world_size, args=args)
 
 
 torch.set_num_threads(1)

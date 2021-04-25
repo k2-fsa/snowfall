@@ -161,6 +161,8 @@ class MmiTrainingGraphCompiler(object):
                 # The arc map of k2.Fsa.invert_() is also an identity map
                 HP.invert_()
 
+                HP_sorted, hp_sorted_to_hp = k2.arc_sort(HP, ret_arc_map=True)
+
                 # HP converts repeated phone IDs to non-repeated phone IDs.
                 #
                 # HP_inv_sorted is used for the following k2.intersect_device
@@ -170,7 +172,6 @@ class MmiTrainingGraphCompiler(object):
 
                 # Sort it as we will use sorted_match_a==True
                 HP_inv_sorted, hp_inv_sorted_to_hp = k2.arc_sort(HP_inv, ret_arc_map=True)
-
 
                 L_with_self_loops = k2.remove_epsilon_and_add_self_loops(self.L)
                 # Now L_with_self_loops.aux_labels is of type k2.RaggedInt
@@ -233,14 +234,15 @@ class MmiTrainingGraphCompiler(object):
                 self.lm_scores = self.HPL_inv_sorted.scores.clone()
 
                 # for the denominator graph
-                hp_to_p = k2.compose_arc_maps(p_self_loops_to_p, hp_to_p_self_loops)
+                hp_sorted_to_p_self_loops = k2.compose_arc_maps(hp_to_p_self_loops, hp_sorted_to_hp)
+                hp_sorted_to_p = k2.compose_arc_maps(p_self_loops_to_p, hp_sorted_to_p_self_loops)
 
-                self.HP = HP
-                assert self.HP.scores.abs().sum().item() == 0
-                self.hp_to_p = hp_to_p
+                self.HP_sorted = HP_sorted
+                assert self.HP_sorted.scores.abs().sum().item() == 0
+                self.hp_sorted_to_p = hp_sorted_to_p
 
                 assert self.HPL_inv_sorted.requires_grad is False
-                assert self.HP.requires_grad is False
+                assert self.HP_sorted.requires_grad is False
                 assert self.lm_scores.requires_grad is False
 
         self.HPL_inv_sorted.scores = self.lm_scores + k2.index(P.scores, self.hpl_inv_sorted_to_p)
@@ -262,27 +264,22 @@ class MmiTrainingGraphCompiler(object):
                                          sorted_match_a=True)
         num_graphs = k2.invert(num_graphs)
 
-        # TODO(fangjun): k2.connect supports only CPU.
-        # Add CUDA support.
-        num_graphs = k2.connect(num_graphs.to('cpu')).to(P.device)
-
         num_graphs = k2.arc_sort(num_graphs)
 
         with torch.no_grad():
-            self.HP.scores = k2.index(P.scores, self.hp_to_p)
+            self.HP_sorted.scores = k2.index(P.scores, self.hp_sorted_to_p)
 
-        assert self.HP.requires_grad is False
+        assert self.HP_sorted.requires_grad is False
 
         if replicate_den:
             indexes = torch.zeros(len(texts),
                                   dtype=torch.int32,
                                   device=self.device)
-            den_graphs = k2.index_fsa(self.HP, indexes)
+            den_graphs = k2.index_fsa(self.HP_sorted, indexes)
         else:
-            den_graphs = self.HP
+            den_graphs = self.HP_sorted
 
-        # TODO(fangjun): Eliminate k2.arc_sort()
-        return num_graphs, k2.arc_sort(den_graphs)
+        return num_graphs, den_graphs
 
     def build_linear_fsas(self, texts: List[str]) -> k2.Fsa:
         '''Convert transcript to an Fsa with the help of lexicon

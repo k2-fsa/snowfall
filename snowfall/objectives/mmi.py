@@ -50,7 +50,10 @@ class LFMMILoss(nn.Module):
         # The following converts den_graphs.aux_labels
         # from torch.Tensor to k2.RaggedInt so that
         # we can use k2.append() later
-        den_graphs.convert_attr_to_ragged_(name='aux_labels')
+        if not isinstance(den_graphs.aux_labels, k2.RaggedInt):
+            # This only needs to be done once if `den_graphs`
+            # is shared across calls.
+            den_graphs.convert_attr_to_ragged_(name='aux_labels')
 
         num_den_graphs = k2.cat([num_graphs, den_graphs])
 
