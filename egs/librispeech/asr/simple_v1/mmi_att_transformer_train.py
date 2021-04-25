@@ -81,7 +81,7 @@ def get_objf(batch: Dict,
     with autocast(enabled=scaler.is_enabled()), grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
-            att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
         if (ali_model is not None and global_batch_idx_train is not None and
                 global_batch_idx_train * accum_grad < 4000):
