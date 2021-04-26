@@ -35,7 +35,7 @@ from snowfall.training.mmi_graph import get_phone_symbols
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable,
-           num_paths: int, G: k2.Fsa, use_whole_lattice: bool):
+           num_paths: int, G: k2.Fsa, use_whole_lattice: bool, output_beam_size: float):
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -70,7 +70,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
+        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30,
                                              10000)
 
         if G is None:
@@ -200,7 +200,7 @@ def get_parser():
         help="Number of units in transformer attention layers.")
     parser.add_argument(
         '--output-beam-size',
-        type=int,
+        type=float,
         default=8,
         help='Output beam size. Used in k2.intersect_dense_pruned.'\
              'Choose a large value (e.g., 20), for 1-best decoding '\
@@ -239,8 +239,12 @@ def main():
         # when n is less than 1
         use_whole_lattice = True
 
+    output_beam_size = args.output_beam_size
+
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
+
+    logging.info(f'output_beam_size: {output_beam_size}')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
@@ -377,7 +381,8 @@ def main():
                          symbols=symbol_table,
                          num_paths=num_paths,
                          G=G,
-                         use_whole_lattice=use_whole_lattice)
+                         use_whole_lattice=use_whole_lattice,
+                         output_beam_size=output_beam_size)
 
         recog_path = exp_dir / f'recogs-{test_set}.txt'
         store_transcripts(path=recog_path, texts=results)
