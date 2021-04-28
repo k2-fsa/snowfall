@@ -436,19 +436,13 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-<<<<<<< Updated upstream
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
     else:
         tb_writer = None
     #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
-=======
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
->>>>>>> Stashed changes
 
     logging.info("Loading lexicon and symbol tables")
     lang_dir = Path('data/lang_nosp')
