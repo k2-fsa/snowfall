@@ -18,7 +18,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from datetime import datetime
 from pathlib import Path
-from torch import nn, Tensor
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.data import DataLoader
@@ -41,7 +41,6 @@ from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
-from typing import List
 
 
 def get_objf(batch: Dict,
@@ -320,7 +319,7 @@ def get_parser():
     parser.add_argument(
         '--lr-factor',
         type=float,
-        default=1.0,
+        default=2.0,
         help="learning rate factor.")
     parser.add_argument(
         '--tensorboard',

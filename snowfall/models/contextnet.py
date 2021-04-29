@@ -18,13 +18,13 @@ class ContextNet(AcousticModel):
         num_features (int): Number of input features
         num_classes (int): Number of output classes
         kernel_size (int): Kernel size of convolution layers (default 3).
-        num_blocks (int): Number of context block (default 12).
+        num_blocks (int): Number of context block (default 6).
         num_layers (int): Number of depthwise convolution layers for each 
                 context block (except first and last block) (default 5).
         conv_out_channels (List[int]): Number of output channels produced by context blocks, 
-                len(conv_out_channels) = num_blocks (default [*[256] * 5, *[512] * 6, 640]).
-        subsampling_layers (List[int]): Indexs of subsampling layers (default [3, 6]).
-        alpha (float): The factor to scale the output channel of the network (default 1).
+                len(conv_out_channels) = num_blocks (default [*[256] * 2, *[512] * 3, 640]).
+        subsampling_layers (List[int]): Indexs of subsampling layers (default [1, 3]).
+        alpha (float): The factor to scale the output channel of the network (default 1.5).
         dropout (float): Dropout (default 0.1).
     """
 
@@ -33,20 +33,21 @@ class ContextNet(AcousticModel):
         num_features: int,
         num_classes: int,
         kernel_size: int = 3,
-        num_blocks: int = 12,
+        num_blocks: int = 6,
         num_layers: int = 5,
-        conv_out_channels: List[int] = [*[256] * 5, *[512] * 6, 640],
-        subsampling_layers: List[int] = [3, 6],
-        alpha: int = 1,
+        conv_out_channels: List[int] = [*[256] * 2, *[512] * 3, 640],
+        subsampling_layers: List[int] = [1, 3],
+        alpha: float = 1.5,
         dropout: int = 0.1,
     ):
         super().__init__()
 
         self.num_features = num_features
         self.num_classes = num_classes
+        self.subsampling_factor = 2 * len(subsampling_layers)
 
         conv_channels = [num_features] +  \
-                [channels * alpha for channels in conv_out_channels]
+                [int(channels * alpha) for channels in conv_out_channels]
 
         strides = [1] * num_blocks
         for layer in subsampling_layers:
