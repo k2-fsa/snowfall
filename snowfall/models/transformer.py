@@ -357,7 +357,7 @@ class Conv2dSubsampling(nn.Module):
     """
 
     def __init__(self, idim: int, odim: int) -> None:
-        """Construct an Conv2dSubsampling object."""
+        """Construct a Conv2dSubsampling object."""
         super(Conv2dSubsampling, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=odim, kernel_size=3, stride=2),
@@ -387,8 +387,8 @@ class Conv2dSubsampling(nn.Module):
 
 class VggSubsampling(nn.Module):
     """Trying to follow the setup described here https://arxiv.org/pdf/1910.09799.pdf
-       .. it is not 100% explicit so I am guessing to some extent, and trying to
-          compare with other VGG implementations.
+       This paper is not 100% explicit so I am guessing to some extent,
+       and trying to compare with other VGG implementations.
 
     Args:
         idim: Input dimension.
@@ -397,7 +397,15 @@ class VggSubsampling(nn.Module):
     """
 
     def __init__(self, idim: int, odim: int) -> None:
-        """Construct an Conv2dSubsampling object."""
+        """Construct a VggSubsampling object.   This uses 2 VGG blocks with 2
+           Conv2d layers each, subsampling its input by a factor of 4 in the
+           time dimensions.
+
+           Args:
+             idim:  Number of features at input, e.g. 40 or 80 for MFCC
+                    (will be treated as the image height).
+             odim:  Output dimension (number of features), e.g. 256
+        """
         super(VggSubsampling, self).__init__()
 
         cur_channels = 1
