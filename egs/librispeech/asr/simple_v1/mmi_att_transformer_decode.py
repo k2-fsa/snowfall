@@ -274,7 +274,8 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     else:
         model = Conformer(
             num_features=80,
@@ -282,8 +283,8 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
-
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     if avg == 1:

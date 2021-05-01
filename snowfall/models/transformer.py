@@ -31,7 +31,8 @@ class Transformer(AcousticModel):
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
-                 dropout: float = 0.1, normalize_before: bool = True) -> None:
+                 dropout: float = 0.1, normalize_before: bool = True,
+                 vgg_frontend: bool = False) -> None:
         super().__init__()
         self.num_features = num_features
         self.num_classes = num_classes
@@ -39,7 +40,8 @@ class Transformer(AcousticModel):
         if subsampling_factor != 4:
             raise NotImplementedError("Support only 'subsampling_factor=4'.")
 
-        self.encoder_embed = VggSubsampling(num_features, d_model)
+        self.encoder_embed = (VggSubsampling(num_features, d_model) if vgg_frontend else
+                              Conv2dSubsampling(num_features, d_model))
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
