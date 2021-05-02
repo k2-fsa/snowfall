@@ -436,7 +436,7 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -482,7 +482,8 @@ def run(rank, world_size, args):
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     else:
         model = Conformer(
             num_features=80,
@@ -490,7 +491,8 @@ def run(rank, world_size, args):
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
