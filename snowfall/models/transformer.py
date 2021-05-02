@@ -26,12 +26,14 @@ class Transformer(AcousticModel):
         num_decoder_layers (int): number of decoder layers
         dropout (float): dropout rate
         normalize_before (bool): whether to use layer_norm before the first block.
+        vgg_frontend (bool): whether to use vgg frontend.
     """
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
-                 dropout: float = 0.1, normalize_before: bool = True) -> None:
+                 dropout: float = 0.1, normalize_before: bool = True,
+                 vgg_frontend: bool = False) -> None:
         super().__init__()
         self.num_features = num_features
         self.num_classes = num_classes
@@ -39,7 +41,8 @@ class Transformer(AcousticModel):
         if subsampling_factor != 4:
             raise NotImplementedError("Support only 'subsampling_factor=4'.")
 
-        self.encoder_embed = Conv2dSubsampling(num_features, d_model)
+        self.encoder_embed = (VggSubsampling(num_features, d_model) if vgg_frontend else
+                              Conv2dSubsampling(num_features, d_model))
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
         encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
@@ -132,7 +135,7 @@ class Transformer(AcousticModel):
             x: Tensor of dimension (input_length, batch_size, d_model).
             encoder_mask: Mask tensor of dimension (batch_size, input_length)
             supervision: Supervison in lhotse format, get from batch['supervisions']
-            graph_compiler: use graph_compiler.L_inv (Its labels are words, while its aux_labels are phones) 
+            graph_compiler: use graph_compiler.L_inv (Its labels are words, while its aux_labels are phones)
                             , graph_compiler.words and graph_compiler.oov
 
         Returns:
@@ -166,7 +169,7 @@ class Transformer(AcousticModel):
 
 class TransformerEncoderLayer(nn.Module):
     """
-    Modified from torch.nn.TransformerEncoderLayer. Add support of normalize_before, 
+    Modified from torch.nn.TransformerEncoderLayer. Add support of normalize_before,
     i.e., use layer_norm before the first block.
 
     Args:
@@ -243,9 +246,9 @@ class TransformerEncoderLayer(nn.Module):
 
 class TransformerDecoderLayer(nn.Module):
     """
-    Modified from torch.nn.TransformerDecoderLayer. Add support of normalize_before, 
+    Modified from torch.nn.TransformerDecoderLayer. Add support of normalize_before,
     i.e., use layer_norm before the first block.
-    
+
     Args:
         d_model: the number of expected features in the input (required).
         nhead: the number of heads in the multiheadattention models (required).
@@ -357,7 +360,7 @@ class Conv2dSubsampling(nn.Module):
     """
 
     def __init__(self, idim: int, odim: int) -> None:
-        """Construct an Conv2dSubsampling object."""
+        """Construct a Conv2dSubsampling object."""
         super(Conv2dSubsampling, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=odim, kernel_size=3, stride=2),
@@ -380,6 +383,73 @@ class Conv2dSubsampling(nn.Module):
         """
         x = x.unsqueeze(1)  # (b, c, t, f)
         x = self.conv(x)
+        b, c, t, f = x.size()
+        x = self.out(x.transpose(1, 2).contiguous().view(b, t, c * f))
+        return x
+
+
+class VggSubsampling(nn.Module):
+    """Trying to follow the setup described here https://arxiv.org/pdf/1910.09799.pdf
+       This paper is not 100% explicit so I am guessing to some extent,
+       and trying to compare with other VGG implementations.
+
+    Args:
+        idim: Input dimension.
+        odim: Output dimension.
+
+    """
+
+    def __init__(self, idim: int, odim: int) -> None:
+        """Construct a VggSubsampling object.   This uses 2 VGG blocks with 2
+           Conv2d layers each, subsampling its input by a factor of 4 in the
+           time dimensions.
+
+           Args:
+             idim:  Number of features at input, e.g. 40 or 80 for MFCC
+                    (will be treated as the image height).
+             odim:  Output dimension (number of features), e.g. 256
+        """
+        super(VggSubsampling, self).__init__()
+
+        cur_channels = 1
+        layers = []
+        block_dims = [32,64]
+
+        # The decision to use padding=1 for the 1st convolution, then padding=0
+        # for the 2nd and for the max-pooling, and ceil_mode=True, was driven by
+        # a back-compatibility concern so that the number of frames at the
+        # output would be equal to:
+        #  (((T-1)//2)-1)//2.
+        # We can consider changing this by using padding=1 on the 2nd convolution,
+        # so the num-frames at the output would be T//4.
+        for block_dim in block_dims:
+            layers.append(torch.nn.Conv2d(in_channels=cur_channels, out_channels=block_dim,
+                                          kernel_size=3, padding=1, stride=1))
+            layers.append(torch.nn.ReLU())
+            layers.append(torch.nn.Conv2d(in_channels=block_dim, out_channels=block_dim,
+                                          kernel_size=3, padding=0, stride=1))
+            layers.append(torch.nn.MaxPool2d(kernel_size=2, stride=2,
+                                             padding=0, ceil_mode=True))
+            cur_channels = block_dim
+
+        self.layers = nn.Sequential(*layers)
+
+        self.out = nn.Linear(block_dims[-1] * (((idim - 1) // 2 - 1) // 2), odim)
+
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Subsample x.
+
+        Args:
+            x: Input tensor of dimension (batch_size, input_length, num_features). (#batch, time, idim).
+
+        Returns:
+           torch.Tensor: Subsampled tensor of dimension (batch_size, input_length', d_model).
+              where input_length' == (((input_length - 1) // 2) - 1) // 2
+
+        """
+        x = x.unsqueeze(1)  # (b, c, t, f)
+        x = self.layers(x)
         b, c, t, f = x.size()
         x = self.out(x.transpose(1, 2).contiguous().view(b, t, c * f))
         return x
@@ -443,7 +513,7 @@ class Noam(object):
     """
     Implements Noam optimizer. Proposed in "Attention Is All You Need", https://arxiv.org/pdf/1706.03762.pdf
     Modified from https://github.com/espnet/espnet/blob/master/espnet/nets/pytorch_backend/transformer/optimizer.py
-    
+
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining parameter groups
         model_size: attention dimension of the transformer model
@@ -549,7 +619,7 @@ class LabelSmoothingLoss(nn.Module):
             x: prediction of dimention (batch_size, input_length, number_of_classes).
             target: target masked with self.padding_id of dimention (batch_size, input_length).
 
-        Returns: 
+        Returns:
             torch.Tensor: scalar float value
         """
         assert x.size(2) == self.size
@@ -642,7 +712,7 @@ def generate_square_subsequent_mask(sz: int) -> Tensor:
     """Generate a square mask for the sequence. The masked positions are filled with float('-inf').
         Unmasked positions are filled with float(0.0).
 
-    Args: 
+    Args:
         sz: mask size
 
     Returns:
@@ -744,3 +814,19 @@ def get_hierarchical_targets(ys: List[List[int]], lexicon: k2.Fsa) -> List[Tenso
     ys = [torch.tensor(y) for y in ys]
 
     return ys
+
+
+
+def test_transformer():
+    t = Transformer(40, 1281)
+    T = 200
+    f = torch.rand(31, 40, T)
+    g, _, _ = t(f)
+    assert g.shape == (31, 1281, (((T-1)//2)-1)//2)
+
+def main():
+    test_transformer()
+
+
+if __name__ == '__main__':
+    main()

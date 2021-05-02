@@ -241,7 +241,7 @@ def main():
 
     output_beam_size = args.output_beam_size
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')
@@ -274,7 +274,8 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     else:
         model = Conformer(
             num_features=80,
@@ -282,8 +283,8 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
-
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     if avg == 1:

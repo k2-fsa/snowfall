@@ -29,18 +29,19 @@ class Conformer(Transformer):
         dropout (float): dropout rate
         cnn_module_kernel (int): Kernel size of convolution module
         normalize_before (bool): whether to use layer_norm before the first block.
+        vgg_frontend (bool): whether to use vgg frontend.
     """
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
-                 num_encoder_layers: int = 12, num_decoder_layers: int = 6, 
-                 dropout: float = 0.1, cnn_module_kernel: int = 31, 
-                 normalize_before: bool = True) -> None:
+                 num_encoder_layers: int = 12, num_decoder_layers: int = 6,
+                 dropout: float = 0.1, cnn_module_kernel: int = 31,
+                 normalize_before: bool = True, vgg_frontend: bool = False) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
                  d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                  num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
-                 dropout=dropout, normalize_before=normalize_before)
-        
+                 dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
+
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
         encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before)
@@ -112,7 +113,7 @@ class ConformerEncoderLayer(nn.Module):
         self.norm_ff_macaron = nn.LayerNorm(d_model)  # for the macaron style FNN module
         self.norm_ff = nn.LayerNorm(d_model)  # for the FNN module
         self.norm_mha = nn.LayerNorm(d_model)  # for the MHA module
-        
+
         self.ff_scale = 0.5
 
         self.norm_conv = nn.LayerNorm(d_model)  # for the CNN module
@@ -324,7 +325,7 @@ class RelPositionMultiheadAttention(nn.Module):
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
-  
+
         self.in_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=True)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
@@ -575,14 +576,14 @@ class RelPositionMultiheadAttention(nn.Module):
             assert key_padding_mask.size(1) == src_len, "{} == {}".format(key_padding_mask.size(1), src_len)
 
 
-        q = q.transpose(0, 1)  # (batch, time1, head, d_k)  
+        q = q.transpose(0, 1)  # (batch, time1, head, d_k)
 
         n_batch_pos = pos_emb.size(0)
         p = self.linear_pos(pos_emb).view(n_batch_pos, -1, num_heads, head_dim)
         p = p.transpose(1, 2)  # (batch, head, 2*time1-1, d_k)
 
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2) # (batch, head, time1, d_k)
-        
+
         q_with_bias_v = (q + self.pos_bias_v).transpose(1, 2) # (batch, head, time1, d_k)
 
         # compute attention score
@@ -700,7 +701,7 @@ class ConvolutionModule(nn.Module):
 
         x = self.pointwise_conv2(x) # (batch, channel, time)
 
-        return x.permute(2, 0, 1) 
+        return x.permute(2, 0, 1)
 
 
 class Swish(torch.nn.Module):
