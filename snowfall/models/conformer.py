@@ -175,8 +175,9 @@ class ConformerEncoderLayer(nn.Module):
         src = residual + self.ff_scale * self.dropout(self.feed_forward(src))
         if not self.normalize_before:
             src = self.norm_ff(src)
-
-        src = self.norm_final(src)
+        
+        if self.normalize_before:
+            src = self.norm_final(src)
 
         return src
 
