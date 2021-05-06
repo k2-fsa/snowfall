@@ -303,10 +303,10 @@ def main():
     device_id = 0
     device = torch.device('cuda', device_id)
     model = TdnnLstm1b(
-        num_features=40,
+        num_features=80,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=3)
-    
+        subsampling_factor=4)
+
     model.to(device)
     describe(model)
 

@@ -7,23 +7,24 @@
 # Apache 2.0
 
 import argparse
-import k2
 import logging
-import math
-import numpy as np
 import os
 import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Optional
+
+import k2
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from datetime import datetime
-from pathlib import Path
 from torch import nn
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
 
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
@@ -31,11 +32,12 @@ from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.data.librispeech import LibriSpeechAsrDataModule
-from snowfall.lexicon import Lexicon
 from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
+from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
@@ -45,6 +47,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 def get_objf(batch: Dict,
              model: AcousticModel,
+             ali_model: Optional[AcousticModel],
              P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
@@ -55,7 +58,9 @@ def get_objf(batch: Dict,
              att_rate: float = 0.0,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
-             optimizer: Optional[torch.optim.Optimizer] = None):
+             optimizer: Optional[torch.optim.Optimizer] = None,
+             scaler: GradScaler = None
+             ):
     feature = batch['inputs']
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
@@ -73,10 +78,23 @@ def get_objf(batch: Dict,
 
     grad_context = nullcontext if is_training else torch.no_grad
 
-    with grad_context():
+    with autocast(enabled=scaler.is_enabled()), grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
-            att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+
+        if (ali_model is not None and global_batch_idx_train is not None and
+                global_batch_idx_train * accum_grad < 4000):
+            with torch.no_grad():
+                ali_model_output = ali_model(feature)
+            # subsampling is done slightly differently, may be small length
+            # differences.
+            min_len = min(ali_model_output.shape[2], nnet_output.shape[2])
+            # scale less than one so it will be encouraged
+            # to mimic ali_model's output
+            ali_model_scale = 500.0 / (global_batch_idx_train*accum_grad + 500)
+            nnet_output = nnet_output.clone()  # or log-softmax backprop will fail.
+            nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
 
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
@@ -96,23 +114,25 @@ def get_objf(batch: Dict,
             loss = (- (1.0 - att_rate) * mmi_loss + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
             loss = (-mmi_loss) / (len(texts) * accum_grad)
-        loss.backward()
+        scaler.scale(loss).backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
+            scaler.unscale_(optimizer)
             clip_grad_value_(model.parameters(), 5.0)
             maybe_log_gradients('train/clipped_grad_norms')
             if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
                 # to check the relative parameter change per minibatch.
-                deltas = optim_step_and_measure_param_change(model, optimizer)
+                deltas = optim_step_and_measure_param_change(model, optimizer, scaler)
                 tb_writer.add_scalars(
                     'train/relative_param_change_per_minibatch',
                     deltas,
                     global_step=global_batch_idx_train
                 )
             else:
-                optimizer.step()
+                scaler.step(optimizer)
             optimizer.zero_grad()
+            scaler.update()
 
     ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
@@ -121,10 +141,12 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
+                        ali_model: Optional[AcousticModel],
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
-                        den_scale: float = 1
+                        scaler: GradScaler,
+                        den_scale: float = 1,
                         ):
     total_objf = 0.
     total_frames = 0.  # for display only
@@ -137,12 +159,14 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
             is_training=False,
             is_update=False,
-            den_scale=den_scale
+            den_scale=den_scale,
+            scaler=scaler
         )
         total_objf += objf
         total_frames += frames
@@ -153,7 +177,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
+                    ali_model: Optional[AcousticModel],
+                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -164,7 +190,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
                     global_batch_idx_train: int,
-                    world_size: int
+                    world_size: int,
+                    scaler: GradScaler
                     ):
     """One epoch training and validation.
 
@@ -216,6 +243,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -226,7 +254,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             att_rate=att_rate,
             tb_writer=tb_writer,
             global_batch_idx_train=global_batch_idx_train,
-            optimizer=optimizer
+            optimizer=optimizer,
+            scaler=scaler
         )
 
         total_objf += curr_batch_objf
@@ -262,9 +291,11 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                ali_model=ali_model,
                 P=P,
                 device=device,
-                graph_compiler=graph_compiler)
+                graph_compiler=graph_compiler,
+                scaler=scaler)
             if world_size > 1:
                 s = torch.tensor([
                     total_valid_objf, total_valid_frames,
@@ -356,6 +387,30 @@ def get_parser():
         default=True,
         help='Should various information be logged in tensorboard.'
     )
+    parser.add_argument(
+        '--amp',
+        type=str2bool,
+        default=True,
+        help='Should we use automatic mixed precision (AMP) training.'
+    )
+    parser.add_argument(
+        '--use-ali-model',
+        type=str2bool,
+        default=True,
+        help='If true, we assume that you have run ./ctc_train.py '
+             'and you have some checkpoints inside the directory '
+             'exp-lstm-adam-ctc-musan/ .'
+             'It will use exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt '
+             'as the pre-trained alignment model'
+    )
+    parser.add_argument(
+        '--ali-model-epoch',
+        type=int,
+        default=7,
+        help='If --use-ali-model is True, load '
+             'exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt as the alignment model.'
+             'Used only if --use-ali-model is True.'
+    )
     return parser
 
 
@@ -381,7 +436,7 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -427,7 +482,8 @@ def run(rank, world_size, args):
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
     else:
         model = Conformer(
             num_features=80,
@@ -435,7 +491,8 @@ def run(rank, world_size, args):
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
@@ -444,11 +501,32 @@ def run(rank, world_size, args):
 
     model = DDP(model, device_ids=[rank])
 
+    # Now for the aligment model, if any
+    if args.use_ali_model:
+        ali_model = TdnnLstm1b(
+            num_features=80,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4)
+
+        ali_model_fname = Path(f'exp-lstm-adam-ctc-musan/epoch-{args.ali_model_epoch}.pt')
+        assert ali_model_fname.is_file(), \
+                f'ali model filename {ali_model_fname} does not exist!'
+        ali_model.load_state_dict(torch.load(ali_model_fname, map_location='cpu')['state_dict'])
+        ali_model.to(device)
+
+        ali_model.eval()
+        ali_model.requires_grad_(False)
+        logging.info(f'Use ali_model: {ali_model_fname}')
+    else:
+        ali_model = None
+        logging.info('No ali_model')
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
                      factor=1.0,
                      warm_step=args.warm_step)
+
+    scaler = GradScaler(enabled=args.amp)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -459,7 +537,7 @@ def run(rank, world_size, args):
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scaler=scaler)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
@@ -477,6 +555,7 @@ def run(rank, world_size, args):
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
+            ali_model=ali_model,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
@@ -489,6 +568,7 @@ def run(rank, world_size, args):
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
             world_size=world_size,
+            scaler=scaler
         )
         # the lower, the better
         if valid_objf < best_valid_objf:
@@ -498,6 +578,7 @@ def run(rank, world_size, args):
             save_checkpoint(filename=best_model_path,
                             optimizer=None,
                             scheduler=None,
+                            scaler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
@@ -521,6 +602,7 @@ def run(rank, world_size, args):
         save_checkpoint(filename=model_path,
                         optimizer=optimizer,
                         scheduler=None,
+                        scaler=scaler,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
@@ -542,21 +624,6 @@ def run(rank, world_size, args):
 
     logging.warning('Done')
     torch.distributed.barrier()
-    # NOTE: The training process is very likely to hang at this point.
-    # If you press ctrl + c, your GPU memory will not be freed.
-    # To free you GPU memory, you can run:
-    #
-    #  $ ps aux | grep multi
-    #
-    # And it will print something like below:
-    #
-    # kuangfa+  430518 98.9  0.6 57074236 3425732 pts/21 Rl Apr02 639:01 /root/fangjun/py38/bin/python3 -c from multiprocessing.spawn
-    #
-    # You can kill the process manually by:
-    #
-    # $ kill -9 430518
-    #
-    # And you will see that your GPU is now not occupied anymore.
     cleanup_dist()
 
 
