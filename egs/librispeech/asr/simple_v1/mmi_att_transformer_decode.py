@@ -28,6 +28,7 @@ from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.contextnet import ContextNet
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
@@ -170,7 +171,7 @@ def get_parser():
         '--model-type',
         type=str,
         default="conformer",
-        choices=["transformer", "conformer"],
+        choices=["transformer", "conformer", "contextnet"],
         help="Model type.")
     parser.add_argument(
         '--epoch',
@@ -276,7 +277,7 @@ def main():
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=True)
-    else:
+    elif model_type == "conformer":
         model = Conformer(
             num_features=80,
             nhead=args.nhead,
@@ -285,6 +286,13 @@ def main():
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=True)
+    elif model_type == "contextnet":
+        model = ContextNet(
+        num_features=80,
+        num_classes=len(phone_ids) + 1) # +1 for the blank symbol
+    else:
+        raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
+
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     if avg == 1:

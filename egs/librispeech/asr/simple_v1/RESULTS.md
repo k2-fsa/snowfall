@@ -524,7 +524,7 @@ listed below.
 
 # LibriSpeech MMI training results (ContextNet)
 
-## 2021-03-08
+## 2021-04-29
 
 (Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/173>
 
@@ -532,10 +532,19 @@ TensorBoard log is available at <https://tensorboard.dev/experiment/Wka3gjonTzKa
 and the training log can be downloaded
 using <https://github.com/k2-fsa/snowfall/files/6395833/log-train-0-2021-04-27-01-30-48.txt>.
 
-This model is trained with the option `--max-duration 300`. Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.)
+Results could be reproduced with: 
+```
+python mmi_att_transformer_train.py --model-type contextnet --lr-factor 2.0 --weight-decay 1e-6 --max-duration 300 --full-libri 0 --use-ali-model 0
+```
+
+Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.)
 and each epoch model without model averaging are listed below.
 
 ```
+# average over last 5 epochs (LM rescoring with whole lattice)
+2021-05-06 02:44:10,156 INFO [common.py:381] [test-clean] %WER 6.66% [3504 / 52576, 767 ins, 190 del, 2547 sub ]
+2021-05-06 03:05:42,063 INFO [common.py:381] [test-other] %WER 18.36% [9612 / 52343, 1651 ins, 683 del, 7278 sub ]
+
 # average over last 5 epochs
 2021-04-27 12:48:07,217 INFO [common.py:365] [test-clean] %WER 8.03% [4220 / 52576, 570 ins, 366 del, 3284 sub ]
 2021-04-27 12:49:27,507 INFO [common.py:365] [test-other] %WER 22.14% [11588 / 52343, 1232 ins, 1350 del, 9006 sub ]

@@ -73,18 +73,21 @@ class ContextNet(AcousticModel):
 
         self.output_layer = nn.Linear(conv_channels[-1], num_classes)
     
-    def forward(self, x):
+    def forward(self, x, supervision = None):
         """
         Args:
-            x (torch.Tensor): Input tensor (batch, time, channels).
+            x (torch.Tensor): Input tensor (batch, channels, time).
+            supervision: Supervison in lhotse format, get from batch['supervisions'].
+                        It's not used here, just to keep consistent with transformer.
 
         Returns:
-            torch.Tensor: Output tensor (batch, time, channels).
+            torch.Tensor: Output tensor (batch, channels, time).
         """
+        x = x.transpose(1, -1)
         x = self.blocks(x)
         x = self.output_layer(x)
-        x = nn.functional.log_softmax(x, dim=-1)
-        return x
+        x = nn.functional.log_softmax(x, dim=-1).transpose(1, -1)
+        return x, None, None
 
 
 class ContextNetBlock(torch.nn.Module):

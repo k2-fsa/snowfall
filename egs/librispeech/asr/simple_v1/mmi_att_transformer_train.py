@@ -39,6 +39,7 @@ from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.models.contextnet import ContextNet
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -338,7 +339,7 @@ def get_parser():
         '--model-type',
         type=str,
         default="conformer",
-        choices=["transformer", "conformer"],
+        choices=["transformer", "conformer", "contextnet"],
         help="Model type.")
     parser.add_argument(
         '--num-epochs',
@@ -355,6 +356,18 @@ def get_parser():
         type=int,
         default=5000,
         help='The number of warm-up steps for Noam optimizer.'
+    )
+    parser.add_argument(
+        '--lr-factor',
+        type=float,
+        default=1.0,
+        help='Learning rate factor for Noam optimizer.'
+    )
+    parser.add_argument(
+        '--weight-decay',
+        type=float,
+        default=0.0,
+        help='weight decay (L2 penalty) for Noam optimizer.'
     )
     parser.add_argument(
         '--accum-grad',
@@ -484,7 +497,7 @@ def run(rank, world_size, args):
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=True)
-    else:
+    elif model_type == "conformer":
         model = Conformer(
             num_features=80,
             nhead=args.nhead,
@@ -493,6 +506,12 @@ def run(rank, world_size, args):
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=True)
+    elif model_type == "contextnet":
+        model = ContextNet(
+        num_features=80,
+        num_classes=len(phone_ids) + 1) # +1 for the blank symbol
+    else:
+        raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
@@ -523,8 +542,9 @@ def run(rank, world_size, args):
 
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
-                     factor=1.0,
-                     warm_step=args.warm_step)
+                     factor=args.lr_factor,
+                     warm_step=args.warm_step,
+                     weight_decay=args.weight_decay)
 
     scaler = GradScaler(enabled=args.amp)
 
