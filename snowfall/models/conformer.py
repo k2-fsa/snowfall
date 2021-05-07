@@ -330,9 +330,7 @@ class RelPositionMultiheadAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
         # linear transformation for positional encoding.
-        # First half is involved in the key-query pairs; second half
-        # has to do with the values.
-        self.linear_pos = nn.Linear(embed_dim * 2, embed_dim, bias=False)
+        self.linear_pos = nn.Linear(embed_dim, embed_dim, bias=False)
         # these two learnable bias are used in matrix c and matrix d
         # as described in "Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context" Section 3.3
         self.pos_bias_u = nn.Parameter(torch.Tensor(num_heads, self.head_dim))
@@ -579,11 +577,8 @@ class RelPositionMultiheadAttention(nn.Module):
         q = q.transpose(0, 1)  # (batch, time1, head, d_k)
 
         n_batch_pos = pos_emb.size(0)
-        p, value_pos = self.linear_pos(pos_emb).chunk(2, dim=-1)
-        # below, p will have shape (batch, head, 2*time1-1, d_k)
-        p = p.view(n_batch_pos, -1, num_heads, head_dim).transpose(1, 2)
-        # value_pos will have shape (batch, head, 2*time1-1, d_k)
-        value_pos = value_pos.view(n_batch_pos, -1, num_heads, head_dim).transpose(1, 2)
+        p = self.linear_pos(pos_emb).view(n_batch_pos, -1, num_heads, head_dim)
+        p = p.transpose(1, 2)  # (batch, head, 2*time1-1, d_k)
 
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2) # (batch, head, time1, d_k)
 
