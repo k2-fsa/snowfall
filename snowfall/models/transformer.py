@@ -45,7 +45,7 @@ class Transformer(AcousticModel):
                               Conv2dSubsampling(num_features, d_model))
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
-        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout)
+        encoder_layer = TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, normalize_before=normalize_before)
 
         if normalize_before:
             encoder_norm = nn.LayerNorm(d_model)
@@ -65,7 +65,7 @@ class Transformer(AcousticModel):
             self.decoder_embed = nn.Embedding(self.decoder_num_class, d_model)
             self.decoder_pos = PositionalEncoding(d_model, dropout)
 
-            decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout)
+            decoder_layer = TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout, normalize_before=normalize_before)
 
             if normalize_before:
                 decoder_norm = nn.LayerNorm(d_model)
