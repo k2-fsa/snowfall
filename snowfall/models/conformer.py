@@ -329,8 +329,10 @@ class RelPositionMultiheadAttention(nn.Module):
         self.in_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=True)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
-        # linear transformation for positional encoding
-        self.linear_pos = nn.Linear(embed_dim, embed_dim, bias=False)
+        # linear transformation for positional encoding.
+        # First half is involved in the key-query pairs; second half
+        # has to do with the values.
+        self.linear_pos = nn.Linear(embed_dim * 2, embed_dim, bias=False)
         # these two learnable bias are used in matrix c and matrix d
         # as described in "Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context" Section 3.3
         self.pos_bias_u = nn.Parameter(torch.Tensor(num_heads, self.head_dim))
@@ -408,15 +410,12 @@ class RelPositionMultiheadAttention(nn.Module):
             Tensor: Output tensor.
 
         """
-        zero_pad = torch.zeros((*x.size()[:3], 1), device=x.device, dtype=x.dtype)
-        x_padded = torch.cat([zero_pad, x], dim=-1)
-
-        x_padded = x_padded.view(*x.size()[:2], x.size(3) + 1, x.size(2))
-        x = x_padded[:, :, 1:].view_as(x)[
-            :, :, :, : x.size(-1) // 2 + 1
-        ]  # only keep the positions from 0 to time2
-
-        return x
+        (batch_size, num_heads, time1, n) = x.shape
+        assert n == 2*time1 - 1
+        (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
+        return x.as_strided((batch_size, head_stride, time1, time1),
+                            (batch_stride, head_stride, time1_stride - n_stride, n_stride)
+                            storage_offset=n_stride*time1)
 
     def multi_head_attention_forward(self, query: Tensor,
                                     key: Tensor,
@@ -579,8 +578,11 @@ class RelPositionMultiheadAttention(nn.Module):
         q = q.transpose(0, 1)  # (batch, time1, head, d_k)
 
         n_batch_pos = pos_emb.size(0)
-        p = self.linear_pos(pos_emb).view(n_batch_pos, -1, num_heads, head_dim)
-        p = p.transpose(1, 2)  # (batch, head, 2*time1-1, d_k)
+        p, value_pos = self.linear_pos(pos_emb).chunk(2, dim=-1)
+        # below, p will have shape (batch, head, 2*time1-1, d_k)
+        p = p.view(n_batch_pos, -1, num_heads, head_dim).transpose(1, 2)
+        # value_pos will have shape (batch, head, 2*time1-1, d_k)
+        value_pos = value_pos.view(n_batch_pos, -1, num_heads, head_dim).transpose(1, 2)
 
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2) # (batch, head, time1, d_k)
 
