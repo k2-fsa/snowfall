@@ -412,7 +412,7 @@ class RelPositionMultiheadAttention(nn.Module):
         (batch_size, num_heads, time1, n) = x.shape
         assert n == 2*time1 - 1
         (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
-        return x.as_strided((batch_size, head_stride, time1, time1),
+        return x.as_strided((batch_size, num_heads, time1, time1),
                             (batch_stride, head_stride, time1_stride - n_stride, n_stride),
                             storage_offset=n_stride*time1)
 
