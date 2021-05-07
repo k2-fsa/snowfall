@@ -407,14 +407,15 @@ class RelPositionMultiheadAttention(nn.Module):
                 time1 means the length of query vector.
 
         Returns:
-            Tensor: Output tensor.
-
+            Tensor: tensor of shape (batch, head, time1, time2)
+          (note: time2 has the same value as time1, but it is for
+          the key, while time1 is for the query).
         """
         (batch_size, num_heads, time1, n) = x.shape
         assert n == 2*time1 - 1
         (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
         return x.as_strided((batch_size, head_stride, time1, time1),
-                            (batch_stride, head_stride, time1_stride - n_stride, n_stride)
+                            (batch_stride, head_stride, time1_stride - n_stride, n_stride),
                             storage_offset=n_stride*time1)
 
     def multi_head_attention_forward(self, query: Tensor,
