@@ -414,7 +414,7 @@ class RelPositionMultiheadAttention(nn.Module):
         (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
         return x.as_strided((batch_size, num_heads, time1, time1),
                             (batch_stride, head_stride, time1_stride - n_stride, n_stride),
-                            storage_offset=n_stride*time1)
+                            storage_offset=n_stride*(time1 - 1))
 
     def multi_head_attention_forward(self, query: Tensor,
                                     key: Tensor,
