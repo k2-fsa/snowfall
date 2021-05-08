@@ -171,8 +171,8 @@ def save_checkpoint(
         objf: float,
         valid_objf: float,
         global_batch_idx_train: int,
-        local_rank: int = 0
-        scaler: Optional[GradScaler] = None,
+        local_rank: int = 0,
+        scaler: Optional[GradScaler] = None
 ) -> None:
     if local_rank is not None and local_rank != 0:
         return
