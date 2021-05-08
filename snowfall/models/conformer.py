@@ -457,8 +457,8 @@ class RelPositionMultiheadAttention(nn.Module):
             the embedding dimension.
             - value: :math:`(S, N, E)` where S is the source sequence length, N is the batch size, E is
             the embedding dimension.
-            - pos_emb: :math:`(N, 2*L-1, E)` where L is the target sequence length, N is the batch size, E is
-            the embedding dimension.
+            - pos_emb: :math:`(N, 2*L-1, E)` or :math:`(1, 2*L-1, E)` where L is the target sequence
+            length, N is the batch size, E is the embedding dimension.
             - key_padding_mask: :math:`(N, S)` where N is the batch size, S is the source sequence length.
             If a ByteTensor is provided, the non-zero positions will be ignored while the zero positions
             will be unchanged. If a BoolTensor is provided, the positions with the
@@ -576,8 +576,9 @@ class RelPositionMultiheadAttention(nn.Module):
 
         q = q.transpose(0, 1)  # (batch, time1, head, d_k)
 
-        n_batch_pos = pos_emb.size(0)
-        p = self.linear_pos(pos_emb).view(n_batch_pos, -1, num_heads, head_dim)
+        pos_emb_bsz = pos_emb.size(0)
+        assert pos_emb_bsz in (1, bsz)  # actually it is 1
+        p = self.linear_pos(pos_emb).view(pos_emb_bsz, -1, num_heads, head_dim)
         p = p.transpose(1, 2)  # (batch, head, 2*time1-1, d_k)
 
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2) # (batch, head, time1, d_k)
