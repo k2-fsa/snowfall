@@ -36,7 +36,7 @@ class Conformer(Transformer):
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, cnn_module_kernel: int = 31,
-                 normalize_before: bool = True, vgg_frontend: bool = False) -> None:
+                 normalize_before: bool = True, vgg_frontend: bool = False, iterated_layers: Optional[List[int]] = None) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
                  d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                  num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
@@ -45,7 +45,17 @@ class Conformer(Transformer):
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
         encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before)
-        self.encoder = ConformerEncoder(encoder_layer, num_encoder_layers)
+        if iterated_layers is None:
+            self.encoder = ConformerEncoder(encoder_layer, num_encoder_layers)
+        else:
+            self.encoder = IteratedConformerEncoder(encoder_layer, num_encoder_layers, iterated_layers=iterated_layers)
+        
+        if iterated_layers is not None:
+            self.iterated_encoder_output_layer = nn.ModuleList([
+                nn.Sequential(
+                    nn.Dropout(p=dropout),
+                    nn.Linear(d_model, num_classes)
+                    ) for i in range(len(iterated_layers))])
 
     def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
@@ -67,6 +77,38 @@ class Conformer(Transformer):
         x = self.encoder(x, pos_emb, src_key_padding_mask=mask)  # (T, B, F)
 
         return x, mask
+
+    def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
+        """
+        Args:
+            x: Tensor of dimension (batch_size, num_features, input_length).
+            supervision: Supervison in lhotse format, get from batch['supervisions']
+
+        Returns:
+            Tensor: After log-softmax tensor of dimension (batch_size, number_of_classes, input_length).
+            Tensor: Before linear layer tensor of dimension (input_length, batch_size, d_model).
+            Optional[Tensor]: Mask tensor of dimension (batch_size, input_length) or None.
+
+        """
+        encoder_memory, memory_mask = self.encode(x, supervision)
+        if isinstance(encoder_memory, list):
+            x = [self.iterated_encoder_output(memory, i) for i, memory in enumerate(encoder_memory[:-1])]
+            x.append(self.encoder_output(encoder_memory[-1]))
+        else:
+            x = self.encoder_output(encoder_memory)
+        return x, encoder_memory, memory_mask
+    
+    def iterated_encoder_output(self, x: Tensor, index: int) -> Tensor:
+        """
+        Args:
+            x: Tensor of dimension (input_length, batch_size, d_model).
+
+        Returns:
+            Tensor: After log-softmax tensor of dimension (batch_size, number_of_classes, input_length).
+        """
+        x = self.iterated_encoder_output_layer[index](x).permute(1, 2, 0)  # (T, B, F) ->(B, F, T)
+        x = nn.functional.log_softmax(x, dim=1)  # (B, F, T)
+        return x
 
 
 class ConformerEncoderLayer(nn.Module):
@@ -227,6 +269,60 @@ class ConformerEncoder(nn.TransformerEncoder):
             output = self.norm(output)
 
         return output
+
+
+class IteratedConformerEncoder(nn.TransformerEncoder):
+    r"""IteratedConformerEncoder is a stack of N encoder layers.
+        Given input feature, it will outputs several layers' output.
+
+    Args:
+        encoder_layer: an instance of the ConformerEncoderLayer() class (required).
+        num_layers: the number of sub-encoder-layers in the encoder (required).
+        norm: the layer normalization component (optional).
+
+    Examples::
+        >>> encoder_layer = ConformerEncoderLayer(d_model=512, nhead=8)
+        >>> conformer_encoder = ConformerEncoder(encoder_layer, num_layers=6)
+        >>> src = torch.rand(10, 32, 512)
+        >>> pos_emb = torch.rand(32, 19, 512)
+        >>> out = conformer_encoder(src, pos_emb)
+    """
+
+    def __init__(self, encoder_layer: nn.Module, num_layers: int, norm: nn.Module = None, iterated_layers: Optional[List[int]] = None) -> None:
+        super(IteratedConformerEncoder, self).__init__(encoder_layer=encoder_layer, num_layers=num_layers, norm=norm)
+        self.iterated_layers = iterated_layers if iterated_layers is not None else []
+
+    def forward(self, src: Tensor, pos_emb: Tensor, mask: Optional[Tensor] = None, src_key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        r"""Pass the input through the encoder layers in turn.
+
+        Args:
+            src: the sequence to the encoder (required).
+            pos_emb: Positional embedding tensor (required).
+            mask: the mask for the src sequence (optional).
+            src_key_padding_mask: the mask for the src keys per batch (optional).
+
+        Shape:
+            src: (S, N, E).
+            pos_emb: (N, 2*S-1, E)
+            mask: (S, S).
+            src_key_padding_mask: (N, S).
+            S is the source sequence length, T is the target sequence length, N is the batch size, E is the feature number
+
+        """
+        outputs = []
+        output = src
+
+        for i, mod in enumerate(self.layers):
+            output = mod(output, pos_emb, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+            if i in self.iterated_layers:
+                outputs.append(output)
+
+        if self.norm is not None:
+            output = self.norm(output)
+        
+        outputs.append(output)
+
+        return outputs
 
 
 class RelPositionalEncoding(torch.nn.Module):
