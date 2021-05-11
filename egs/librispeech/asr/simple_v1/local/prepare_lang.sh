@@ -307,8 +307,8 @@ if $silprob; then
   # and where it's called in the example scripts (run.sh).
   local/make_lexicon_fst_silprob.py $grammar_opts --sil-phone=$silphone \
     $tmpdir/lexiconp_silprob.txt $srcdir/silprob.txt | \
-    local/sym2int.pl -f 3 data/lang_nosp/phones.txt | \
-    local/sym2int.pl -f 4 data/lang_nosp/words.txt  > $dir/L.fst.txt || exit 1;
+    local/sym2int.pl -f 3 $dir/phones.txt | \
+    local/sym2int.pl -f 4 $dir/words.txt  > $dir/L.fst.txt || exit 1;
 
     # fstcompile --isymbols=$dir/phones.txt --osymbols=$dir/words.txt \
     #   --keep_isymbols=false --keep_osymbols=false |   \
@@ -316,8 +316,8 @@ if $silprob; then
 else
   local/make_lexicon_fst.py $grammar_opts --sil-prob=$sil_prob --sil-phone=$silphone \
     $tmpdir/lexiconp.txt | \
-    local/sym2int.pl -f 3 data/lang_nosp/phones.txt | \
-    local/sym2int.pl -f 4 data/lang_nosp/words.txt > $dir/L.fst.txt || exit 1;
+    local/sym2int.pl -f 3 $dir/phones.txt | \
+    local/sym2int.pl -f 4 $dir/words.txt > $dir/L.fst.txt || exit 1;
 
     # fstcompile --isymbols=$dir/phones.txt --osymbols=$dir/words.txt \
     #   --keep_isymbols=false --keep_osymbols=false | \
@@ -367,15 +367,15 @@ if $silprob; then
   local/make_lexicon_fst_silprob.py $grammar_opts \
     --sil-phone=$silphone --sil-disambig='#'$ndisambig \
     $tmpdir/lexiconp_silprob_disambig.txt $srcdir/silprob.txt | \
-    local/sym2int.pl -f 3 data/lang_nosp/phones.txt | \
-    local/sym2int.pl -f 4 data/lang_nosp/words.txt | \
+    local/sym2int.pl -f 3 $dir/phones.txt | \
+    local/sym2int.pl -f 4 $dir/words.txt | \
     local/fstaddselfloops.pl $wdisambig_phone $wdisambig_word > $dir/L_disambig.fst.txt || exit 1;
 else
   local/make_lexicon_fst.py $grammar_opts \
     --sil-prob=$sil_prob --sil-phone=$silphone --sil-disambig='#'$ndisambig \
     $tmpdir/lexiconp_disambig.txt | \
-    local/sym2int.pl -f 3 data/lang_nosp/phones.txt | \
-    local/sym2int.pl -f 4 data/lang_nosp/words.txt | \
+    local/sym2int.pl -f 3 $dir/phones.txt | \
+    local/sym2int.pl -f 4 $dir/words.txt | \
     local/fstaddselfloops.pl $wdisambig_phone $wdisambig_word > $dir/L_disambig.fst.txt || exit 1;
 fi
 
