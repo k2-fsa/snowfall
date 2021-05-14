@@ -85,7 +85,7 @@ def get_objf(batch: Dict,
             att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
         if (ali_model is not None and global_batch_idx_train is not None and
-                global_batch_idx_train * accum_grad < 4000):
+                global_batch_idx_train // accum_grad < 4000):
             with torch.no_grad():
                 ali_model_output = ali_model(feature)
             # subsampling is done slightly differently, may be small length
@@ -93,7 +93,7 @@ def get_objf(batch: Dict,
             min_len = min(ali_model_output.shape[2], nnet_output.shape[2])
             # scale less than one so it will be encouraged
             # to mimic ali_model's output
-            ali_model_scale = 500.0 / (global_batch_idx_train*accum_grad + 500)
+            ali_model_scale = 500.0 / (global_batch_idx_train // accum_grad + 500)
             nnet_output = nnet_output.clone()  # or log-softmax backprop will fail.
             nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
 
