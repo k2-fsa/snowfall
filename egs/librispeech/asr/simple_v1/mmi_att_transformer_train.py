@@ -12,7 +12,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 import k2
 import numpy as np
@@ -57,6 +57,7 @@ def get_objf(batch: Dict,
              accum_grad: int = 1,
              den_scale: float = 1.0,
              att_rate: float = 0.0,
+             iterated_scale: Optional[List[int]] = None,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None,
@@ -76,6 +77,13 @@ def get_objf(batch: Dict,
         P=P,
         den_scale=den_scale
     )
+
+    if iterated_scale is not None:
+        iterated_loss_fn = LFMMILoss(
+            graph_compiler=graph_compiler,
+            P=P.detach(),
+            den_scale=den_scale
+        )
 
     grad_context = nullcontext if is_training else torch.no_grad
 
@@ -98,9 +106,20 @@ def get_objf(batch: Dict,
             nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
 
         # nnet_output is [N, C, T]
-        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        if isinstance(nnet_output, list):
+            nnet_output = [output.permute(0, 2, 1) for output in nnet_output]
+        else:
+            nnet_output = nnet_output.permute(0, 2, 1)  
+        # now nnet_output is [N, T, C]
 
-        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
+        if isinstance(nnet_output, list):
+            mmi_loss, tot_frames, all_frames = loss_fn(nnet_output[-1], texts, supervision_segments)
+            if iterated_scale is not None:
+                for i, iterated_nnet_output in enumerate(nnet_output[:-1]):
+                    iterated_mmi_loss, _, _ = iterated_loss_fn(iterated_nnet_output, texts, supervision_segments)
+                    mmi_loss += iterated_mmi_loss * iterated_scale[i]
+        else:
+            mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -187,6 +206,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     accum_grad: int,
                     den_scale: float,
                     att_rate: float,
+                    iterated_scale: Optional[List[int]],
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
@@ -253,6 +273,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             accum_grad=accum_grad,
             den_scale=den_scale,
             att_rate=att_rate,
+            iterated_scale=iterated_scale,
             tb_writer=tb_writer,
             global_batch_idx_train=global_batch_idx_train,
             optimizer=optimizer,
@@ -385,6 +406,18 @@ def get_parser():
         default=0.0,
         help="Attention loss rate.")
     parser.add_argument(
+        '--iterated-scale',
+        type=float,
+        action='append',
+        default=None,
+        help="Iterated loss rates.")
+    parser.add_argument(
+        '--iterated-layers',
+        type=int,
+        action='append',
+        default=None,
+        help="Layer index where iterated loss is computed.")
+    parser.add_argument(
         '--nhead',
         type=int,
         default=4,
@@ -445,11 +478,16 @@ def run(rank, world_size, args):
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
+    iterated_scale = args.iterated_scale
+    iterated_layers = args.iterated_layers
+
+    print("iterated_scale: ", iterated_scale)
+    print("iterated_layers: ", iterated_layers)
 
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg-iterated')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -505,7 +543,8 @@ def run(rank, world_size, args):
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
-            vgg_frontend=True)
+            vgg_frontend=True,
+            iterated_layers=iterated_layers)
     elif model_type == "contextnet":
         model = ContextNet(
         num_features=80,
@@ -583,6 +622,7 @@ def run(rank, world_size, args):
             accum_grad=accum_grad,
             den_scale=den_scale,
             att_rate=att_rate,
+            iterated_scale=iterated_scale,
             current_epoch=epoch,
             tb_writer=tb_writer,
             num_epochs=num_epochs,
