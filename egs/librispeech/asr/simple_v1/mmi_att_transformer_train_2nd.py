@@ -39,7 +39,9 @@ from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
+from snowfall.models.second_pass_model import SecondPassModel
 from snowfall.objectives import LFMMILoss, encode_supervisions
+from snowfall.objectives.common import get_tot_objf_and_num_frames
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -47,6 +49,7 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 def get_objf(batch: Dict,
              model: AcousticModel,
+             second_pass: AcousticModel,
              ali_model: Optional[AcousticModel],
              P: k2.Fsa,
              device: torch.device,
@@ -99,7 +102,43 @@ def get_objf(batch: Dict,
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
+        mmi_loss, tot_frames, all_frames, den_lats, num_den_graphs, a_to_b_map = \
+                loss_fn(nnet_output, texts, supervision_segments, True)
+
+        nnet_output_2nd = second_pass(encoder_memory, den_lats, supervision_segments)
+        assert nnet_output_2nd.shape[0] == supervision_segments.shape[0]
+
+        supervision_segments_2nd = supervision_segments.clone()
+
+        # [0, 1, 2, 3, ...]
+        supervision_segments_2nd[:, 0] = torch.arange(supervision_segments_2nd.shape[0], dtype=torch.int32)
+
+        # start offset
+        supervision_segments_2nd[:, 1] = 0
+
+        # duration of supervision_segments_2nd is kept unchanged
+
+        dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments_2nd)
+
+        num_den_lats_2nd = k2.intersect_dense(num_den_graphs,
+                                          dense_fsa_vec_2nd,
+                                          output_beam=10.0,
+                                          a_to_b_map=a_to_b_map)
+
+        num_den_tot_scores_2nd = num_den_lats_2nd.get_tot_scores(
+            log_semiring=True, use_double_scores=True)
+
+        num_tot_scores_2nd = num_den_tot_scores_2nd[::2]
+        den_tot_scores_2nd = num_den_tot_scores_2nd[1::2]
+
+        tot_scores_2nd = num_tot_scores_2nd - den_tot_scores_2nd
+        tot_score_2nd, tot_frames_2nd, all_frames_2nd = get_tot_objf_and_num_frames(
+            tot_scores_2nd, supervision_segments_2nd[:, 2])
+        #  print(mmi_loss.item()/tot_frames, tot_score_2nd.item()/tot_frames_2nd)
+
+        mmi_loss = mmi_loss + tot_score_2nd
+        tot_frames = tot_frames + tot_frames_2nd
+        all_frames = all_frames + all_frames_2nd
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -119,6 +158,7 @@ def get_objf(batch: Dict,
             maybe_log_gradients('train/grad_norms')
             scaler.unscale_(optimizer)
             clip_grad_value_(model.parameters(), 5.0)
+            clip_grad_value_(second_pass.parameters(), 5.0)
             maybe_log_gradients('train/clipped_grad_norms')
             if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
@@ -134,13 +174,13 @@ def get_objf(batch: Dict,
             optimizer.zero_grad()
             scaler.update()
 
-    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
-    ), all_frames.cpu().item()
+    ans = -mmi_loss.detach().cpu().item(), tot_frames, all_frames
     return ans
 
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
+                        second_pass: AcousticModel,
                         ali_model: Optional[AcousticModel],
                         P: k2.Fsa,
                         device: torch.device,
@@ -153,12 +193,14 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     total_all_frames = 0.  # all frames including those seqs that failed.
 
     model.eval()
+    second_pass.eval()
 
     from torchaudio.datasets.utils import bg_iterator
     for batch_idx, batch in enumerate(bg_iterator(dataloader, 2)):
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
+            second_pass=second_pass,
             ali_model=ali_model,
             P=P,
             device=device,
@@ -178,6 +220,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel,
+                    second_pass: AcousticModel,
                     ali_model: Optional[AcousticModel],
                     P: k2.Fsa,
                     device: torch.device,
@@ -224,6 +267,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
     prev_timestamp = datetime.now()
 
     model.train()
+    second_pass.train()
     for batch_idx, batch in enumerate(dataloader):
         forward_count += 1
         if forward_count == accum_grad:
@@ -243,6 +287,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
+            second_pass=second_pass,
             ali_model=ali_model,
             P=P,
             device=device,
@@ -291,6 +336,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
+                second_pass=second_pass,
                 ali_model=ali_model,
                 P=P,
                 device=device,
@@ -307,6 +353,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
+            second_pass.train()
             logging.info(
                 'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
                     .format(valid_average_objf,
@@ -499,7 +546,12 @@ def run(rank, world_size, args):
 
     model = DDP(model, device_ids=[rank])
 
-    # Now for the aligment model, if any
+
+    second_pass = SecondPassModel(max_phone_id=graph_compiler.max_phone_id).to(device)
+    logging.info('second pass model')
+    describe(second_pass)
+
+    # Now for the alignment model, if any
     if args.use_ali_model:
         ali_model = TdnnLstm1b(
             num_features=80,
@@ -519,7 +571,15 @@ def run(rank, world_size, args):
         ali_model = None
         logging.info('No ali_model')
 
-    optimizer = Noam(model.parameters(),
+    params = [
+        {
+            'params': model.parameters()
+        },
+        {
+            'params': second_pass.parameters()
+        },
+    ]
+    optimizer = Noam(params,
                      model_size=args.attention_dim,
                      factor=1.0,
                      warm_step=args.warm_step)
@@ -530,9 +590,11 @@ def run(rank, world_size, args):
     best_valid_objf = np.inf
     best_epoch = start_epoch
     best_model_path = os.path.join(exp_dir, 'best_model.pt')
+    best_model_path_2nd = os.path.join(exp_dir, 'best_model_2nd.pt')
     best_epoch_info_filename = os.path.join(exp_dir, 'best-epoch-info')
     global_batch_idx_train = 0  # for logging only
 
+    # TODO(fangjun): support saving/loading the second pass model
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
         ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scaler=scaler)
@@ -540,6 +602,10 @@ def run(rank, world_size, args):
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
+
+        second_pass_model_path = os.path.join(exp_dir, '2nd-epoch-{}.pt'.format(start_epoch - 1))
+        logging.info(f'loading {second_pass_model_path}')
+        second_pass.load_state_dict(torch.load(second_pass_model_path, map_location='cpu'))
 
     for epoch in range(start_epoch, num_epochs):
         train_dl.sampler.set_epoch(epoch)
@@ -553,6 +619,7 @@ def run(rank, world_size, args):
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
+            second_pass=second_pass,
             ali_model=ali_model,
             P=P,
             device=device,
@@ -584,6 +651,8 @@ def run(rank, world_size, args):
                             valid_objf=valid_objf,
                             global_batch_idx_train=global_batch_idx_train,
                             local_rank=rank)
+            torch.save(second_pass.state_dict(), best_model_path_2nd)
+
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -608,6 +677,10 @@ def run(rank, world_size, args):
                         valid_objf=valid_objf,
                         global_batch_idx_train=global_batch_idx_train,
                         local_rank=rank)
+        model_path_2nd = os.path.join(exp_dir, '2nd-epoch-{}.pt'.format(epoch))
+        torch.save(second_pass.state_dict(), model_path_2nd)
+
+
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,

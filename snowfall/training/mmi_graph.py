@@ -83,6 +83,8 @@ class MmiTrainingGraphCompiler(object):
 
         self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
 
+        self.max_phone_id = max(phone_symbols)
+
     def compile(self,
                 texts: Iterable[str],
                 P: k2.Fsa,
