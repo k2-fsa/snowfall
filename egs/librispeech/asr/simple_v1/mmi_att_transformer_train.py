@@ -52,6 +52,7 @@ def get_objf(batch: Dict,
              P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
+             use_pruned_intersect: bool,
              is_training: bool,
              is_update: bool,
              accum_grad: int = 1,
@@ -74,7 +75,8 @@ def get_objf(batch: Dict,
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
         P=P,
-        den_scale=den_scale
+        den_scale=den_scale,
+        use_pruned_intersect=use_pruned_intersect
     )
 
     grad_context = nullcontext if is_training else torch.no_grad
@@ -146,6 +148,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
+                        use_pruned_intersect: bool,
                         scaler: GradScaler,
                         den_scale: float = 1,
                         ):
@@ -164,6 +167,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             is_training=False,
             is_update=False,
             den_scale=den_scale,
@@ -183,6 +187,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
+                    use_pruned_intersect: bool,
                     optimizer: torch.optim.Optimizer,
                     accum_grad: int,
                     den_scale: float,
@@ -248,6 +253,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             is_training=True,
             is_update=is_update,
             accum_grad=accum_grad,
@@ -296,6 +302,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 P=P,
                 device=device,
                 graph_compiler=graph_compiler,
+                use_pruned_intersect=use_pruned_intersect,
                 scaler=scaler)
             if world_size > 1:
                 s = torch.tensor([
@@ -424,6 +431,14 @@ def get_parser():
              'exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt as the alignment model.'
              'Used only if --use-ali-model is True.'
     )
+    parser.add_argument(
+        '--use-pruned-intersect',
+        type=str2bool,
+        default=False,
+        help='True to use pruned intersect to compute the denominator lattice. ' \
+             'You probably want to set it to True if you have a very large LM. ' \
+             'In that case, you will get an OOM if it is False. ' )
+    #  See https://github.com/k2-fsa/k2/issues/739 for more details
     return parser
 
 
@@ -445,6 +460,7 @@ def run(rank, world_size, args):
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
+    use_pruned_intersect = args.use_pruned_intersect
 
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
@@ -480,6 +496,11 @@ def run(rank, world_size, args):
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
         sys.exit(-1)
+
+    if use_pruned_intersect:
+        logging.info('Use pruned intersect for den_lats')
+    else:
+        logging.info("Don't use pruned intersect for den_lats")
 
     logging.info("About to create model")
 
@@ -520,7 +541,7 @@ def run(rank, world_size, args):
 
     model = DDP(model, device_ids=[rank])
 
-    # Now for the aligment model, if any
+    # Now for the alignment model, if any
     if args.use_ali_model:
         ali_model = TdnnLstm1b(
             num_features=80,
@@ -579,6 +600,7 @@ def run(rank, world_size, args):
             P=P,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             optimizer=optimizer,
             accum_grad=accum_grad,
             den_scale=den_scale,
