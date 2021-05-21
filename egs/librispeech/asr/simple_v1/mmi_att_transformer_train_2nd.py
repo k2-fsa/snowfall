@@ -105,7 +105,11 @@ def get_objf(batch: Dict,
         mmi_loss, tot_frames, all_frames, den_lats, num_den_graphs, a_to_b_map = \
                 loss_fn(nnet_output, texts, supervision_segments, True)
 
-        nnet_output_2nd = second_pass(encoder_memory, den_lats, supervision_segments)
+        # Get the best path of each sequence. Only the labels of each path
+        # are used in the following code. 0s in labels are not removed.
+        best_paths = k2.shortest_path(den_lats, use_double_scores=True)
+
+        nnet_output_2nd = second_pass(encoder_memory, best_paths, supervision_segments)
         assert nnet_output_2nd.shape[0] == supervision_segments.shape[0]
 
         supervision_segments_2nd = supervision_segments.clone()

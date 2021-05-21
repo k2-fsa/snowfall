@@ -121,7 +121,7 @@ class SecondPassModel(nn.Module):
         # pass and the second pass model
         self.output_linear = nn.Linear(d_model * 2, num_classes)
 
-    def forward(self, encoder_memory: torch.Tensor, den_lats: k2.Fsa,
+    def forward(self, encoder_memory: torch.Tensor, best_paths: k2.Fsa,
                 supervision_segments: torch.Tensor):
         '''
         Args:
@@ -129,13 +129,11 @@ class SecondPassModel(nn.Module):
             The output of the first network before applying log-softmax.
             If you're using Transformer/Conformer, it is the encoder output.
             Its shape is (T, batch_size, d_model)
+          best_paths:
+            The 1-best results from the 1st pass decoding lattice.
         '''
         debug = True
         device = encoder_memory.device
-
-        # Get the best path of each sequence. Only the labels of each path
-        # are used in the following code. 0s in labels are not removed.
-        best_paths = k2.shortest_path(den_lats, use_double_scores=True)
 
         # Note that len_per_seq does not count -1
         len_per_seq = supervision_segments[:, 2].to(device)
