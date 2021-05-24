@@ -13,9 +13,10 @@ import torch
 from k2 import Fsa, SymbolTable
 from pathlib import Path
 from typing import List
+from typing import Optional
 from typing import Union
 
-from snowfall.common import average_checkpoint, store_transcripts
+from snowfall.common import average_checkpoint, average_checkpoint_2nd, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import write_error_stats
@@ -28,12 +29,14 @@ from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.second_pass_model import SecondPassModel
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
+           second_pass: Optional[AcousticModel],
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable,
            num_paths: int, G: k2.Fsa, use_whole_lattice: bool, output_beam_size: float):
     tot_num_cuts = len(dataloader.dataset.cuts)
@@ -56,7 +59,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # at entry, feature is [N, T, C]
         feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
         with torch.no_grad():
-            nnet_output, _, _ = model(feature, supervisions)
+            nnet_output, encoder_memory, _ = model(feature, supervisions)
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2,
                                           1)  # now nnet_output is [N, T, C]
@@ -72,6 +75,30 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
         lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30,
                                              10000)
+
+        if second_pass is not None:
+            # Now for the second pass model
+            best_paths = k2.shortest_path(lattices, use_double_scores=True)
+
+            nnet_output_2nd = second_pass(encoder_memory, best_paths, supervision_segments)
+            # nnet_output_2nd is [N, T, C]
+
+            assert nnet_output_2nd.shape[0] == supervision_segments.shape[0]
+
+            supervision_segments_2nd = supervision_segments.clone()
+
+            # [0, 1, 2, 3, ...]
+            supervision_segments_2nd[:, 0] = torch.arange(supervision_segments_2nd.shape[0], dtype=torch.int32)
+
+            # start offset
+            supervision_segments_2nd[:, 1] = 0
+
+            # duration of supervision_segments_2nd is kept unchanged
+
+            dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments_2nd)
+
+            lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec_2nd, 20.0, output_beam_size, 30,
+                                                 10000)
 
         if G is None:
             best_paths = k2.shortest_path(lattices, use_double_scores=True)
@@ -212,6 +239,11 @@ def get_parser():
         default=True,
         help='When enabled, it uses LM for rescoring')
     parser.add_argument(
+        '--use-second-pass',
+        type=str2bool,
+        default=True,
+        help='When enabled, it uses the second pass model')
+    parser.add_argument(
         '--num-paths',
         type=int,
         default=-1,
@@ -240,6 +272,7 @@ def main():
         use_whole_lattice = True
 
     output_beam_size = args.output_beam_size
+    use_second_pass = args.use_second_pass
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
@@ -286,16 +319,36 @@ def main():
 
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
+    if use_second_pass:
+        second_pass = SecondPassModel(max_phone_id=max(phone_ids)).to(device)
+
     if avg == 1:
         checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')
         load_checkpoint(checkpoint, model)
+
+        if use_second_pass:
+            checkpoint_2nd = os.path.join(exp_dir, '2nd-epoch-' + str(epoch - 1) + '.pt')
+            logging.info(f'loading {checkpoint_2nd}')
+            second_pass.load_state_dict(torch.load(checkpoint_2nd, map_location='cpu'))
     else:
         checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
                        range(epoch - avg, epoch)]
         average_checkpoint(checkpoints, model)
 
+        if use_second_pass:
+            checkpoints_2nd = [os.path.join(exp_dir, '2nd-epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
+                           range(epoch - avg, epoch)]
+            average_checkpoint_2nd(checkpoints_2nd, second_pass)
+
     model.to(device)
     model.eval()
+
+    if use_second_pass:
+        second_pass.to(device)
+        second_pass.eval()
+    else:
+        second_pass = None
+        logging.info('Not using the second pass model')
 
     assert P.requires_grad is False
     P.scores = model.P_scores.cpu()
@@ -370,12 +423,12 @@ def main():
     # load dataset
     librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
-    #  test_sets = ['test-other']
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
         results = decode(dataloader=test_dl,
                          model=model,
+                         second_pass=second_pass,
                          device=device,
                          HLG=HLG,
                          symbols=symbol_table,

@@ -84,15 +84,13 @@ class SecondPassModel(nn.Module):
     and the output of log_softmax is the output of the second pass model.
     '''
 
-    def __init__(
-            self,
-            max_phone_id: int,
-            d_model: int = 256,
-            dropout: float = 0.1,
-            nhead: int = 4,
-            dim_feedforward: int = 2048,
-            num_encoder_layers: int = 6,
-    ):
+    def __init__(self,
+                 max_phone_id: int,
+                 d_model: int = 256,
+                 dropout: float = 0.1,
+                 nhead: int = 4,
+                 dim_feedforward: int = 2048,
+                 num_encoder_layers: int = 6):
         super().__init__()
         normalize_before = True  # True to use pre_LayerNorm
 
@@ -132,22 +130,21 @@ class SecondPassModel(nn.Module):
           best_paths:
             The 1-best results from the 1st pass decoding lattice.
         '''
-        debug = True
         device = encoder_memory.device
 
+        # offset indicates the arc start index of each seq
+        offset = k2.index(best_paths.arcs.row_splits(2),
+                          best_paths.arcs.row_splits(1))
+
         # Note that len_per_seq does not count -1
-        len_per_seq = supervision_segments[:, 2].to(device)
-
-        if debug:
-            # offset indicates the arc start index of each seq
-            offset = k2.index(best_paths.arcs.row_splits(2),
-                              best_paths.arcs.row_splits(1))
-
-            # number of phones per seq.
-            # minus 1 to exclude the label -1
-            expected_len_per_seq = offset[1:] - offset[:-1] - 1
-
-            assert torch.all(torch.eq(len_per_seq, expected_len_per_seq))
+        #
+        # number of phones per seq.
+        # minus 1 to exclude the label -1
+        len_per_seq = offset[1:] - offset[:-1] - 1
+        # We use clamp(0) here since it may happen
+        # that the best_path is empty when pruned_intersect
+        # is used. This happens rarely in the decoding script.
+        len_per_seq = len_per_seq.clamp(0)
 
         # Note: `phones` also contains -1, for the arcs entering the final state
         phones = best_paths.labels.clone()

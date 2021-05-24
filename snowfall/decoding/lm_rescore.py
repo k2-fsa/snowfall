@@ -270,9 +270,9 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
         print('num_arcs before pruning: ',
               inverted_lats_with_epsilon_loops.arcs.num_elements())
 
-        # NOTE(fangjun): The choice of the threshold 0.01 is arbitrary here
+        # NOTE(fangjun): The choice of the threshold 1e-5 is arbitrary here
         # to avoid OOM. We may need to fine tune it.
-        inverted_lats = k2.prune_on_arc_post(inverted_lats, 0.001, True)
+        inverted_lats = k2.prune_on_arc_post(inverted_lats, 1e-5, True)
         inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(
             inverted_lats)
         print('num_arcs after pruning: ',

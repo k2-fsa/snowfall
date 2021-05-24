@@ -107,6 +107,43 @@ def load_checkpoint(
     return checkpoint
 
 
+def average_checkpoint_2nd(filenames: List[Pathlike], model: AcousticModel) -> Dict[str, Any]:
+    '''Average checkpoints for the 2nd pass model.
+    '''
+    logging.info('average over checkpoints {}'.format(filenames))
+
+    avg_model = None
+    # sum
+    for filename in filenames:
+        checkpoint_model = torch.load(filename, map_location='cpu')
+        if avg_model is None:
+            avg_model = checkpoint_model
+        else:
+            for k in avg_model.keys():
+                avg_model[k] += checkpoint_model[k]
+
+    # average
+    for k in avg_model.keys():
+        if avg_model[k] is not None:
+            if avg_model[k].is_floating_point():
+                avg_model[k] /= len(filenames)
+            else:
+                avg_model[k] //= len(filenames)
+
+    if not next(iter(model.state_dict().keys())).startswith('module.') \
+            and next(iter(avg_model.keys())).startswith('module.'):
+        # the checkpoint was saved by DDP
+        dst_state_dict = model.state_dict()
+        src_state_dict = avg_model
+        for key in dst_state_dict.keys():
+            src_key = '{}.{}'.format('module', key)
+            dst_state_dict[key] = src_state_dict.pop(src_key)
+        assert len(src_state_dict) == 0
+        model.load_state_dict(dst_state_dict)
+    else:
+        model.load_state_dict(avg_model)
+
+
 def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[str, Any]:
     logging.info('average over checkpoints {}'.format(filenames))
 
