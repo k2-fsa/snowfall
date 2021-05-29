@@ -187,9 +187,15 @@ class TransformerEncoderLayer(nn.Module):
     """
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-                 activation: str = "relu", normalize_before: bool = True) -> None:
+                 activation: str = "relu", normalize_before: bool = True,
+                 custom_attn=None) -> None:
         super(TransformerEncoderLayer, self).__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
+
+        if custom_attn is not None:
+            self.self_attn = custom_attn
+        else:
+            self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.0)
+
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
