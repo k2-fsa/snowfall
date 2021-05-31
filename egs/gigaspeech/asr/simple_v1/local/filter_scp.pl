@@ -1,0 +1,1 @@
+../../../../librispeech/asr/simple_v1/local/filter_scp.pl

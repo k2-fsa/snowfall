@@ -2,9 +2,14 @@
 data*/
 !snowfall/data
 exp*/
+venv
+
+*.swp
 
 .DS_Store
 .vscode/
 .idea/
 __pycache__/
 snowfall.egg-info/
+
+active_k2_debug.sh

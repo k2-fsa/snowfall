@@ -1,0 +1,1 @@
+../../../../librispeech/asr/simple_v1/local/sym2int.pl
