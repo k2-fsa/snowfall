@@ -59,6 +59,15 @@ class ASR:
         self.compiler = MmiTrainingGraphCompiler(lexicon=self.lexicon, device=self.device)
         self.HLG = k2.Fsa.from_dict(torch.load(lang_dir / 'HLG.pt')).to(self.device)
 
+    def compute_features(self, cuts: Union[AnyCut, CutSet]) -> torch.Tensor:
+        if isinstance(cuts, (Cut, MixedCut)):
+            cuts = CutSet.from_cuts([cuts])
+        assert cuts[0].sampling_rate == self.sampling_rate, f'{cuts[0].sampling_rate} != {self.sampling_rate}'
+        otf = OnTheFlyFeatures(self.extractor)
+        # feats: (batch, seq_len, n_feats)
+        feats, _ = otf(cuts)
+        return feats
+
     def compute_posteriors(self, cuts: Union[AnyCut, CutSet]) -> torch.Tensor:
         """
         Run the forward pass of the acoustic model and return a tensor representing a batch of phone posteriorgrams.
@@ -240,6 +249,24 @@ class ASR:
             ctm_alis.append(ctm_ali)
 
         return ctm_alis
+
+    def plot_alignments(self, cut: AnyCut):
+        import matplotlib.pyplot as plt
+        feats = self.compute_features(cut)
+        phone_ids = self.align(cut)
+        fig, axes = plt.subplots(2, squeeze=True, sharex=True, sharey=True, figsize=(10, 14))
+        axes[0].imshow(feats[0])
+        axes[1].imshow(torch.nn.functional.one_hot(phone_ids.to(torch.int64)).T)
+        return fig, axes
+
+    def plot_posteriors(self, cut: AnyCut):
+        import matplotlib.pyplot as plt
+        feats = self.compute_features(cut)
+        posteriors = self.compute_posteriors(cut)
+        fig, axes = plt.subplots(2, squeeze=True, sharex=True, sharey=True, figsize=(10, 14))
+        axes[0].imshow(feats[0])
+        axes[1].imshow(posteriors[0].exp())
+        return fig, axes
 
     @staticmethod
     def dummy_supervisions(feats):
