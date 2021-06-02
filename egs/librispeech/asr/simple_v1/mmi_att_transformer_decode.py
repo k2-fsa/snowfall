@@ -242,7 +242,7 @@ def main():
 
     output_beam_size = args.output_beam_size
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg-mmiali')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')

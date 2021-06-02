@@ -164,7 +164,7 @@ def get_parser():
 
 def main():
     args = get_parser().parse_args()
-    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan-dist')
+    exp_dir = Path('exp-lstm-adam-mmi-bigram-musan-dist-s4')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
@@ -183,7 +183,7 @@ def main():
     device = torch.device('cuda')
     model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-                       subsampling_factor=3)
+                       subsampling_factor=4)
     model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     checkpoint = os.path.join(exp_dir, f'epoch-{args.epoch}.pt')
