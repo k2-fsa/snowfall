@@ -81,8 +81,8 @@ if [ $stage -le 6 ]; then
 fi
 
 if [ $stage -le 7 ]; then
-  ngpus=2
-  python3 -m torch.distributed.launch --nproc_per_node=$ngpus ./mmi_bigram_train.py --world_size $ngpus
+  export CUDA_VISIBLE_DEVICES="7"
+  python3 ./mmi_att_transformer_train.py --use-ali-model False --max-duration 300
 fi
 
 if [ $stage -le 8 ]; then
