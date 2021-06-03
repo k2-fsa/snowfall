@@ -271,7 +271,7 @@ def main():
     num_epochs = 10
     use_adam = True
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist'
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-dist-s4'
     setup_logger('{}/log/log-train'.format(exp_dir), use_console=args.local_rank == 0)
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.local_rank == 0 else None
 
@@ -356,7 +356,7 @@ def main():
     logging.info("About to create model")
     model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-                       subsampling_factor=3)
+                       subsampling_factor=4)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)

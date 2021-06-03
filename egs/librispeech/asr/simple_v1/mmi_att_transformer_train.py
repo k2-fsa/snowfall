@@ -96,8 +96,15 @@ def get_objf(batch: Dict,
             # scale less than one so it will be encouraged
             # to mimic ali_model's output
             ali_model_scale = 500.0 / (global_batch_idx_train // accum_grad + 500)
+            nnet_output_orig = nnet_output
             nnet_output = nnet_output.clone()  # or log-softmax backprop will fail.
             nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
+
+            x = nnet_output.abs().sum().item()
+            if x - x != 0:
+                print("Warning: reverting nnet output since it seems to be nan.")
+                nnet_output = nnet_output_orig
+
 
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
@@ -417,11 +424,11 @@ def get_parser():
         '--use-ali-model',
         type=str2bool,
         default=True,
-        help='If true, we assume that you have run ./ctc_train.py '
-             'and you have some checkpoints inside the directory '
-             'exp-lstm-adam-ctc-musan/ .'
-             'It will use exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt '
-             'as the pre-trained alignment model'
+        help='If true, we assume that you have run ./mmi_bigram_train.py '
+        'and you have some checkpoints inside the directory '
+        'exp-lstm-adam-mmi-bigram-musan-dist-s4/. It will use '
+        'exp-lstm-adam-mmi-bigram-musan-dist-s4/epoch-{ali-model-epoch}.pt '  # noqa
+        'as the pre-trained alignment model'
     )
     parser.add_argument(
         '--ali-model-epoch',
@@ -465,7 +472,7 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg-mmiali')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -548,13 +555,13 @@ def run(rank, world_size, args):
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4)
 
-        ali_model_fname = Path(f'exp-lstm-adam-ctc-musan/epoch-{args.ali_model_epoch}.pt')
+        ali_model_fname = Path(f'exp-lstm-adam-mmi-bigram-musan-dist-s4/epoch-{args.ali_model_epoch}.pt')
         assert ali_model_fname.is_file(), \
                 f'ali model filename {ali_model_fname} does not exist!'
         ali_model.load_state_dict(torch.load(ali_model_fname, map_location='cpu')['state_dict'])
         ali_model.to(device)
 
-        ali_model.eval()
+        # ali_model.eval()
         ali_model.requires_grad_(False)
         logging.info(f'Use ali_model: {ali_model_fname}')
     else:
