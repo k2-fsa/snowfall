@@ -285,7 +285,8 @@ def main():
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
-            vgg_frontend=True)
+            vgg_frontend=True,
+            is_espnet_structure=True)
     elif model_type == "contextnet":
         model = ContextNet(
         num_features=80,
