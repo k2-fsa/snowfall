@@ -242,7 +242,7 @@ def main():
 
     output_beam_size = args.output_beam_size
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-vgg')
+    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')
@@ -285,7 +285,8 @@ def main():
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
-            vgg_frontend=True)
+            vgg_frontend=True,
+            is_espnet_structure=True)
     elif model_type == "contextnet":
         model = ContextNet(
         num_features=80,
