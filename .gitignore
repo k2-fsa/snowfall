@@ -8,3 +8,6 @@ exp*/
 .idea/
 __pycache__/
 snowfall.egg-info/
+build/
+dist/
+*.pt
