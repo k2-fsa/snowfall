@@ -11,3 +11,4 @@ snowfall.egg-info/
 build/
 dist/
 *.pt
+*.txt
