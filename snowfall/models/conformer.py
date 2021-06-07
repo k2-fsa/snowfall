@@ -37,18 +37,23 @@ class Conformer(Transformer):
                  normalize_before: bool = True, vgg_frontend: bool = False,
                  is_espnet_structure: bool = False) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
-                 d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
-                 num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
-                 dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
+                                        d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
+                                        num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
+                                        dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
 
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
-        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before, is_espnet_structure)
+        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel,
+                                              normalize_before, is_espnet_structure)
         self.encoder = ConformerEncoder(encoder_layer, num_encoder_layers)
         self.normalize_before = normalize_before
         self.is_espnet_structure = is_espnet_structure
         if self.normalize_before and self.is_espnet_structure:
             self.after_norm = nn.LayerNorm(d_model)
+        else:
+            # Note: TorchScript detects that self.after_norm could be used inside forward()
+            #       and throws an error without this change.
+            self.after_norm = identity
 
     def encode(self, x: Tensor, supervisions: Optional[Supervisions] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
@@ -66,7 +71,8 @@ class Conformer(Transformer):
         x, pos_emb = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
         mask = encoder_padding_mask(x.size(0), supervisions)
-        mask = mask.to(x.device) if mask is None else None
+        if mask is not None:
+            mask = mask.to(x.device)
         x = self.encoder(x, pos_emb, src_key_padding_mask=mask)  # (T, B, F)
 
         if self.normalize_before and self.is_espnet_structure:
@@ -729,3 +735,7 @@ class Swish(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Return Swich activation function."""
         return x * torch.sigmoid(x)
+
+
+def identity(x):
+    return x

@@ -82,6 +82,14 @@ def get_objf(batch: Dict,
     grad_context = nullcontext if is_training else torch.no_grad
 
     with autocast(enabled=scaler.is_enabled()), grad_context():
+
+        if att_rate == 0:
+            # Note: Make TorchScript happy by making the supervision dict strictly
+            #       conform to type Dict[str, Tensor]
+            #       Using the attention decoder with TorchScript is currently unsupported,
+            #       we'll need to separate out the 'text' field from 'supervisions' first.
+            del supervisions['text']
+
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
             att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
@@ -552,6 +560,7 @@ def run(rank, world_size, args):
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     if args.torchscript:
+        logging.info('Applying TorchScript to model...')
         model = torch.jit.script(model)
 
     model.to(device)

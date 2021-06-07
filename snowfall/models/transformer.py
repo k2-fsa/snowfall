@@ -661,7 +661,7 @@ def encoder_padding_mask(max_len: int, supervisions: Optional[Supervisions] = No
          supervisions['start_frame'],
          supervisions['num_frames']), 1).to(torch.int32)
 
-    lengths = [0 for _ in range(int(max(supervision_segments[:, 0])) + 1)]
+    lengths = [0 for _ in range(int(supervision_segments[:, 0].max().item()) + 1)]
     for idx in range(supervision_segments.size(0)):
         # Note: TorchScript doesn't allow to unpack tensors as tuples
         sequence_idx = supervision_segments[idx, 0].item()
@@ -716,7 +716,7 @@ def get_normal_transcripts(supervision: Supervisions, words: k2.SymbolTable, oov
               for token in text.split(' ')] for text in supervision['text']]
     texts_ids = [[words[token] for token in text] for text in texts]
 
-    batch_text = [[] for _ in range(int(max(supervision['sequence_idx'])) + 1)]
+    batch_text = [[] for _ in range(int(supervision['sequence_idx'].max().item()) + 1)]
     for sequence_idx, text in zip(supervision['sequence_idx'], texts_ids):
         batch_text[sequence_idx] = batch_text[sequence_idx] + text
     return batch_text
