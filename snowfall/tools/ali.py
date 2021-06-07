@@ -53,9 +53,10 @@ def convert_id_to_symbol(ali: Dict[str, Alignment], type: str,
       Return None.
     '''
     for _, utt_ali in ali.items():
-        for t in utt_ali:
+        for t in utt_ali.value:
             if type == t:
-                utt_ali[t] = _ids_to_symbols(utt_ali[t], symbol_table)
+                utt_ali.value[t] = _ids_to_symbols(utt_ali.value[t],
+                                                   symbol_table)
 
 
 def compute_edit_distance(ref_ali: Dict[str, Alignment],
@@ -79,8 +80,8 @@ def compute_edit_distance(ref_ali: Dict[str, Alignment],
     # We assume that the same utterance exists both in ref_ali and in hyp_ali.
     # An exception is thrown if the assumption is violated.
     for utt in ref_ali:
-        ref = ref_ali[utt][type]
-        hyp = hyp_ali[utt][type]
+        ref = ref_ali[utt].value[type]
+        hyp = hyp_ali[utt].value[type]
         pairs.append((ref, hyp))
 
     with open(output_file, 'w') as f:

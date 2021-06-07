@@ -16,14 +16,14 @@ from snowfall.tools.ali import Alignment
 def generate_alignment_1() -> Dict[str, Alignment]:
     ans = {}
 
-    ali = {}
-    ali['phone'] = [1, 2, 3, 5]
-    ali['ilabel'] = [10, 2, 3, 1, 6]
+    ali = Alignment({})
+    ali.value['phone'] = [1, 2, 3, 5]
+    ali.value['ilabel'] = [10, 2, 3, 1, 6]
     ans['utt1'] = ali
 
-    ali = {}
-    ali['phone'] = [5, 3, 2, 1]
-    ali['ilabel'] = [6, 8, 2]
+    ali = Alignment({})
+    ali.value['phone'] = [5, 3, 2, 1]
+    ali.value['ilabel'] = [6, 8, 2]
     ans['utt2'] = ali
 
     return ans
@@ -32,14 +32,14 @@ def generate_alignment_1() -> Dict[str, Alignment]:
 def generate_alignment_2() -> Dict[str, Alignment]:
     ans = {}
 
-    ali = {}
-    ali['phone'] = [3, 3, 5]
-    ali['ilabel'] = [3, 2, 6]
+    ali = Alignment({})
+    ali.value['phone'] = [3, 3, 5]
+    ali.value['ilabel'] = [3, 2, 6]
     ans['utt1'] = ali
 
-    ali = {}
-    ali['phone'] = [2, 5, 2]
-    ali['ilabel'] = [6, 8, 1, 3]
+    ali = Alignment({})
+    ali.value['phone'] = [2, 5, 2]
+    ali.value['ilabel'] = [6, 8, 1, 3]
     ans['utt2'] = ali
 
     return ans
