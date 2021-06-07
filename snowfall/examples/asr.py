@@ -3,6 +3,7 @@ import re
 from typing import List, Optional, Sequence, Tuple, Union
 
 import k2
+import numpy as np
 import torch
 
 from lhotse import CutSet, Fbank, FbankConfig
@@ -104,6 +105,8 @@ class ASR:
         Perform decoding with an n-gram language model (HLG graph).
         Doesn't support rescoring at this time.
         """
+        if isinstance(cuts, (Cut, MixedCut)):
+            cuts = CutSet.from_cuts([cuts])
         word_results = []
         # Hacky way to get batch quickly... we may need to improve on this.
         batch = K2SpeechRecognitionDataset(
@@ -265,7 +268,7 @@ class ASR:
         feats = self.compute_features(cut)
         phone_ids = self.align(cut)
         fig, axes = plt.subplots(2, squeeze=True, sharex=True, sharey=True, figsize=(10, 14))
-        axes[0].imshow(feats[0])
+        axes[0].imshow(np.flipud(feats[0].T))
         axes[1].imshow(torch.nn.functional.one_hot(phone_ids.to(torch.int64)).T)
         return fig, axes
 
@@ -274,7 +277,7 @@ class ASR:
         feats = self.compute_features(cut)
         posteriors = self.compute_posteriors(cut)
         fig, axes = plt.subplots(2, squeeze=True, sharex=True, sharey=True, figsize=(10, 14))
-        axes[0].imshow(feats[0])
+        axes[0].imshow(np.flipud(feats[0].T))
         axes[1].imshow(posteriors[0].exp())
         return fig, axes
 
