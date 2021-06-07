@@ -66,7 +66,7 @@ class Conformer(Transformer):
         x, pos_emb = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
         mask = encoder_padding_mask(x.size(0), supervisions)
-        mask = mask.to(x.device) if mask != None else None
+        mask = mask.to(x.device) if mask is None else None
         x = self.encoder(x, pos_emb, src_key_padding_mask=mask)  # (T, B, F)
 
         if self.normalize_before and self.is_espnet_structure:
