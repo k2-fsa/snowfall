@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import k2
 import torch
@@ -29,10 +29,11 @@ class ASR:
     def __init__(
             self,
             lang_dir: Pathlike,
-            model_dir: Pathlike,
+            scripted_model_path: Optional[Pathlike] = None,
+            model_dir: Optional[Pathlike] = None,
+            average_epochs: Sequence[int] = (7, 8, 9),
             device: torch.device = 'cpu',
             sampling_rate: int = 16000,
-            average_epochs: Sequence[int] = (7, 8, 9)
     ):
         if isinstance(device, str):
             self.device = torch.device(device)
@@ -41,18 +42,27 @@ class ASR:
         self.extractor = Fbank(FbankConfig(num_mel_bins=80))
         self.lexicon = Lexicon(lang_dir)
         phone_ids = self.lexicon.phone_symbols()
-        self.model = Conformer(
-            num_features=80,
-            num_classes=len(phone_ids) + 1,
-            num_decoder_layers=0
-        )
         self.P = create_bigram_phone_lm(phone_ids)
-        self.P.scores = torch.zeros_like(self.P.scores)
-        self.model.P_scores = torch.nn.Parameter(self.P.scores.clone(), requires_grad=False)
-        average_checkpoint(
-            filenames=[model_dir / f'epoch-{n}.pt' for n in average_epochs],
-            model=self.model
-        )
+
+        if model_dir is not None:
+            # Read model from regular checkpoints, assume it's a Conformer
+            self.model = Conformer(
+                num_features=80,
+                num_classes=len(phone_ids) + 1,
+                num_decoder_layers=0
+            )
+            self.P.scores = torch.zeros_like(self.P.scores)
+            self.model.P_scores = torch.nn.Parameter(self.P.scores.clone(), requires_grad=False)
+            average_checkpoint(
+                filenames=[model_dir / f'epoch-{n}.pt' for n in average_epochs],
+                model=self.model
+            )
+        elif scripted_model_path is not None:
+            # Read model from a serialized TorchScript module, no assumptions needed
+            self.model = torch.jit.load(scripted_model_path)
+        else:
+            raise ValueError("One of scripted_model_path or model_dir needs to be provided.")
+
         # Freeze the params by default.
         for p in self.model.parameters():
             p.requires_grad_(False)
