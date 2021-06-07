@@ -13,38 +13,34 @@ import torch
 from snowfall.tools.ali import Alignment
 
 
-def generate_alignment_1() -> Dict[str, Dict[str, List[int]]]:
+def generate_alignment_1() -> Dict[str, Alignment]:
     ans = {}
 
-    ans['utt1'] = []
-    phones = Alignment('phone_label', [1, 2, 3, 5])
-    ilabels = Alignment('ilabel', [10, 2, 3, 1, 6])
-    ans['utt1'].append(phones)
-    ans['utt1'].append(ilabels)
+    ali = {}
+    ali['phone'] = [1, 2, 3, 5]
+    ali['ilabel'] = [10, 2, 3, 1, 6]
+    ans['utt1'] = ali
 
-    ans['utt2'] = []
-    phones = Alignment('phone_label', [5, 3, 2, 1])
-    ilabels = Alignment('ilabel', [6, 8, 2])
-    ans['utt2'].append(phones)
-    ans['utt2'].append(ilabels)
+    ali = {}
+    ali['phone'] = [5, 3, 2, 1]
+    ali['ilabel'] = [6, 8, 2]
+    ans['utt2'] = ali
 
     return ans
 
 
-def generate_alignment_2() -> Dict[str, Dict[str, List[int]]]:
+def generate_alignment_2() -> Dict[str, Alignment]:
     ans = {}
 
-    ans['utt1'] = []
-    phones = Alignment('phone_label', [3, 3, 5])
-    ilabels = Alignment('ilabel', [3, 2, 6])
-    ans['utt1'].append(phones)
-    ans['utt1'].append(ilabels)
+    ali = {}
+    ali['phone'] = [3, 3, 5]
+    ali['ilabel'] = [3, 2, 6]
+    ans['utt1'] = ali
 
-    ans['utt2'] = []
-    phones = Alignment('phone_label', [2, 5, 2])
-    ilabels = Alignment('ilabel', [6, 8, 1, 3])
-    ans['utt2'].append(phones)
-    ans['utt2'].append(ilabels)
+    ali = {}
+    ali['phone'] = [2, 5, 2]
+    ali['ilabel'] = [6, 8, 1, 3]
+    ans['utt2'] = ali
 
     return ans
 

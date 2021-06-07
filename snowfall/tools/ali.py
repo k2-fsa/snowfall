@@ -7,27 +7,26 @@ from typing import Union
 
 import k2
 
+from snowfall.common import write_error_stats
+
 
 @dataclass
 class Alignment:
-    # type of the alignment, e.g., ilabel, phone_ilabel
-    type: str
-
-    # If it contains frame-wise alignment
-    # and the sampling rate is available, we can convert it
-    # to CTM, like the one used in Lhotse
-    value: Union[List[int], List[str]]
+    # The key of the dict indicates the type of the alignment,
+    # e.g., ilabel, phone_label, etc.
+    #
+    # The value of the dict is the actual alignments.
+    # If the alignments are frame-wise and if the sampling rate
+    # is available, they can be converted to CTM format, like the
+    # one used in Lhotse
+    value: Dict[str, Union[List[int], List[str]]]
 
 
 # The alignment in a dataset can be represented by
 #
-#   Dict[str, List[Alignment]]
+#   Dict[str, Alignment]
 #
-# The key of the dict can the utterance ID.
-# We assume that the number of types of alignments is small,
-# so we use a list to represent all the possible alignments
-# of an utterance. We will do a linear search with the list to find
-# the given type of alignment.
+# The key of the dict can be utterance IDs.
 
 
 def _ids_to_symbols(ids: List[int], symbol_table: k2.SymbolTable) -> List[str]:
@@ -36,10 +35,12 @@ def _ids_to_symbols(ids: List[int], symbol_table: k2.SymbolTable) -> List[str]:
     return [symbol_table.get(i) for i in ids]
 
 
-def convert_id_to_symbol(ali: Dict[str, List[Alignment]], type: str,
-                         symbol_table: k2.SymbolTable
-                        ) -> Dict[str, List[Alignment]]:
+def convert_id_to_symbol(ali: Dict[str, Alignment], type: str,
+                         symbol_table: k2.SymbolTable) -> None:
     '''Convert IDs in alignments to symbols.
+
+    Caution:
+      `ali` is changed in-place.
 
     Args:
       ali:
@@ -48,17 +49,39 @@ def convert_id_to_symbol(ali: Dict[str, List[Alignment]], type: str,
         The type of alignment to be converted
       symbol_table:
         A symbol table.
+    Returns:
+      Return None.
     '''
-    ans = {}
-    for key, value in ali.items():
-        # value is a List[Alignment]
-        ans[key] = []
-        for alignment in value:
-            if alignment.type != type:
-                # we use a shallow copy here
-                ans[key].append(alignment)
-            else:
-                ans[key].append(
-                    Alignment(type,
-                              _ids_to_symbols(alignment.value, symbol_table)))
-    return ans
+    for _, utt_ali in ali.items():
+        for t in utt_ali:
+            if type == t:
+                utt_ali[t] = _ids_to_symbols(utt_ali[t], symbol_table)
+
+
+def compute_edit_distance(ref_ali: Dict[str, Alignment],
+                          hyp_ali: Dict[str, Alignment], type: str,
+                          output_file: str) -> None:
+    '''
+    Args:
+      ref_ali:
+        The reference alignment.
+      hyp_ali:
+        The hypothesis alignment.
+      type:
+        The type of alignment to use.
+      output_file:
+        The filename of the output file.
+    Returns:
+      Return None.
+    '''
+    pairs = []  # each element contains a pair (ref_transcript, hyp_transcript)
+
+    # We assume that the same utterance exists both in ref_ali and in hyp_ali.
+    # An exception is thrown if the assumption is violated.
+    for utt in ref_ali:
+        ref = ref_ali[utt][type]
+        hyp = hyp_ali[utt][type]
+        pairs.append((ref, hyp))
+
+    with open(output_file, 'w') as f:
+        write_error_stats(f, 'test', pairs)

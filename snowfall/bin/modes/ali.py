@@ -1,13 +1,14 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 
 from typing import Optional
+import sys
 
 import click
 import k2
 import torch
 
 from .cli_base import cli
-from snowfall.common import write_error_stats
+from snowfall.tools.ali import compute_edit_distance
 from snowfall.tools.ali import convert_id_to_symbol
 
 
@@ -36,39 +37,42 @@ def ali():
               required=True,
               help='The type of the alignment to use for computing'
               ' the edit distance')
+@click.option('-o',
+              '--output-file',
+              type=click.Path(dir_okay=False),
+              help='Output file')
 @click.option('-s',
               '--symbol-table',
               type=click.Path(exists=True, dir_okay=False),
-              help='The symbol table for the type of alignment')
+              help='The symbol table for the given type of alignment')
 def edit_distance(ref: str,
                   hyp: str,
                   type: str,
+                  output_file: str,
                   symbol_table: Optional[str] = None):
     '''Compute edit distance between two alignments.
 
     The reference/hypothesis alignment file contains a python
-    object Dict[str, List[Alignment]] and this file can
-    be loaded using `torch.load`. The dict is indexed by utterance ID.
+    object Dict[str, Alignment] and it can be loaded using
+    `torch.load`. The dict is indexed by utterance ID.
 
     The symbol table, if provided, has the following format for each line:
 
         symbol integer_id
 
-    It can be loaded by `k2.SymbolTable.from_file()`
+    It can be loaded by `k2.SymbolTable.from_file()`.
     '''
     ref_ali = torch.load(ref)
     hyp_ali = torch.load(hyp)
-    print(ref_ali)
-    print(hyp_ali)
+
     if symbol_table:
         symbols = k2.SymbolTable.from_file(symbol_table)
-        ref_ali = convert_id_to_symbol(ref_ali, type, symbols)
-        hyp_ali = convert_id_to_symbol(hyp_ali, type, symbols)
-        print(ref_ali)
-        print(hyp_ali)
+        convert_id_to_symbol(ali=ref_ali, type=type, symbol_table=symbols)
+        convert_id_to_symbol(ali=hyp_ali, type=type, symbol_table=symbols)
 
-    filename = 'a.txt'
-    with open(filename, 'w') as f:
-        # TODO(fangjun): Use write_error_stats()
-        # to print the result
-        pass
+    compute_edit_distance(ref_ali=ref_ali,
+                          hyp_ali=hyp_ali,
+                          type=type,
+                          output_file=output_file)
+
+    print(f'Saved to {output_file}', file=sys.stderr)
