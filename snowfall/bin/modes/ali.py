@@ -139,7 +139,7 @@ def visualize(input: str,
 
     Usage:
 
-        snowfall ali visualize -w /path/foo.wav \
+        snowfall ali visualize -i /path/foo.wav \
                                -t /path/foo.TextGrid \
                                -o /path/foo.pdf
     '''
