@@ -37,9 +37,9 @@ from snowfall.dist import setup_dist
 from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
+from snowfall.models.contextnet import ContextNet
 from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
-from snowfall.models.contextnet import ContextNet
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -437,8 +437,22 @@ def get_parser():
         default=False,
         help='True to use pruned intersect to compute the denominator lattice. ' \
              'You probably want to set it to True if you have a very large LM. ' \
-             'In that case, you will get an OOM if it is False. ' )
+             'In that case, you will get an OOM if it is False. ')
     #  See https://github.com/k2-fsa/k2/issues/739 for more details
+    parser.add_argument(
+        '--torchscript',
+        type=str2bool,
+        default=False,
+        help='Should we convert the model to TorchScript before starting training.'
+    )
+    parser.add_argument(
+        '--torchscript-epoch',
+        type=int,
+        default=-1,
+        help='After which epoch should we start storing models with TorchScript,'
+             'so that they can be simply loaded with torch.jit.load(). '
+             '-1 disables this option.'
+    )
     return parser
 
 
@@ -530,12 +544,15 @@ def run(rank, world_size, args):
             is_espnet_structure=True)
     elif model_type == "contextnet":
         model = ContextNet(
-        num_features=80,
-        num_classes=len(phone_ids) + 1) # +1 for the blank symbol
+            num_features=80,
+            num_classes=len(phone_ids) + 1)  # +1 for the blank symbol
     else:
         raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
 
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
+
+    if args.torchscript:
+        model = torch.jit.script(model)
 
     model.to(device)
     describe(model)
@@ -628,7 +645,9 @@ def run(rank, world_size, args):
                             objf=objf,
                             valid_objf=valid_objf,
                             global_batch_idx_train=global_batch_idx_train,
-                            local_rank=rank)
+                            local_rank=rank,
+                            torchscript=args.torchscript_epoch != -1 and epoch >= args.torchscript_epoch
+                            )
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -652,7 +671,9 @@ def run(rank, world_size, args):
                         objf=objf,
                         valid_objf=valid_objf,
                         global_batch_idx_train=global_batch_idx_train,
-                        local_rank=rank)
+                        local_rank=rank,
+                        torchscript=args.torchscript_epoch != -1 and epoch >= args.torchscript_epoch
+                        )
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,

@@ -3,14 +3,18 @@
 # Copyright (c)  2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
-import k2
 import math
+from typing import Dict, List, Optional, Tuple
+
+import k2
 import torch
 from torch import Tensor, nn
-from typing import Dict, List, Optional, Tuple
 
 from snowfall.common import get_texts
 from snowfall.models import AcousticModel
+
+# Note: TorchScript requires Dict/List/etc. to be fully typed.
+Supervisions = Dict[str, Tensor]
 
 
 class Transformer(AcousticModel):
@@ -80,7 +84,7 @@ class Transformer(AcousticModel):
         else:
             self.decoder_criterion = None
 
-    def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
+    def forward(self, x: Tensor, supervision: Optional[Supervisions] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -96,7 +100,7 @@ class Transformer(AcousticModel):
         x = self.encoder_output(encoder_memory)
         return x, encoder_memory, memory_mask
 
-    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
+    def encode(self, x: Tensor, supervisions: Optional[Supervisions] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -129,7 +133,8 @@ class Transformer(AcousticModel):
         x = nn.functional.log_softmax(x, dim=1)  # (B, F, T)
         return x
 
-    def decoder_forward(self, x: Tensor, encoder_mask: Tensor, supervision: Dict, graph_compiler: object) -> Tensor:
+    def decoder_forward(self, x: Tensor, encoder_mask: Tensor, supervision: Supervisions,
+                        graph_compiler: object) -> Tensor:
         """
         Args:
             x: Tensor of dimension (input_length, batch_size, d_model).
@@ -638,7 +643,7 @@ class LabelSmoothingLoss(nn.Module):
         return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
 
 
-def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> Optional[Tensor]:
+def encoder_padding_mask(max_len: int, supervisions: Optional[Supervisions] = None) -> Optional[Tensor]:
     """Make mask tensor containing indices of padded part.
 
     Args:
@@ -648,7 +653,7 @@ def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> O
     Returns:
         Tensor: Mask tensor of dimension (batch_size, input_length), True denote the masked indices.
     """
-    if supervisions == None:
+    if supervisions is None:
         return None
 
     supervision_segments = torch.stack(
@@ -657,14 +662,23 @@ def encoder_padding_mask(max_len: int, supervisions: Optional[Dict] = None) -> O
          supervisions['num_frames']), 1).to(torch.int32)
 
     lengths = [0 for _ in range(int(max(supervision_segments[:, 0])) + 1)]
-    for sequence_idx, start_frame, num_frames in supervision_segments:
+    for idx in range(supervision_segments.size(0)):
+        # Note: TorchScript doesn't allow to unpack tensors as tuples
+        sequence_idx = supervision_segments[idx, 0].item()
+        start_frame = supervision_segments[idx, 1].item()
+        num_frames = supervision_segments[idx, 2].item()
         lengths[sequence_idx] = start_frame + num_frames
 
-    lengths = [((i -1) // 2 - 1) // 2 for i in lengths]
+    lengths = [((i - 1) // 2 - 1) // 2 for i in lengths]
     bs = int(len(lengths))
     seq_range = torch.arange(0, max_len, dtype=torch.int64)
     seq_range_expand = seq_range.unsqueeze(0).expand(bs, max_len)
-    seq_length_expand = seq_range_expand.new(lengths).unsqueeze(-1)
+    # Note: TorchScript doesn't implement Tensor.new()
+    seq_length_expand = torch.tensor(
+        lengths,
+        device=seq_range_expand.device,
+        dtype=seq_range_expand.dtype
+    ).unsqueeze(-1)
     mask = seq_range_expand >= seq_length_expand
 
     return mask
@@ -685,7 +699,7 @@ def decoder_padding_mask(ys_pad: Tensor, ignore_id: int = -1) -> Tensor:
     return ys_mask
 
 
-def get_normal_transcripts(supervision: Dict, words: k2.SymbolTable, oov: str = '<UNK>') -> List[List[int]]:
+def get_normal_transcripts(supervision: Supervisions, words: k2.SymbolTable, oov: str = '<UNK>') -> List[List[int]]:
     """Get normal transcripts (1 input recording has 1 transcript) from lhotse cut format.
     Achieved by concatenate the transcripts corresponding to the same recording.
 

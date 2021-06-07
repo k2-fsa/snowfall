@@ -7,8 +7,8 @@ from typing import Tuple
 import k2
 import torch
 
-from .ctc_graph import build_ctc_topo
 from snowfall.common import get_phone_symbols
+from .ctc_graph import build_ctc_topo
 from ..lexicon import Lexicon
 
 
@@ -110,7 +110,13 @@ class MmiTrainingGraphCompiler(object):
               shape of the `num_graph` if replicate_den is True; otherwise, it
               is an FsaVec containing only a single FSA.
         '''
-        assert P.device == self.device
+        self_device = str(self.device)
+        if self_device == 'cuda':
+            # the compilers graph device does not specify GPU ID, just check that both tensors are on GPU
+            assert str(P.device).startswith(
+                'cuda'), f'Assertion failed: GraphCompiler uses on "cuda", but P is on "{P.device}"'
+        else:
+            assert str(P.device) == str(self.device), f'Assertion failed: "{P.device} == {self.device}"'
         P_with_self_loops = k2.add_epsilon_self_loops(P)
 
         ctc_topo_P = k2.intersect(self.ctc_topo_inv,

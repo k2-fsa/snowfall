@@ -3,16 +3,14 @@
 # Copyright (c)  2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
-import k2
 import math
+import warnings
+from typing import Optional, Tuple
+
 import torch
 from torch import Tensor, nn
-from typing import Dict, List, Optional, Tuple
-import warnings
-import copy
 
-from snowfall.common import get_texts
-from snowfall.models.transformer import Transformer, encoder_padding_mask
+from snowfall.models.transformer import Supervisions, Transformer, encoder_padding_mask
 
 
 class Conformer(Transformer):
@@ -52,7 +50,7 @@ class Conformer(Transformer):
         if self.normalize_before and self.is_espnet_structure:
             self.after_norm = nn.LayerNorm(d_model)
 
-    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
+    def encode(self, x: Tensor, supervisions: Optional[Supervisions] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -266,7 +264,8 @@ class RelPositionalEncoding(torch.nn.Module):
             # self.pe contains both positive and negative parts
             # the length of self.pe is 2 * input_len - 1
             if self.pe.size(1) >= x.size(1) * 2 - 1:
-                if self.pe.dtype != x.dtype or self.pe.device != x.device:
+                # Note: TorchScript doesn't implement operator== for torch.Device
+                if self.pe.dtype != x.dtype or str(self.pe.device) != str(x.device):
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
         # Suppose `i` means to the position of query vecotr and `j` means the
@@ -423,11 +422,15 @@ class RelPositionMultiheadAttention(nn.Module):
           the key, while time1 is for the query).
         """
         (batch_size, num_heads, time1, n) = x.shape
-        assert n == 2*time1 - 1
-        (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
+        assert n == 2 * time1 - 1
+        # Note: TorchScript requires explicit arg for stride()
+        batch_stride = x.stride(0)
+        head_stride = x.stride(1)
+        time1_stride = x.stride(2)
+        n_stride = x.stride(3)
         return x.as_strided((batch_size, num_heads, time1, time1),
                             (batch_stride, head_stride, time1_stride - n_stride, n_stride),
-                            storage_offset=n_stride*(time1 - 1))
+                            storage_offset=n_stride * (time1 - 1))
 
     def multi_head_attention_forward(self, query: Tensor,
                                     key: Tensor,
