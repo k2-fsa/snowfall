@@ -36,7 +36,8 @@ class Conformer(Transformer):
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, cnn_module_kernel: int = 31,
-                 normalize_before: bool = True, vgg_frontend: bool = False) -> None:
+                 normalize_before: bool = True, vgg_frontend: bool = False,
+                 is_espnet_structure: bool = False) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
                  d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                  num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
@@ -44,8 +45,12 @@ class Conformer(Transformer):
 
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
-        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before)
+        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before, is_espnet_structure)
         self.encoder = ConformerEncoder(encoder_layer, num_encoder_layers)
+        self.normalize_before = normalize_before
+        self.is_espnet_structure = is_espnet_structure
+        if self.normalize_before and self.is_espnet_structure:
+            self.after_norm = nn.LayerNorm(d_model)
 
     def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
@@ -65,6 +70,9 @@ class Conformer(Transformer):
         mask = encoder_padding_mask(x.size(0), supervisions)
         mask = mask.to(x.device) if mask != None else None
         x = self.encoder(x, pos_emb, src_key_padding_mask=mask)  # (T, B, F)
+
+        if self.normalize_before and self.is_espnet_structure:
+            x = self.after_norm(x)
 
         return x, mask
 
@@ -90,9 +98,10 @@ class ConformerEncoderLayer(nn.Module):
     """
 
     def __init__(self, d_model: int, nhead: int, dim_feedforward: int = 2048, dropout: float = 0.1,
-                 cnn_module_kernel: int = 31, normalize_before: bool = True) -> None:
+                 cnn_module_kernel: int = 31, normalize_before: bool = True,
+                 is_espnet_structure: bool = False) -> None:
         super(ConformerEncoderLayer, self).__init__()
-        self.self_attn = RelPositionMultiheadAttention(d_model, nhead, dropout=0.0)
+        self.self_attn = RelPositionMultiheadAttention(d_model, nhead, dropout=0.0, is_espnet_structure=is_espnet_structure)
 
         self.feed_forward = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
@@ -319,7 +328,8 @@ class RelPositionMultiheadAttention(nn.Module):
         >>> attn_output, attn_output_weights = multihead_attn(query, key, value, pos_emb)
     """
 
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.) -> None:
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.,
+                 is_espnet_structure: bool = False) -> None:
         super(RelPositionMultiheadAttention, self).__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -338,6 +348,8 @@ class RelPositionMultiheadAttention(nn.Module):
         self.pos_bias_v = nn.Parameter(torch.Tensor(num_heads, self.head_dim))
 
         self._reset_parameters()
+
+        self.is_espnet_structure = is_espnet_structure
 
     def _reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.in_proj.weight)
@@ -538,7 +550,8 @@ class RelPositionMultiheadAttention(nn.Module):
                 _b = _b[_start:]
             v = nn.functional.linear(value, _w, _b)
 
-        q = q * scaling
+        if not self.is_espnet_structure:
+            q = q * scaling
 
         if attn_mask is not None:
             assert attn_mask.dtype == torch.float32 or attn_mask.dtype == torch.float64 or \
@@ -596,7 +609,10 @@ class RelPositionMultiheadAttention(nn.Module):
         matrix_bd = torch.matmul(q_with_bias_v, p.transpose(-2, -1)) # (batch, head, time1, 2*time1-1)
         matrix_bd = self.rel_shift(matrix_bd)
 
-        attn_output_weights = (matrix_ac + matrix_bd)  # (batch, head, time1, time2)
+        if not self.is_espnet_structure:
+            attn_output_weights = (matrix_ac + matrix_bd)  # (batch, head, time1, time2)
+        else:
+            attn_output_weights = (matrix_ac + matrix_bd) * scaling  # (batch, head, time1, time2)
 
         attn_output_weights = attn_output_weights.view(bsz * num_heads, tgt_len, -1)
 
