@@ -86,9 +86,16 @@ def compute_edit_distance(ref_ali: Dict[str, Alignment],
 
     utts_in_ref_only = utts_in_ref - utts_in_hyp
     if utts_in_ref_only:
-        s = "Decoding results are missing for the following utterances:\n\n"
+        s = 'Decoding results are missing for the following utterances:\n\n'
         sep = '\n'
         s += f'{sep.join(utts_in_ref_only)}\n'
+        print(s, file=sys.stderr)
+
+    utts_in_hyp_only = utts_in_hyp - utts_in_ref
+    if utts_in_hyp_only:
+        s = 'Reference transcripts are missing for the following utterances:\n\n'
+        sep = '\n'
+        s += f'{sep.join(utts_in_hyp_only)}\n'
         print(s, file=sys.stderr)
 
     for utt in utts_in_both:

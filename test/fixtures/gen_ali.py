@@ -47,6 +47,11 @@ def generate_alignment_2() -> Dict[str, Alignment]:
     ali.value['ilabel'] = [6, 8, 1, 3]
     ans['utt2'] = ali
 
+    ali = Alignment({})
+    ali.value['phone'] = [2, 5, 5, 1, 3]
+    ali.value['ilabel'] = [2, 2, 3, 5, 6]
+    ans['utt4'] = ali
+
     return ans
 
 
