@@ -5,6 +5,8 @@ from typing import Dict
 from typing import List
 from typing import Union
 
+import sys
+
 import k2
 
 from snowfall.common import write_error_stats
@@ -77,9 +79,19 @@ def compute_edit_distance(ref_ali: Dict[str, Alignment],
     '''
     pairs = []  # each element contains a pair (ref_transcript, hyp_transcript)
 
-    # We assume that the same utterance exists both in ref_ali and in hyp_ali.
-    # An exception is thrown if the assumption is violated.
-    for utt in ref_ali:
+    utts_in_ref = set(ref_ali.keys())
+    utts_in_hyp = set(hyp_ali.keys())
+
+    utts_in_both = utts_in_ref & utts_in_hyp
+
+    utts_in_ref_only = utts_in_ref - utts_in_hyp
+    if utts_in_ref_only:
+        s = "Decoding results are missing for the following utterances:\n\n"
+        sep = '\n'
+        s += f'{sep.join(utts_in_ref_only)}\n'
+        print(s, file=sys.stderr)
+
+    for utt in utts_in_both:
         ref = ref_ali[utt].value[type]
         hyp = hyp_ali[utt].value[type]
         pairs.append((ref, hyp))
