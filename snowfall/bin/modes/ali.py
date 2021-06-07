@@ -40,6 +40,7 @@ def ali():
 @click.option('-o',
               '--output-file',
               type=click.Path(dir_okay=False),
+              required=True,
               help='Output file')
 @click.option('-s',
               '--symbol-table',
