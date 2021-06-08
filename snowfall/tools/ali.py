@@ -143,8 +143,6 @@ def visualize(input: str,
     Returns:
       Return None.
     '''
-    assert output_file.endswith('.pdf')
-
     # From https://www.fon.hum.uva.nl/praat/manual/Scripting_6_9__Calling_from_the_command_line.html
     paths = [
         r'C:\Program Files\Praat.exe',  # windows
@@ -162,6 +160,21 @@ def visualize(input: str,
         raise Exception('Could not find "praat". Please visit \n'
                         'https://www.fon.hum.uva.nl/praat/'
                         '\nto download it')
+
+    suffix = Path(output_file).suffix
+    assert suffix in ('.pdf', '.png', '.eps'), \
+            f'It supports only pdf, png, and eps format at present. ' \
+            'Given: {output_file}'
+    if suffix == '.pdf':
+        out_file_cmd = f'Save as PDF file: "{Path(output_file).resolve()}"'
+    elif suffix == '.png':
+        out_file_cmd = f'Save as 300-dpi PNG file: "{Path(output_file).resolve()}"'
+    elif suffix == '.eps':
+        out_file_cmd = f'Save as EPS file: "{Path(output_file).resolve()}"'
+    else:
+        raise ValueError(f'Unsupported extension {suffix}.\n' \
+                'Only .pdf, .eps, and .png are supported')
+
     command = f'''
       Read from file: "{Path(input).resolve()}"
       Read from file: "{Path(text_grid).resolve()}"
@@ -169,7 +182,7 @@ def visualize(input: str,
       Font size: {font_size}
       Select outer viewport: 0, {width}, 0, {height}
       Draw: {start}, {end}, "yes", "yes", "yes"
-      Save as PDF file: "{Path(output_file).resolve()}"
+      {out_file_cmd}
     '''
     tmp_file = tempfile.NamedTemporaryFile(delete=False)
     tmp_file.close()
@@ -178,7 +191,7 @@ def visualize(input: str,
         f.write(command)
 
     cmd = f'{p} --run {tmp_name}'
-    ret = os.system(f'{p} --run {tmp_name}')
+    ret = os.system(cmd)
     Path(tmp_name).unlink()
     if ret != 0:
         raise Exception(f'Failed to run\n{cmd}\n'

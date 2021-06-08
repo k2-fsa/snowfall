@@ -1,6 +1,8 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 
+from pathlib import Path
 from typing import Optional
+
 import sys
 
 import click
@@ -95,7 +97,7 @@ def edit_distance(ref: str,
               '--output-file',
               type=click.Path(dir_okay=False),
               required=True,
-              help='Output pdf filename')
+              help='Output filename. Must end with .pdf, .png, or .eps')
 @click.option('-s',
               '--start',
               type=float,
@@ -111,14 +113,14 @@ def edit_distance(ref: str,
 @click.option('-w',
               '--width',
               type=float,
-              default=6,
+              default=6.0,
               show_default=True,
               help='The width of the viewport. Select a large '
               'value for a long sound file')
 @click.option('-h',
               '--height',
               type=float,
-              default=4,
+              default=4.0,
               show_default=True,
               help='The height of the viewport')
 @click.option('-f',
@@ -143,8 +145,9 @@ def visualize(input: str,
                                -t /path/foo.TextGrid \
                                -o /path/foo.pdf
     '''
-    assert output_file.endswith('.pdf'), \
-            f'It supports only pdf format at present. Given: {output_file}'
+    assert Path(output_file).suffix in ('.pdf', '.png', '.eps'), \
+            f'It supports only pdf, png, and eps format at present. ' \
+            'Given: {output_file}'
 
     visualize_impl(input=input,
                    text_grid=text_grid,
