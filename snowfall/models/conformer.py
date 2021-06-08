@@ -3,16 +3,14 @@
 # Copyright (c)  2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
-import k2
 import math
+import warnings
+from typing import Optional, Tuple
+
 import torch
 from torch import Tensor, nn
-from typing import Dict, List, Optional, Tuple
-import warnings
-import copy
 
-from snowfall.common import get_texts
-from snowfall.models.transformer import Transformer, encoder_padding_mask
+from snowfall.models.transformer import Supervisions, Transformer, encoder_padding_mask
 
 
 class Conformer(Transformer):
@@ -39,20 +37,25 @@ class Conformer(Transformer):
                  normalize_before: bool = True, vgg_frontend: bool = False,
                  is_espnet_structure: bool = False) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
-                 d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
-                 num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
-                 dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
+                                        d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
+                                        num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
+                                        dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
 
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
-        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before, is_espnet_structure)
+        encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel,
+                                              normalize_before, is_espnet_structure)
         self.encoder = ConformerEncoder(encoder_layer, num_encoder_layers)
         self.normalize_before = normalize_before
         self.is_espnet_structure = is_espnet_structure
         if self.normalize_before and self.is_espnet_structure:
             self.after_norm = nn.LayerNorm(d_model)
+        else:
+            # Note: TorchScript detects that self.after_norm could be used inside forward()
+            #       and throws an error without this change.
+            self.after_norm = identity
 
-    def encode(self, x: Tensor, supervisions: Optional[Dict] = None) -> Tuple[Tensor, Optional[Tensor]]:
+    def encode(self, x: Tensor, supervisions: Optional[Supervisions] = None) -> Tuple[Tensor, Optional[Tensor]]:
         """
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
@@ -68,7 +71,8 @@ class Conformer(Transformer):
         x, pos_emb = self.encoder_pos(x)
         x = x.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
         mask = encoder_padding_mask(x.size(0), supervisions)
-        mask = mask.to(x.device) if mask != None else None
+        if mask is not None:
+            mask = mask.to(x.device)
         x = self.encoder(x, pos_emb, src_key_padding_mask=mask)  # (T, B, F)
 
         if self.normalize_before and self.is_espnet_structure:
@@ -266,7 +270,8 @@ class RelPositionalEncoding(torch.nn.Module):
             # self.pe contains both positive and negative parts
             # the length of self.pe is 2 * input_len - 1
             if self.pe.size(1) >= x.size(1) * 2 - 1:
-                if self.pe.dtype != x.dtype or self.pe.device != x.device:
+                # Note: TorchScript doesn't implement operator== for torch.Device
+                if self.pe.dtype != x.dtype or str(self.pe.device) != str(x.device):
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
         # Suppose `i` means to the position of query vecotr and `j` means the
@@ -423,11 +428,15 @@ class RelPositionMultiheadAttention(nn.Module):
           the key, while time1 is for the query).
         """
         (batch_size, num_heads, time1, n) = x.shape
-        assert n == 2*time1 - 1
-        (batch_stride, head_stride, time1_stride, n_stride) = x.stride()
+        assert n == 2 * time1 - 1
+        # Note: TorchScript requires explicit arg for stride()
+        batch_stride = x.stride(0)
+        head_stride = x.stride(1)
+        time1_stride = x.stride(2)
+        n_stride = x.stride(3)
         return x.as_strided((batch_size, num_heads, time1, time1),
                             (batch_stride, head_stride, time1_stride - n_stride, n_stride),
-                            storage_offset=n_stride*(time1 - 1))
+                            storage_offset=n_stride * (time1 - 1))
 
     def multi_head_attention_forward(self, query: Tensor,
                                     key: Tensor,
@@ -726,3 +735,7 @@ class Swish(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Return Swich activation function."""
         return x * torch.sigmoid(x)
+
+
+def identity(x):
+    return x

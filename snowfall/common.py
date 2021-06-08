@@ -173,10 +173,12 @@ def save_checkpoint(
         valid_objf: float,
         global_batch_idx_train: int,
         local_rank: int = 0,
-        scaler: Optional[GradScaler] = None
+        scaler: Optional[GradScaler] = None,
+        torchscript: bool = False
 ) -> None:
     if local_rank is not None and local_rank != 0:
         return
+    filename = Path(filename)
     if isinstance(model, DistributedDataParallel):
         model = model.module
     logging.info(f'Save checkpoint to {filename}: epoch={epoch}, '
@@ -196,6 +198,11 @@ def save_checkpoint(
         'subsampling_factor': model.subsampling_factor,
     }
     torch.save(checkpoint, filename)
+    if torchscript:
+        if not isinstance(model, torch.jit.ScriptModule):
+            model = torch.jit.script(model)
+        exp_dir, name = filename.parent, filename.name
+        model.save(exp_dir / f'torchscript_{name}')
 
 
 def save_training_info(
