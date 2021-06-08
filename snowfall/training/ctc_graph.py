@@ -71,7 +71,7 @@ def build_ctc_topo2(phones: List[int]):
     arcs = [' '.join(arc) for arc in arcs]
     arcs = '\n'.join(arcs)
     ctc_topo = k2.Fsa.from_str(arcs, False)
-    return ctc_topo
+    return k2.arc_sort(ctc_topo)
 
 
 class CtcTrainingGraphCompiler(object):
