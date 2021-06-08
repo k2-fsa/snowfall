@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import Dict
 from typing import List
 from typing import Union
+from pathlib import Path
 
+import os
+import shutil
 import sys
+import tempfile
 
 import k2
 
@@ -105,3 +109,90 @@ def compute_edit_distance(ref_ali: Dict[str, Alignment],
 
     with open(output_file, 'w') as f:
         write_error_stats(f, 'test', pairs)
+
+
+def visualize(input: str,
+              text_grid: str,
+              output_file: str,
+              start: float = 0.0,
+              end: float = 0.0,
+              width: float = 6.0,
+              height: float = 4.0,
+              font_size: int = 12):
+    '''Visualize a text gird file using Praat.
+
+    Args:
+      input:
+        The filename of the input sound.
+      text_grid:
+        The filename of the text grid.
+      output_file:
+        Filename of the output file. Currently, it requires that the name ends
+        with `.pdf`.
+      start:
+        The start time in seconds.
+      end:
+        The end time in seconds. 0 means the end of wave.
+      width:
+        The size of the viewport in inches. Select a large value if the wave is
+        long.
+      height:
+        The size of the viewport in inches.
+      font_size:
+        Size of the font.
+    Returns:
+      Return None.
+    '''
+    # From https://www.fon.hum.uva.nl/praat/manual/Scripting_6_9__Calling_from_the_command_line.html
+    paths = [
+        r'C:\Program Files\Praat.exe',  # windows
+        '/Applications/Praat.app/Contents/MacOS/Praat',  # macOS
+        '/usr/bin/praat',  # Linux
+    ]
+    p = None
+    for i in range(len(paths)):
+        if Path(paths[i]).exists():
+            p = paths[i]
+            break
+    if not p:
+        p = shutil.which('praat')
+    if not p:
+        raise Exception('Could not find "praat". Please visit \n'
+                        'https://www.fon.hum.uva.nl/praat/'
+                        '\nto download it')
+
+    suffix = Path(output_file).suffix
+    assert suffix in ('.pdf', '.png', '.eps'), \
+            f'It supports only pdf, png, and eps format at present. ' \
+            'Given: {output_file}'
+    if suffix == '.pdf':
+        out_file_cmd = f'Save as PDF file: "{Path(output_file).resolve()}"'
+    elif suffix == '.png':
+        out_file_cmd = f'Save as 300-dpi PNG file: "{Path(output_file).resolve()}"'
+    elif suffix == '.eps':
+        out_file_cmd = f'Save as EPS file: "{Path(output_file).resolve()}"'
+    else:
+        raise ValueError(f'Unsupported extension {suffix}.\n' \
+                'Only .pdf, .eps, and .png are supported')
+
+    command = f'''
+      Read from file: "{Path(input).resolve()}"
+      Read from file: "{Path(text_grid).resolve()}"
+      selectObject: 1, 2
+      Font size: {font_size}
+      Select outer viewport: 0, {width}, 0, {height}
+      Draw: {start}, {end}, "yes", "yes", "yes"
+      {out_file_cmd}
+    '''
+    tmp_file = tempfile.NamedTemporaryFile(delete=False)
+    tmp_file.close()
+    tmp_name = tmp_file.name
+    with open(tmp_name, 'w') as f:
+        f.write(command)
+
+    cmd = f'{p} --run {tmp_name}'
+    ret = os.system(cmd)
+    Path(tmp_name).unlink()
+    if ret != 0:
+        raise Exception(f'Failed to run\n{cmd}\n'
+                        f'The praat script content is:\n{command}')
