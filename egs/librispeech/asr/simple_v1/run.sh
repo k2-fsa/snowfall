@@ -31,23 +31,35 @@ fi
 
 if [ $stage -le 4 ]; then
   # Build G
-  python3 -m kaldilm \
-    --read-symbol-table="data/lang_nosp/words.txt" \
-    --disambig-symbol='#0' \
-    --max-order=1 \
-    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G_uni.fst.txt
+  if [ ! -f data/lang_nosp/G_uni.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="data/lang_nosp/words.txt" \
+      --disambig-symbol='#0' \
+      --max-order=1 \
+      data/local/lm/lm_tgmed.arpa >data/lang_nosp/G_uni.fst.txt
+  else
+    echo "Skip generating data/lang_nosp/G_uni.fst.txt"
+  fi
 
-  python3 -m kaldilm \
-    --read-symbol-table="data/lang_nosp/words.txt" \
-    --disambig-symbol='#0' \
-    --max-order=3 \
-    data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fst.txt
+  if [ ! -f data/lang_nosp/G.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="data/lang_nosp/words.txt" \
+      --disambig-symbol='#0' \
+      --max-order=3 \
+      data/local/lm/lm_tgmed.arpa >data/lang_nosp/G.fst.txt
+  else
+    echo "Skip generating data/lang_nosp/G.fst.txt"
+  fi
 
-  python3 -m kaldilm \
-    --read-symbol-table="data/lang_nosp/words.txt" \
-    --disambig-symbol='#0' \
-    --max-order=4 \
-    data/local/lm/lm_fglarge.arpa >data/lang_nosp/G_4_gram.fst.txt
+  if [ ! -f data/lang_nosp/G_4_gram.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="data/lang_nosp/words.txt" \
+      --disambig-symbol='#0' \
+      --max-order=4 \
+      data/local/lm/lm_fglarge.arpa >data/lang_nosp/G_4_gram.fst.txt
+  else
+    echo "Skip generating data/lang_nosp/G_4_gram.fst.txt"
+  fi
 
   echo ""
   echo "To load G:"
