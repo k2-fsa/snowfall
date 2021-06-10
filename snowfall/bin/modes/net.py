@@ -34,12 +34,14 @@ def net():
               default=200,
               type=int,
               required=True,
+              show_default=True,
               help='max duration in seconds in a batch')
 @click.option('-i',
               '--device-id',
               default=0,
               type=int,
               required=True,
+              show_default=True,
               help='-1 to use CPU. Otherwise, it is the GPU device ID')
 @click.option('-o',
               '--output-dir',
