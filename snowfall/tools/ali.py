@@ -12,8 +12,15 @@ import sys
 import tempfile
 
 import k2
+import lhotse
+import torch
 
+from snowfall.common import find_first_disambig_symbol
+from snowfall.common import invert_permutation
 from snowfall.common import write_error_stats
+from snowfall.decoding.graph import compile_HLG
+from snowfall.training.ctc_graph import build_ctc_topo
+from snowfall.training.mmi_graph import get_phone_symbols
 
 
 @dataclass
@@ -196,3 +203,107 @@ def visualize(input: str,
     if ret != 0:
         raise Exception(f'Failed to run\n{cmd}\n'
                         f'The praat script content is:\n{command}')
+
+
+def compute_ali(lang_dir: str,
+                posts: str,
+                output_dir: str,
+                device: torch.device,
+                max_duration: int = 200,
+                output_beam_size: float = 8.0):
+    # First, load lang
+    lang_dir = Path(lang_dir)
+
+    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    phone_ids = get_phone_symbols(phone_symbol_table)
+
+    phone_ids_with_blank = [0] + phone_ids
+    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
+
+    if not (lang_dir / 'HLG.pt').exists():
+        print('Loading L_disambig.fst.txt')
+        with open(lang_dir / 'L_disambig.fst.txt') as f:
+            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
+        print('Loading G.fst.txt')
+        with open(lang_dir / 'G.fst.txt') as f:
+            G = k2.Fsa.from_openfst(f.read(), acceptor=False)
+        first_phone_disambig_id = find_first_disambig_symbol(
+            phone_symbol_table)
+        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
+        HLG = compile_HLG(L=L,
+                          G=G,
+                          H=ctc_topo,
+                          labels_disambig_id_start=first_phone_disambig_id,
+                          aux_labels_disambig_id_start=first_word_disambig_id)
+        torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
+    else:
+        print('Loading pre-compiled HLG')
+        d = torch.load(lang_dir / 'HLG.pt')
+        HLG = k2.Fsa.from_dict(d)
+
+    HLG = HLG.to(device)
+    HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
+    HLG.requires_grad_(False)
+
+    # Second, load posteriors
+    cuts = lhotse.load_manifest(posts)
+    dataset = lhotse.dataset.K2SpeechRecognitionDataset(
+        cuts,
+        input_strategy=lhotse.dataset.PrecomputedPosteriors(),
+        return_cuts=True)
+    sampler = lhotse.dataset.SingleCutSampler(cuts, max_duration=max_duration)
+
+    dataloader = torch.utils.data.DataLoader(dataset,
+                                             batch_size=None,
+                                             sampler=sampler,
+                                             num_workers=1)
+
+    ans = {}
+    for batch_idx, batch in enumerate(dataloader):
+        if batch_idx % 10 == 0:
+            print(f'Processing batch {batch_idx}')
+
+        nnet_output = batch['inputs'].to(device)
+
+        supervisions = batch['supervisions']
+
+        supervision_segments = torch.stack(
+            (supervisions['sequence_idx'], supervisions['start_frame'],
+             supervisions['num_frames']), 1).to(torch.int32)
+
+        indices = torch.argsort(supervision_segments[:, 2], descending=True)
+        supervision_segments = supervision_segments[indices]
+        texts = supervisions['text']  # TODO: remove it
+
+        sf = supervisions['cut'][0].posts.subsampling_factor
+        dense_fsa_vec = k2.DenseFsaVec(nnet_output,
+                                       supervision_segments,
+                                       allow_truncate=sf - 1)
+
+        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0,
+                                             output_beam_size, 30, 10000)
+
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        inverted_indices = invert_permutation(indices).to(device=device,
+                                                          dtype=torch.int32)
+
+        best_paths = k2.index_fsa(best_paths, inverted_indices)
+
+        labels = k2.RaggedInt(best_paths.arcs.shape(),
+                              best_paths.labels.clone())
+        labels = k2.ragged.remove_axis(labels, 1)
+        labels = k2.ragged.to_list(labels)
+
+        cut = supervisions['cut']
+        for utt_ali, c in zip(labels, cut):
+            ali = Alignment({})
+            ali.value['phone'] = utt_ali
+            # TODO(fangjun): Compute ali.value['word']
+            ans[c.id] = ali
+
+    output_dir = Path(output_dir)
+    out_file = output_dir / 'ali.pt'
+    torch.save(ans, out_file)
+
+    print(f'Saved to {out_file}')
