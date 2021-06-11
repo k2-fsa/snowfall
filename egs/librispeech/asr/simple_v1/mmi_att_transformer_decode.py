@@ -103,68 +103,6 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     return results
 
 
-def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
-                                   phone_ids: List[int], filename: str):
-    '''Print the transition probabilities of a phone LM.
-
-    Args:
-      P:
-        A bigram phone LM.
-      phone_symbol_table:
-        The phone symbol table.
-      phone_ids:
-        A list of phone ids
-      filename:
-        Filename to save the printed result.
-    '''
-    num_phones = len(phone_ids)
-    table = np.zeros((num_phones + 1, num_phones + 2))
-    table[:, 0] = 0
-    table[0, -1] = 0  # the start state has no arcs to the final state
-    assert P.arcs.dim0() == num_phones + 2
-    arcs = P.arcs.values()[:, :3]
-    probability = P.scores.exp().tolist()
-
-    assert arcs.shape[0] - num_phones == num_phones * (num_phones + 1)
-    for i, arc in enumerate(arcs.tolist()):
-        src_state, dest_state, label = arc[0], arc[1], arc[2]
-        prob = probability[i]
-        if label != -1:
-            assert label == dest_state
-        else:
-            assert dest_state == num_phones + 1
-        table[src_state][dest_state] = prob
-
-    try:
-        from prettytable import PrettyTable
-    except ImportError:
-        print('Please run `pip install prettytable`. Skip printing')
-        return
-
-    x = PrettyTable()
-
-    field_names = ['source']
-    field_names.append('sum')
-    for i in phone_ids:
-        field_names.append(phone_symbol_table[i])
-    field_names.append('final')
-
-    x.field_names = field_names
-
-    for row in range(num_phones + 1):
-        this_row = []
-        if row == 0:
-            this_row.append('start')
-        else:
-            this_row.append(phone_symbol_table[row])
-        this_row.append('{:.6f}'.format(table[row, 1:].sum()))
-        for col in range(1, num_phones + 2):
-            this_row.append('{:.6f}'.format(table[row, col]))
-        x.add_row(this_row)
-    with open(filename, 'w') as f:
-        f.write(str(x))
-
-
 def get_parser():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument(
@@ -182,7 +120,7 @@ def get_parser():
         '--avg',
         type=int,
         default=5,
-        help="Number of checkpionts to average. Automaticly select "
+        help="Number of checkpionts to average. Automatically select "
              "consecutive checkpoints before checkpoint specified by'--epoch'. ")
     parser.add_argument(
         '--att-rate',
@@ -220,6 +158,17 @@ def get_parser():
              'If it is negative, then rescore with the whole lattice.'\
              'CAUTION: You have to reduce max_duration in case of CUDA OOM'
              )
+    parser.add_argument(
+        '--is-espnet-structure',
+        type=str2bool,
+        default=True,
+        help='When enabled, the conformer will have the ' \
+             'same structure like espnet')
+    parser.add_argument(
+        '--vgg-frontend',
+        type=str2bool,
+        default=True,
+        help='When enabled, it uses vgg style network for subsampling')
     return parser
 
 
@@ -276,7 +225,7 @@ def main():
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
-            vgg_frontend=True)
+            vgg_frontend=args.vgg_fronted)
     elif model_type == "conformer":
         model = Conformer(
             num_features=80,
@@ -285,8 +234,8 @@ def main():
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers,
-            vgg_frontend=True,
-            is_espnet_structure=True)
+            vgg_frontend=args.vgg_frontend,
+            is_espnet_structure=args.is_espnet_structure)
     elif model_type == "contextnet":
         model = ContextNet(
         num_features=80,
@@ -306,13 +255,6 @@ def main():
 
     model.to(device)
     model.eval()
-
-    assert P.requires_grad is False
-    P.scores = model.P_scores.cpu()
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='model_P_scores.txt')
-
-    P.set_scores_stochastic_(model.P_scores)
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
