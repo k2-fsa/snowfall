@@ -3,20 +3,14 @@
 from pathlib import Path
 from typing import Optional
 
-import sys
-
 import click
 import k2
 import torch
-import lhotse
 
 from .cli_base import cli
 from snowfall.tools.ali import compute_edit_distance
 from snowfall.tools.ali import convert_id_to_symbol
 from snowfall.tools.ali import visualize as visualize_impl
-from snowfall.tools.ali import compute_ali as compute_ali_impl
-
-from snowfall.common import get_texts
 
 
 @cli.group()
@@ -82,8 +76,6 @@ def edit_distance(ref: str,
                           hyp_ali=hyp_ali,
                           type=type,
                           output_file=output_file)
-
-    print(f'Saved to {output_file}', file=sys.stderr)
 
 
 @ali.command()
@@ -161,64 +153,3 @@ def visualize(input: str,
                    width=width,
                    height=height,
                    font_size=font_size)
-
-    print(f'Saved to {output_file}', file=sys.stderr)
-
-
-@ali.command()
-@click.option('-l',
-              '--lang-dir',
-              type=click.Path(exists=True, dir_okay=True, file_okay=False),
-              required=True,
-              help='The language dir. It is expected to '
-              'contain the following files:\n'
-              ' - words.txt\n'
-              ' - phones.txt\n'
-              ' - HLG.pt (or L_disambig.fst.txt, G.fst.txt\n')
-@click.option('-p',
-              '--posts',
-              type=click.Path(exists=True, dir_okay=False),
-              required=True,
-              help='Path to Posteriors manifest')
-@click.option('-o',
-              '--output-dir',
-              type=click.Path(dir_okay=True),
-              required=True,
-              help='Output directory')
-@click.option('-i',
-              '--device-id',
-              default=0,
-              type=int,
-              show_default=True,
-              help='-1 to use CPU. Otherwise, it is the GPU device ID')
-@click.option('-m',
-              '--max-duration',
-              default=200,
-              type=int,
-              show_default=True,
-              help='max duration in seconds in a batch')
-@click.option('-b',
-              '--output-beam-size',
-              default=8.0,
-              type=float,
-              show_default=True,
-              help='max duration in seconds in a batch')
-def compute_ali(lang_dir: str,
-                posts: str,
-                output_dir: str,
-                device_id: int = 0,
-                max_duration: int = 200,
-                output_beam_size: float = 8.0):
-    if device_id < 0:
-        print('Use CPU')
-        device = torch.device('cpu')
-    else:
-        print(f'Use GPU {device_id}')
-        device = torch.device('cuda', device_id)
-
-    compute_ali_impl(lang_dir=lang_dir,
-                     posts=posts,
-                     output_dir=output_dir,
-                     device=device,
-                     max_duration=max_duration,
-                     output_beam_size=output_beam_size)
