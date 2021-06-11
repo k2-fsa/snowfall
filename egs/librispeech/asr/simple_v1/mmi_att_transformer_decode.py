@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey
+#                                                   Haowen Qiu
+#                                                   Fangjun Kuang)
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
 # Apache 2.0
 
@@ -11,9 +13,14 @@ import numpy as np
 import os
 import torch
 from k2 import Fsa, SymbolTable
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
+from typing import Dict
 from typing import List
+from typing import Optional
 from typing import Union
+
 
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
@@ -34,63 +41,95 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
+def decode_one_batch(batch: Dict[str, Any],
+                     model: AcousticModel,
+                     HLG: k2.Fsa,
+                     output_beam_size: float,
+                     num_paths: int,
+                     use_whole_lattice: bool,
+                     G: Optional[k2.Fsa] = None)->Dict[str, List[List[int]]]:
+    device = HLG.device
+    feature = batch['inputs']
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    # at entry, feature is [N, T, C]
+    feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
+
+    supervisions = batch['supervisions']
+
+    nnet_output, _, _ = model(feature, supervisions)
+    # nnet_output is [N, C, T]
+
+    nnet_output = nnet_output.permute(0, 2, 1)
+    # now nnet_output is [N, T, C]
+
+    supervision_segments = torch.stack(
+        (supervisions['sequence_idx'],
+         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
+         (((supervisions['num_frames'] - 1) // 2 - 1) // 2)),
+        1).to(torch.int32)
+
+    supervision_segments = torch.clamp(supervision_segments, min=0)
+    indices = torch.argsort(supervision_segments[:, 2], descending=True)
+    supervision_segments = supervision_segments[indices]
+
+    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
+
+    lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30, 10000)
+
+    if G is None:
+        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        hyps = get_texts(best_paths, indices)
+        return {'no_rescore': hyps}
+
+    lm_scale_list = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+
+    ans = dict()
+    saved_scores = lattices.scores.clone()
+    for lm_scale in lm_scale_list:
+        lattices.scores = saved_scores.clone()
+        best_paths = decode_with_lm_rescoring(
+            lattices,
+            G,
+            num_paths=num_paths,
+            use_whole_lattice=use_whole_lattice,
+            lm_scale=lm_scale)
+
+        hyps = get_texts(best_paths, indices)
+        key = f'lm_scale_{lm_scale}'
+        ans[key] = hyps
+    return ans
+
+
+@torch.no_grad()
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable,
+           HLG: Fsa, symbols: SymbolTable,
            num_paths: int, G: k2.Fsa, use_whole_lattice: bool, output_beam_size: float):
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
-    results = []  # a list of pair (ref_words, hyp_words)
+    results = defaultdict(list)
     for batch_idx, batch in enumerate(dataloader):
-        feature = batch['inputs']
-        supervisions = batch['supervisions']
-        supervision_segments = torch.stack(
-            (supervisions['sequence_idx'],
-             (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-             (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
-        supervision_segments = torch.clamp(supervision_segments, min=0)
-        indices = torch.argsort(supervision_segments[:, 2], descending=True)
-        supervision_segments = supervision_segments[indices]
-        texts = supervisions['text']
-        assert feature.ndim == 3
+        texts = batch['supervisions']['text']
 
-        feature = feature.to(device)
-        # at entry, feature is [N, T, C]
-        feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-        with torch.no_grad():
-            nnet_output, _, _ = model(feature, supervisions)
-        # nnet_output is [N, C, T]
-        nnet_output = nnet_output.permute(0, 2,
-                                          1)  # now nnet_output is [N, T, C]
+        hyps_dict = decode_one_batch(batch=batch,
+                                     model=model,
+                                     HLG=HLG,
+                                     output_beam_size=output_beam_size,
+                                     num_paths=num_paths,
+                                     use_whole_lattice=use_whole_lattice,
+                                     G=G)
 
-        #  blank_bias = -3.0
-        #  nnet_output[:, :, 0] += blank_bias
+        for key, hyps in hyps_dict.items():
+            this_batch = []
+            assert len(hyps) == len(texts)
 
-        dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-        # assert HLG.is_cuda()
-        assert HLG.device == nnet_output.device, \
-            f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
-        # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
-        # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30,
-                                             10000)
+            for i in range(len(texts)):
+                hyp_words = [symbols.get(x) for x in hyps[i]]
+                ref_words = texts[i].split(' ')
+                this_batch.append((ref_words, hyp_words))
 
-        if G is None:
-            best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        else:
-            best_paths = decode_with_lm_rescoring(
-                lattices,
-                G,
-                num_paths=num_paths,
-                use_whole_lattice=use_whole_lattice)
-
-        assert best_paths.shape[0] == len(texts)
-        hyps = get_texts(best_paths, indices)
-        assert len(hyps) == len(texts)
-
-        for i in range(len(texts)):
-            hyp_words = [symbols.get(x) for x in hyps[i]]
-            ref_words = texts[i].split(' ')
-            results.append((ref_words, hyp_words))
+            results[key].extend(this_batch)
 
         if batch_idx % 10 == 0:
             logging.info(
@@ -326,26 +365,43 @@ def main():
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
-        results = decode(dataloader=test_dl,
-                         model=model,
-                         device=device,
-                         HLG=HLG,
-                         symbols=symbol_table,
-                         num_paths=num_paths,
-                         G=G,
-                         use_whole_lattice=use_whole_lattice,
-                         output_beam_size=output_beam_size)
+        test_set_wers = dict()
+        results_dict = decode(dataloader=test_dl,
+                              model=model,
+                              HLG=HLG,
+                              symbols=symbol_table,
+                              num_paths=num_paths,
+                              G=G,
+                              use_whole_lattice=use_whole_lattice,
+                              output_beam_size=output_beam_size)
 
-        recog_path = exp_dir / f'recogs-{test_set}.txt'
-        store_transcripts(path=recog_path, texts=results)
-        logging.info(f'The transcripts are stored in {recog_path}')
+        for key, results in results_dict.items():
+            recog_path = exp_dir / f'recogs-{test_set}-{key}.txt'
+            store_transcripts(path=recog_path, texts=results)
+            logging.info(f'The transcripts are stored in {recog_path}')
 
-        # The following prints out WERs, per-word error statistics and aligned
-        # ref/hyp pairs.
-        errs_filename = exp_dir / f'errs-{test_set}.txt'
-        with open(errs_filename, 'w') as f:
-            write_error_stats(f, test_set, results)
-        logging.info('Wrote detailed error stats to {}'.format(errs_filename))
+            # The following prints out WERs, per-word error statistics and aligned
+            # ref/hyp pairs.
+            errs_filename = exp_dir / f'errs-{test_set}-{key}.txt'
+            with open(errs_filename, 'w') as f:
+                wer = write_error_stats(f, f'{test_set}-{key}', results)
+                test_set_wers[key] = wer
+
+            logging.info('Wrote detailed error stats to {}'.format(errs_filename))
+
+        test_set_wers = sorted(test_set_wers.items(), key=lambda x: x[1])
+        errs_info = exp_dir / f'wer-summary-{test_set}.txt'
+        with open(errs_info, 'w') as f:
+            print('settings\tWER', file=f)
+            for key, val in test_set_wers:
+                print('{}\t{}'.format(key, val), file=f)
+
+        s = '\nFor {}, WER of different settings are:\n'.format(test_set)
+        note = '\tbest for {}'.format(test_set)
+        for key, val in test_set_wers:
+            s += '{}\t{}{}\n'.format(key, val, note)
+            note=''
+        logging.info(s)
 
 
 torch.set_num_threads(1)

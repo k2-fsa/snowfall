@@ -48,8 +48,10 @@ def _intersect_device(a_fsas: k2.Fsa, b_fsas: k2.Fsa, b_to_a_map: torch.Tensor,
     return k2.cat(ans)
 
 
-def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
-                      path_to_seq_map: torch.Tensor) -> torch.Tensor:
+def compute_am_scores(lats: k2.Fsa,
+                      word_fsas_with_epsilon_loops: k2.Fsa,
+                      path_to_seq_map: torch.Tensor,
+                      lm_scale: float = 1.0) -> torch.Tensor:
     '''Compute AM scores of n-best lists (represented as word_fsas).
 
     Args:
@@ -95,7 +97,8 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
     am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu'))).to(device)
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
-    am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores
+    scores = am_path_lats.scores.clone()
+    am_path_lats.scores = scores + am_path_lats.lm_scores * (lm_scale - 1.0)
 
     am_scores = am_path_lats.get_tot_scores(True, True)
 
@@ -103,8 +106,10 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
 
 
 @torch.no_grad()
-def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
-                             num_paths: int) -> k2.Fsa:
+def rescore_with_n_best_list(lats: k2.Fsa,
+                             G: k2.Fsa,
+                             num_paths: int,
+                             lm_scale: float = 1.0) -> k2.Fsa:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -183,7 +188,7 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
     word_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(word_fsas)
 
     am_scores = compute_am_scores(lats, word_fsas_with_epsilon_loops,
-                                  path_to_seq_map)
+                                  path_to_seq_map, lm_scale)
 
     # Now compute lm_scores
     b_to_a_map = torch.zeros_like(path_to_seq_map)
@@ -234,7 +239,8 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
 
 @torch.no_grad()
 def rescore_with_whole_lattice(lats: k2.Fsa,
-                               G_with_epsilon_loops: k2.Fsa) -> k2.Fsa:
+                               G_with_epsilon_loops: k2.Fsa,
+                               lm_scale: float = 1.0) -> k2.Fsa:
     '''Use whole lattice to rescore.
 
     Args:
@@ -249,7 +255,8 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
     assert G_with_epsilon_loops.shape == (1, None, None)
 
     device = lats.device
-    lats.scores = lats.scores - lats.lm_scores
+    scores = lats.scores.clone()
+    lats.scores = scores + lats.lm_scores * (lm_scale - 1.0)
     # Now, lats.scores contains only am_scores
 
     # inverted_lats has word IDs as labels.
@@ -297,8 +304,11 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
 
 
 @torch.no_grad()
-def decode_with_lm_rescoring(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
-                             use_whole_lattice: bool) -> k2.Fsa:
+def decode_with_lm_rescoring(lats: k2.Fsa,
+                             G: k2.Fsa,
+                             num_paths: int,
+                             use_whole_lattice: bool,
+                             lm_scale: float = 1.0) -> k2.Fsa:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -326,6 +336,6 @@ def decode_with_lm_rescoring(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
       in the lattice.
     '''
     if use_whole_lattice:
-        return rescore_with_whole_lattice(lats, G)
+        return rescore_with_whole_lattice(lats, G, lm_scale=lm_scale)
     else:
-        return rescore_with_n_best_list(lats, G, num_paths)
+        return rescore_with_n_best_list(lats, G, num_paths, lm_scale=lm_scale)
