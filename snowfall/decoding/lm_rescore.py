@@ -97,8 +97,8 @@ def compute_am_scores(lats: k2.Fsa,
     am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu'))).to(device)
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
-    scores = am_path_lats.scores.clone()
-    am_path_lats.scores = scores + am_path_lats.lm_scores * (lm_scale - 1.0)
+    scores = am_path_lats.scores - am_path_lats.lm_scores
+    am_path_lats.scores = scores / lm_scale
 
     am_scores = am_path_lats.get_tot_scores(True, True)
 
@@ -255,8 +255,8 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
     assert G_with_epsilon_loops.shape == (1, None, None)
 
     device = lats.device
-    scores = lats.scores.clone()
-    lats.scores = scores + lats.lm_scores * (lm_scale - 1.0)
+    scores = lats.scores - lats.lm_scores
+    lats.scores = scores / lm_scale
     # Now, lats.scores contains only am_scores
 
     # inverted_lats has word IDs as labels.

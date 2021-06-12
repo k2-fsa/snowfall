@@ -48,6 +48,49 @@ def decode_one_batch(batch: Dict[str, Any],
                      num_paths: int,
                      use_whole_lattice: bool,
                      G: Optional[k2.Fsa] = None)->Dict[str, List[List[int]]]:
+    '''
+    Decode one batch and return the result in a dict. The dict has the
+    following format:
+
+        - key: It indicates the setting used for decoding. For example,
+               if no rescoring is used, the key is the string `no_rescore`.
+               If LM rescoring is used, the key is the string `lm_scale_xxx`,
+               where `xxx` is the value of `lm_scale`. An example key is
+               `lm_scale_0.7`
+        - value: It contains the decoding result. `len(value)` equals to
+                 batch size. `value[i]` is the decoding result for the i-th
+                 utterance in the given batch.
+
+    Args:
+      batch:
+        It is the return value from iterating
+        `lhotse.dataset.K2SpeechRecognitionDataset`. See its documentation
+        for the format of the `batch`.
+      model:
+        The neural network model.
+      HLG:
+        The decoding graph.
+      output_beam_size:
+        Size of the beam for pruning.
+      use_whole_lattice:
+        If True, `G` must not be None and it will use whole lattice for
+        LM rescoring.
+        If False and if `G` is not None, then `num_paths` must be positive
+        and it will use n-best list for LM rescoring.
+      num_paths:
+        Used only if `G` is not None and use_whole_lattice is False.
+        It specify the size of n-best list for LM rescoring.
+      G:
+        The LM. If it is None, no rescoring is used.
+        Otherwise, LM rescoring is used.
+        It supports two types of LM rescoring: n-best list rescoring
+        and whole lattice rescoring.
+        `use_whole_lattice` specifies which type to use.
+
+    Returns:
+      Return the decoding result. See above description for the format of
+      the returned dict.
+    '''
     device = HLG.device
     feature = batch['inputs']
     assert feature.ndim == 3
