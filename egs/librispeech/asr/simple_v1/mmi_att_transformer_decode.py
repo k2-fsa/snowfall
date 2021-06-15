@@ -80,7 +80,7 @@ def decode_one_batch(batch: Dict[str, Any],
         and it will use n-best list for LM rescoring.
       num_paths:
         Used only if `G` is not None and use_whole_lattice is False.
-        It specify the size of n-best list for LM rescoring.
+        It specifies the size of n-best list for LM rescoring.
       G:
         The LM. If it is None, no rescoring is used.
         Otherwise, LM rescoring is used.
@@ -156,6 +156,12 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = defaultdict(list)
+    # results is a dict whose keys and values are:
+    #  - key: It indicates the lm_scale, e.g., lm_scale_1.2.
+    #         If no rescoring is used, the key is the literal string: no_rescore
+    #
+    #  - value: It is a list of tuples (ref_words, hyp_words)
+
     for batch_idx, batch in enumerate(dataloader):
         texts = batch['supervisions']['text']
 
@@ -167,7 +173,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                      use_whole_lattice=use_whole_lattice,
                                      G=G)
 
-        for key, hyps in hyps_dict.items():
+        for lm_scale, hyps in hyps_dict.items():
             this_batch = []
             assert len(hyps) == len(texts)
 
@@ -176,7 +182,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                 ref_words = texts[i].split(' ')
                 this_batch.append((ref_words, hyp_words))
 
-            results[key].extend(this_batch)
+            results[lm_scale].extend(this_batch)
 
         if batch_idx % 10 == 0:
             logging.info(
