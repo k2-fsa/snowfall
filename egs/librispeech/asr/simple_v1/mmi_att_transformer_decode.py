@@ -31,7 +31,8 @@ from snowfall.common import setup_logger
 from snowfall.common import str2bool
 from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
-from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
+from snowfall.decoding.lm_rescore import rescore_with_n_best_list
+from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
@@ -126,22 +127,25 @@ def decode_one_batch(batch: Dict[str, Any],
         hyps = get_texts(best_paths, indices)
         return {'no_rescore': hyps}
 
-    lm_scale_list = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+    lm_scale_list = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
+    lm_scale_list += [1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+
+    if use_whole_lattice:
+        best_paths_dict = rescore_with_whole_lattice(lattices, G,
+                                                     lm_scale_list)
+    else:
+        best_paths_dict = rescore_with_n_best_list(lattices, G, num_paths,
+                                                   lm_scale_list)
+    # best_paths_dict is a dict
+    #  - key: lm_scale_xxx, where xxx is the value of lm_scale. An example
+    #         key is lm_scale_1.2
+    #  - value: it is the best path obtained using the corresponding lm scale
+    #           from the dict key.
 
     ans = dict()
-    saved_scores = lattices.scores.clone()
-    for lm_scale in lm_scale_list:
-        lattices.scores = saved_scores.clone()
-        best_paths = decode_with_lm_rescoring(
-            lattices,
-            G,
-            num_paths=num_paths,
-            use_whole_lattice=use_whole_lattice,
-            lm_scale=lm_scale)
-
+    for lm_scale_str, best_paths in best_paths_dict.items():
         hyps = get_texts(best_paths, indices)
-        key = f'lm_scale_{lm_scale}'
-        ans[key] = hyps
+        ans[lm_scale_str] = hyps
     return ans
 
 
@@ -389,6 +393,9 @@ def main():
             G = k2.add_epsilon_self_loops(G)
             G = k2.arc_sort(G)
             G = G.to(device)
+        # G.lm_scores is used to replace HLG.lm_scores during
+        # LM rescoring.
+        G.lm_scores = G.scores.clone()
     else:
         logging.debug('Decoding without LM rescoring')
         G = None
@@ -404,7 +411,6 @@ def main():
     # load dataset
     librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
-    #  test_sets = ['test-other']
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 

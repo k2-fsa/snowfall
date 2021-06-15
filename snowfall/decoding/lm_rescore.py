@@ -1,5 +1,7 @@
 # Copyright (c)  2021  Xiaomi Corporation (authors: Fangjun Kuang)
 
+from typing import Dict
+from typing import List
 from typing import Optional
 
 import math
@@ -48,10 +50,8 @@ def _intersect_device(a_fsas: k2.Fsa, b_fsas: k2.Fsa, b_to_a_map: torch.Tensor,
     return k2.cat(ans)
 
 
-def compute_am_scores(lats: k2.Fsa,
-                      word_fsas_with_epsilon_loops: k2.Fsa,
-                      path_to_seq_map: torch.Tensor,
-                      lm_scale: float = 1.0) -> torch.Tensor:
+def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
+                      path_to_seq_map: torch.Tensor) -> torch.Tensor:
     '''Compute AM scores of n-best lists (represented as word_fsas).
 
     Args:
@@ -93,12 +93,11 @@ def compute_am_scores(lats: k2.Fsa,
                                      b_to_a_map=path_to_seq_map,
                                      sorted_match_a=True)
 
-    # NOTE: `k2.connect` and `k2.top_sort` support only CPU at present
-    am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu'))).to(device)
+    # NOTE: `k2.connect` supports only CPU at present
+    am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu')).to(device))
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
-    scores = am_path_lats.scores - am_path_lats.lm_scores
-    am_path_lats.scores = scores / lm_scale
+    am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores
 
     am_scores = am_path_lats.get_tot_scores(True, True)
 
@@ -106,10 +105,8 @@ def compute_am_scores(lats: k2.Fsa,
 
 
 @torch.no_grad()
-def rescore_with_n_best_list(lats: k2.Fsa,
-                             G: k2.Fsa,
-                             num_paths: int,
-                             lm_scale: float = 1.0) -> k2.Fsa:
+def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
+                             lm_scale_list: List[float]) -> Dict[str, k2.Fsa]:
     '''Decode using n-best list with LM rescoring.
 
     `lats` is a decoding lattice, which has 3 axes. This function first
@@ -128,9 +125,11 @@ def rescore_with_n_best_list(lats: k2.Fsa,
         is an FsaVec, but it contains only one Fsa.
       num_paths:
         It is the size `n` in `n-best` list.
+      lm_scale_list:
+        A list containing lm_scale values.
     Returns:
-      An FsaVec representing the best decoding path for each sequence
-      in the lattice.
+      A dict of FsaVec, whose key is a lm_scale and the value represents the
+      best decoding path for each sequence in the lattice.
     '''
     device = lats.device
 
@@ -188,7 +187,7 @@ def rescore_with_n_best_list(lats: k2.Fsa,
     word_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(word_fsas)
 
     am_scores = compute_am_scores(lats, word_fsas_with_epsilon_loops,
-                                  path_to_seq_map, lm_scale)
+                                  path_to_seq_map)
 
     # Now compute lm_scores
     b_to_a_map = torch.zeros_like(path_to_seq_map)
@@ -196,51 +195,57 @@ def rescore_with_n_best_list(lats: k2.Fsa,
                                      word_fsas_with_epsilon_loops,
                                      b_to_a_map=b_to_a_map,
                                      sorted_match_a=True)
-    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu'))).to(device)
+    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu')).to(device))
     lm_scores = lm_path_lats.get_tot_scores(True, True)
 
-    tot_scores = am_scores + lm_scores
+    ans = dict()
+    for lm_scale in lm_scale_list:
+        tot_scores = am_scores / lm_scale + lm_scores
 
-    # Remember that we used `k2.ragged.unique_sequences` to remove repeated
-    # paths to avoid redundant computation in `k2.intersect_device`.
-    # Now we use `num_repeats` to correct the scores for each path.
-    #
-    # NOTE(fangjun): It is commented out as it leads to a worse WER
-    # tot_scores = tot_scores * num_repeats.values()
+        # Remember that we used `k2.ragged.unique_sequences` to remove repeated
+        # paths to avoid redundant computation in `k2.intersect_device`.
+        # Now we use `num_repeats` to correct the scores for each path.
+        #
+        # NOTE(fangjun): It is commented out as it leads to a worse WER
+        # tot_scores = tot_scores * num_repeats.values()
 
-    # TODO(fangjun): We may need to add `k2.RaggedDouble`
-    ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
-                                       tot_scores.to(torch.float32))
-    argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)
+        # TODO(fangjun): We may need to add `k2.RaggedDouble`
+        ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
+                                           tot_scores.to(torch.float32))
+        argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)
 
-    # Use k2.index here since argmax_indexes' dtype is torch.int32
-    best_path_indexes = k2.index(new2old, argmax_indexes)
+        # Use k2.index here since argmax_indexes' dtype is torch.int32
+        best_path_indexes = k2.index(new2old, argmax_indexes)
 
-    paths = k2.ragged.remove_axis(paths, 0)
+        paths_2axes = k2.ragged.remove_axis(paths, 0)
 
-    # best_path is a k2.RaggedInt with 2 axes [path][arc_pos]
-    best_paths = k2.index(paths, best_path_indexes)
+        # best_path is a k2.RaggedInt with 2 axes [path][arc_pos]
+        best_paths = k2.index(paths_2axes, best_path_indexes)
 
-    # labels is a k2.RaggedInt with 2 axes [path][phone_id]
-    # Note that it contains -1s.
-    labels = k2.index(lats.labels.contiguous(), best_paths)
+        # labels is a k2.RaggedInt with 2 axes [path][phone_id]
+        # Note that it contains -1s.
+        labels = k2.index(lats.labels.contiguous(), best_paths)
 
-    labels = k2.ragged.remove_values_eq(labels, -1)
+        labels = k2.ragged.remove_values_eq(labels, -1)
 
-    # lats.aux_labels is a k2.RaggedInt tensor with 2 axes, so
-    # aux_labels is also a k2.RaggedInt with 2 axes
-    aux_labels = k2.index(lats.aux_labels, best_paths.values())
+        # lats.aux_labels is a k2.RaggedInt tensor with 2 axes, so
+        # aux_labels is also a k2.RaggedInt with 2 axes
+        aux_labels = k2.index(lats.aux_labels, best_paths.values())
 
-    best_path_fsas = k2.linear_fsa(labels)
-    best_path_fsas.aux_labels = aux_labels
+        best_path_fsas = k2.linear_fsa(labels)
+        best_path_fsas.aux_labels = aux_labels
 
-    return best_path_fsas
+        key = f'lm_scale_{lm_scale}'
+        ans[key] = best_path_fsas
+
+    return ans
+
 
 
 @torch.no_grad()
-def rescore_with_whole_lattice(lats: k2.Fsa,
-                               G_with_epsilon_loops: k2.Fsa,
-                               lm_scale: float = 1.0) -> k2.Fsa:
+def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
+                               lm_scale_list: List[float]
+                              ) -> Dict[str, k2.Fsa]:
     '''Use whole lattice to rescore.
 
     Args:
@@ -249,93 +254,70 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
       G_with_epsilon_loops:
         An FsaVec representing the language model (LM). Note that it
         is an FsaVec, but it contains only one Fsa.
+      lm_scale_list:
+        A list containing lm_scale values.
+    Returns:
+      A dict of FsaVec, whose key is a lm_scale and the value represents the
+      best decoding path for each sequence in the lattice.
     '''
     assert len(lats.shape) == 3
     assert hasattr(lats, 'lm_scores')
     assert G_with_epsilon_loops.shape == (1, None, None)
 
     device = lats.device
-    scores = lats.scores - lats.lm_scores
-    lats.scores = scores / lm_scale
+    lats.scores = lats.scores - lats.lm_scores
+    # We will use lm_scores from G, so remove lats.lm_scores here
+    del lats.lm_scores
+    assert hasattr(lats, 'lm_scores') is False
+
+    #  lats.scores = scores / lm_scale
     # Now, lats.scores contains only am_scores
 
     # inverted_lats has word IDs as labels.
     # Its aux_labels are phone IDs, which is a ragged tensor k2.RaggedInt
     inverted_lats = k2.invert(lats)
     num_seqs = lats.shape[0]
-    inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(inverted_lats)
 
     b_to_a_map = torch.zeros(num_seqs, device=device, dtype=torch.int32)
     try:
         rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
-                                             inverted_lats_with_epsilon_loops,
+                                             inverted_lats,
                                              b_to_a_map,
                                              sorted_match_a=True)
     except RuntimeError as e:
         print(f'Caught exception:\n{e}\n')
         print(f'Number of FSAs: {inverted_lats.shape[0]}')
-        print('num_arcs before pruning: ',
-              inverted_lats_with_epsilon_loops.arcs.num_elements())
+        print('num_arcs before pruning: ', inverted_lats.arcs.num_elements())
 
         # NOTE(fangjun): The choice of the threshold 0.01 is arbitrary here
         # to avoid OOM. We may need to fine tune it.
         inverted_lats = k2.prune_on_arc_post(inverted_lats, 0.001, True)
-        inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(
-            inverted_lats)
-        print('num_arcs after pruning: ',
-              inverted_lats_with_epsilon_loops.arcs.num_elements())
+        print('num_arcs after pruning: ', inverted_lats.arcs.num_elements())
 
         rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
-                                             inverted_lats_with_epsilon_loops,
+                                             inverted_lats,
                                              b_to_a_map,
                                              sorted_match_a=True)
 
-    rescoring_lats = k2.top_sort(k2.connect(
-        rescoring_lats.to('cpu'))).to(device)
-    inverted_rescoring_lats = k2.invert(rescoring_lats)
-    # inverted rescoring_lats has phone IDs as labels
+    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats.to('cpu')).to(device))
+
+    # inv_lats has phone IDs as labels
     # and word IDs as aux_labels.
+    inv_lats = k2.invert(rescoring_lats)
 
-    inverted_rescoring_lats = k2.remove_epsilon_self_loops(
-        inverted_rescoring_lats)
-    best_paths = k2.shortest_path(inverted_rescoring_lats,
-                                  use_double_scores=True)
-    return best_paths
+    ans = dict()
+    #
+    # The following implements
+    # scores = (scores - lm_scores)/lm_scale + lm_scores
+    #        = scores/lm_scale + lm_scores*(1 - 1/lm_scale)
+    #
+    saved_scores = inv_lats.scores.clone()
+    for lm_scale in lm_scale_list:
+        am_scores = saved_scores - inv_lats.lm_scores
+        am_scores /= lm_scale
+        inv_lats.scores = am_scores + inv_lats.lm_scores
 
-
-@torch.no_grad()
-def decode_with_lm_rescoring(lats: k2.Fsa,
-                             G: k2.Fsa,
-                             num_paths: int,
-                             use_whole_lattice: bool,
-                             lm_scale: float = 1.0) -> k2.Fsa:
-    '''Decode using n-best list with LM rescoring.
-
-    `lats` is a decoding lattice, which has 3 axes. This function first
-    extracts `num_paths` paths from `lats` for each sequence using
-    `k2.random_paths`. The `am_scores` of these paths are computed.
-    For each path, its `lm_scores` is computed using `G` (which is an LM).
-    The final `tot_scores` is the sum of `am_scores` and `lm_scores`.
-    The path with the greatest `tot_scores` within a sequence is used
-    as the decoding output.
-
-    Args:
-      lats:
-        An FsaVec It can be the output of `k2.intersect_dense_pruned`.
-      G:
-        An FsaVec representing the language model (LM). Note that it
-        is an FsaVec, but it contains only one Fsa.
-      num_paths:
-        It is the size `n` in `n-best` list.
-        Used only if use_whole_lattice is False.
-      use_whole_lattice:
-        True to use whole lattice for rescoring. False to use n-best list
-        for rescoring.
-    Returns:
-      An FsaVec representing the best decoding path for each sequence
-      in the lattice.
-    '''
-    if use_whole_lattice:
-        return rescore_with_whole_lattice(lats, G, lm_scale=lm_scale)
-    else:
-        return rescore_with_n_best_list(lats, G, num_paths, lm_scale=lm_scale)
+        best_paths = k2.shortest_path(inv_lats, use_double_scores=True)
+        key = f'lm_scale_{lm_scale}'
+        ans[key] = best_paths
+    return ans
