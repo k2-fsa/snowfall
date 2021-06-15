@@ -39,6 +39,13 @@ def compile_HLG(
     """
     L = k2.arc_sort(L)
     G = k2.arc_sort(G)
+    # Attach a new attribute `lm_scores` so that we can recover
+    # the `am_scores` later.
+    # The scores on an arc consists of two parts:
+    #  scores = am_scores + lm_scores
+    # NOTE: we assume that both kinds of scores are in log-space.
+    G.lm_scores = G.scores.clone()
+
     logging.info("Intersecting L and G")
     LG = k2.compose(L, G)
     logging.info(f'LG shape = {LG.shape}')
@@ -80,10 +87,4 @@ def compile_HLG(
         f'LG is arc sorted: {(HLG.properties & k2.fsa_properties.ARC_SORTED) != 0}'
     )
 
-    # Attach a new attribute `lm_scores` so that we can recover
-    # the `am_scores` later.
-    # The scores on an arc consists of two parts:
-    #  scores = am_scores + lm_scores
-    # NOTE: we assume that both kinds of scores are in log-space.
-    HLG.lm_scores = HLG.scores.clone()
     return HLG

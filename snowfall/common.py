@@ -362,7 +362,7 @@ def store_transcripts(path: Pathlike, texts: Iterable[Tuple[str, str]]):
             print(f'ref={ref}', file=f)
             print(f'hyp={hyp}', file=f)
 
-def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> None:
+def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> float:
     subs: Dict[Tuple[str,str], int] = defaultdict(int)
     ins: Dict[str, int] = defaultdict(int)
     dels: Dict[str, int] = defaultdict(int)
@@ -455,3 +455,4 @@ def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str
         hyp_count = corr + hyp_sub + ins
 
         print(f"{word}   {corr} {tot_errs} {ref_count} {hyp_count}", file=f)
+    return tot_err_rate
