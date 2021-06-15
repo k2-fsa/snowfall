@@ -143,7 +143,7 @@ def nbest_decoding(lats: k2.Fsa, num_paths: int):
     path_lats = k2.top_sort(k2.connect(path_lats.to('cpu')).to(lats.device))
 
     tot_scores = path_lats.get_tot_scores(True, True)
-    # RaggedFloat currently support float32 only.
+    # RaggedFloat currently supports float32 only.
     # We may bind Ragged<double> as RaggedDouble if needed.
     ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
                                        tot_scores.to(torch.float32))
