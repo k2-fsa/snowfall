@@ -196,7 +196,7 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
                                      b_to_a_map=b_to_a_map,
                                      sorted_match_a=True)
     lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu')).to(device))
-    lm_scores = lm_path_lats.get_tot_scores(True, True)
+    lm_scores = lm_path_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
 
     ans = dict()
     for lm_scale in lm_scale_list:
