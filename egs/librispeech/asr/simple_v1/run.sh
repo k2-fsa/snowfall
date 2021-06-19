@@ -3,11 +3,36 @@
 # Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang)
 # Apache 2.0
 
-# Example of how to build L and G FST for K2. Most scripts of this example are copied from Kaldi.
-
 set -eou pipefail
 
+libri_dirs=(
+/root/fangjun/data/librispeech/LibriSpeech
+/export/corpora5/LibriSpeech
+/home/storage04/zhuangweiji/data/open-source-data/librispeech/LibriSpeech
+/export/common/data/corpora/ASR/openslr/SLR12/LibriSpeech
+)
+
+libri_dir=
+for d in ${libri_dirs[@]}; do
+  if [ -d $d ]; then
+    libri_dir=$d
+    break
+  fi
+done
+
+if [ ! -d $libri_dir/train-clean-100 ]; then
+  echo "Please set LibriSpeech dataset path before running this script"
+  exit 1
+fi
+
+echo "LibriSpeech dataset dir: $libri_dir"
+
 stage=0
+
+# settings for BPE training -- start
+vocab_size=200
+model_type=unigram # valid values: unigram, bpe, word, char
+# settings for BPE training -- end
 
 if [ $stage -le 1 ]; then
   local/download_lm.sh "openslr.org/resources/11" data/local/lm
@@ -70,6 +95,62 @@ if [ $stage -le 4 ]; then
 fi
 
 if [ $stage -le 5 ]; then
+  echo "Preparing BPE training"
+  dir=data/lang_bpe
+  if [ ! -f $dir/transcript.txt ]; then
+    echo "Generating $dir/transcript.txt"
+    files=$(
+      find "$libri_dir/train-clean-100" -name "*.trans.txt"
+      find "$libri_dir/train-clean-360" -name "*.trans.txt"
+      find "$libri_dir/train-other-500" -name "*.trans.txt"
+    )
+    for f in ${files[@]}; do
+      cat $f | cut -d " " -f 2-
+    done > $dir/transcript.txt
+  fi
+
+  model_file=$dir/bpe_${model_type}_${vocab_size}.model
+  if [ ! -f $model_file ]; then
+    echo "Generating $model_file"
+    python3 ./train_bpe_model.py \
+      --transcript $dir/transcript.txt \
+      --model-type $model_type \
+      --vocab-size $vocab_size \
+      --output-dir $dir
+  else
+    echo "$model_file exists, skip BPE training"
+  fi
+
+  token_file=$dir/tokens.txt
+  python3 ./generate_bpe_tokens.py \
+    --model-file $model_file > $token_file
+  # Copy tokens.txt to phones.txt since the existing code
+  # expects a fixed name "phones.txt"
+  cp $token_file $dir/phones.txt
+
+  echo "<eps> 0" > $dir/words.txt
+  echo "<UNK> 1" >> $dir/words.txt
+  cat $dir/transcript.txt | tr -s " " "\n" | sort | uniq |
+    awk '{print $0 " " NR+1}' >> $dir/words.txt
+
+  if [ ! -f $dir/lexicon.txt ]; then
+    python3 ./generate_bpe_lexicon.py \
+      --model-file $model_file \
+      --words-file $dir/words.txt > $dir/lexicon.txt
+  fi
+
+  if [ ! -f $dir/lexiconp.txt ]; then
+    echo "**Creating $dir/lexiconp.txt from $dir/lexicon.txt"
+    perl -ape 's/(\S+\s+)(.+)/${1}1.0\t$2/;' < $dir/lexicon.txt > $dir/lexiconp.txt || exit 1
+  fi
+
+  # NOTE: 1 is <unk> in `--map-oov 1`.
+  local/make_lexicon_fst.py $dir/lexiconp.txt | \
+    local/sym2int.pl --map-oov 1 -f 3 $dir/tokens.txt | \
+    local/sym2int.pl -f 4 $dir/words.txt > $dir/L.fst.txt || exit 1
+fi
+
+if [ $stage -le 6 ]; then
   python3 ./prepare.py
 fi
 
@@ -79,7 +160,7 @@ fi
 #
 # exit 0
 
-if [ $stage -le 6 ]; then
+if [ $stage -le 7 ]; then
   # python3 ./train.py # ctc training
   # python3 ./mmi_bigram_train.py # ctc training + bigram phone LM
   # python3 ./mmi_mbr_train.py
@@ -99,7 +180,7 @@ if [ $stage -le 6 ]; then
   # python3 -m torch.distributed.launch --nproc_per_node=$ngpus ./mmi_bigram_train.py --world_size $ngpus
 fi
 
-if [ $stage -le 7 ]; then
+if [ $stage -le 8 ]; then
   # python3 ./decode.py # ctc decoding
   # python3 ./mmi_bigram_decode.py --epoch 9
   #  python3 ./mmi_mbr_decode.py
