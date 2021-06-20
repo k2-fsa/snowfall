@@ -10,7 +10,7 @@ import k2
 from snowfall.common import get_phone_symbols
 
 
-def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
+def build_ctc_topo2(tokens: List[int]) -> k2.Fsa:
     '''Build CTC topology.
     A token which appears once on the right side (i.e. olabels) may
     appear multiple times on the left side (ilabels), possibly with
@@ -42,7 +42,7 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     return ans
 
 
-def build_ctc_topo2(phones: List[int]):
+def build_ctc_topo(phones: List[int]):
     # See https://github.com/k2-fsa/k2/issues/746#issuecomment-856421616
     assert 0 in phones, 'We assume 0 is the ID of the blank symbol'
     phones = phones.copy()

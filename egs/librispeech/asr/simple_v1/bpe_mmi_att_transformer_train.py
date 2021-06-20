@@ -43,13 +43,11 @@ from snowfall.models.transformer import Noam, Transformer
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
-from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 
 def get_objf(batch: Dict,
              model: AcousticModel,
              ali_model: Optional[AcousticModel],
-             P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              use_pruned_intersect: bool,
@@ -74,7 +72,6 @@ def get_objf(batch: Dict,
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
-        P=P,
         den_scale=den_scale,
         use_pruned_intersect=use_pruned_intersect
     )
@@ -153,7 +150,6 @@ def get_objf(batch: Dict,
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         ali_model: Optional[AcousticModel],
-                        P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
                         use_pruned_intersect: bool,
@@ -172,7 +168,6 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             batch=batch,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,
@@ -192,7 +187,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel,
                     ali_model: Optional[AcousticModel],
-                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     use_pruned_intersect: bool,
@@ -250,15 +244,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.module.P_scores)
-            assert P.requires_grad is True
-
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,
@@ -307,7 +296,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 dataloader=valid_dataloader,
                 model=model,
                 ali_model=ali_model,
-                P=P,
                 device=device,
                 graph_compiler=graph_compiler,
                 use_pruned_intersect=use_pruned_intersect,
@@ -496,7 +484,7 @@ def run(rank, world_size, args):
     #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
 
     logging.info("Loading lexicon and symbol tables")
-    lang_dir = Path('data/lang_bpe')
+    lang_dir = Path('data/lang_bpe2')
     lexicon = Lexicon(lang_dir)
 
     device_id = rank
@@ -507,9 +495,6 @@ def run(rank, world_size, args):
         device=device,
     )
     phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-    P = P.to(device)
 
     librispeech = LibriSpeechAsrDataModule(args)
     train_dl = librispeech.train_dataloaders()
@@ -556,8 +541,6 @@ def run(rank, world_size, args):
             num_classes=len(phone_ids) + 1)  # +1 for the blank symbol
     else:
         raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
-
-    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     if args.torchscript:
         logging.info('Applying TorchScript to model...')
@@ -624,7 +607,6 @@ def run(rank, world_size, args):
             valid_dataloader=valid_dl,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,

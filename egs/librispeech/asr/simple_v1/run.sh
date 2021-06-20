@@ -27,10 +27,10 @@ fi
 
 echo "LibriSpeech dataset dir: $libri_dir"
 
-stage=0
+stage=5
 
 # settings for BPE training -- start
-vocab_size=200
+vocab_size=5000
 model_type=unigram # valid values: unigram, bpe, word, char
 # settings for BPE training -- end
 
@@ -96,7 +96,8 @@ fi
 
 if [ $stage -le 5 ]; then
   echo "Preparing BPE training"
-  dir=data/lang_bpe
+  dir=data/lang_bpe2
+  mkdir -p $dir
   if [ ! -f $dir/transcript.txt ]; then
     echo "Generating $dir/transcript.txt"
     files=$(
@@ -149,6 +150,7 @@ if [ $stage -le 5 ]; then
     local/sym2int.pl --map-oov 1 -f 3 $dir/tokens.txt | \
     local/sym2int.pl -f 4 $dir/words.txt > $dir/L.fst.txt || exit 1
 fi
+exit 0
 
 if [ $stage -le 6 ]; then
   python3 ./prepare.py
