@@ -95,6 +95,7 @@ if [ $stage -le 4 ]; then
 fi
 
 if [ $stage -le 5 ]; then
+  # TODO(fangjun): Move this stage to a separate script
   echo "Preparing BPE training"
   dir=data/lang_bpe2
   mkdir -p $dir
@@ -122,17 +123,20 @@ if [ $stage -le 5 ]; then
     echo "$model_file exists, skip BPE training"
   fi
 
-  token_file=$dir/tokens.txt
-  python3 ./generate_bpe_tokens.py \
-    --model-file $model_file > $token_file
+  if [ ! -f $dir/tokens.txt ]; then
+    python3 ./generate_bpe_tokens.py \
+      --model-file $model_file > $dir/tokens.txt
+  fi
   # Copy tokens.txt to phones.txt since the existing code
   # expects a fixed name "phones.txt"
-  cp $token_file $dir/phones.txt
+  ln -fv $dir/tokens.txt $dir/phones.txt
 
-  echo "<eps> 0" > $dir/words.txt
-  echo "<UNK> 1" >> $dir/words.txt
-  cat $dir/transcript.txt | tr -s " " "\n" | sort | uniq |
-    awk '{print $0 " " NR+1}' >> $dir/words.txt
+  if [ ! -f $dir/words.txt ]; then
+    echo "<eps> 0" > $dir/words.txt
+    echo "<UNK> 1" >> $dir/words.txt
+    cat $dir/transcript.txt | tr -s " " "\n" | sort | uniq |
+      awk '{print $0 " " NR+1}' >> $dir/words.txt
+  fi
 
   if [ ! -f $dir/lexicon.txt ]; then
     python3 ./generate_bpe_lexicon.py \
@@ -145,10 +149,58 @@ if [ $stage -le 5 ]; then
     perl -ape 's/(\S+\s+)(.+)/${1}1.0\t$2/;' < $dir/lexicon.txt > $dir/lexiconp.txt || exit 1
   fi
 
-  # NOTE: 1 is <unk> in `--map-oov 1`.
-  local/make_lexicon_fst.py $dir/lexiconp.txt | \
-    local/sym2int.pl --map-oov 1 -f 3 $dir/tokens.txt | \
-    local/sym2int.pl -f 4 $dir/words.txt > $dir/L.fst.txt || exit 1
+  ndisambig=$(local/add_lex_disambig.pl --pron-probs $dir/lexiconp.txt $dir/lexiconp_disambig.txt)
+  if ! grep "#0" $dir/words.txt > /dev/null 2>&1; then
+    max_word_id=$(tail -1 $dir/words.txt | awk '{print $2}')
+    for i in $(seq 0 $ndisambig); do
+      echo "#$i $((i+max_word_id+1))"
+    done >> $dir/words.txt
+  fi
+
+  if ! grep "#0" $dir/phones.txt > /dev/null 2>&1 ; then
+    max_phone_id=$(tail -1 $dir/phones.txt | awk '{print $2}')
+    for i in $(seq 0 $ndisambig); do
+      echo "#$i $((i+max_phone_id+1))"
+    done >> $dir/phones.txt
+  fi
+
+  if [ ! -f $dir/L.fst.txt ]; then
+    # NOTE: 1 is <unk> in `--map-oov 1`.
+    local/make_lexicon_fst.py $dir/lexiconp.txt | \
+      local/sym2int.pl --map-oov 1 -f 3 $dir/tokens.txt | \
+      local/sym2int.pl -f 4 $dir/words.txt > $dir/L.fst.txt || exit 1
+  fi
+
+  if [ ! -f $dir/L_disambig.fst.txt ]; then
+    wdisambig_phone=$(echo "#0" | local/sym2int.pl $dir/phones.txt)
+    wdisambig_word=$(echo "#0" | local/sym2int.pl $dir/words.txt)
+
+    local/make_lexicon_fst.py \
+      $dir/lexiconp_disambig.txt | \
+      local/sym2int.pl --map-oov 1 -f 3 $dir/phones.txt | \
+      local/sym2int.pl -f 4 $dir/words.txt | \
+      local/fstaddselfloops.pl $wdisambig_phone $wdisambig_word > $dir/L_disambig.fst.txt || exit 1
+  fi
+
+  if [ ! -f $dir/G.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="$dir/words.txt" \
+      --disambig-symbol='#0' \
+      --max-order=3 \
+      data/local/lm/lm_tgmed.arpa > $dir/G.fst.txt
+  else
+    echo "Skip generating $dir/G.fst.txt"
+  fi
+
+  if [ ! -f $dir/G_4_gram.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="$dir/words.txt" \
+      --disambig-symbol='#0' \
+      --max-order=4 \
+      data/local/lm/lm_fglarge.arpa > $dir/G_4_gram.fst.txt
+  else
+    echo "Skip generating $dir/G_4_gram.fst.txt"
+  fi
 fi
 exit 0
 
