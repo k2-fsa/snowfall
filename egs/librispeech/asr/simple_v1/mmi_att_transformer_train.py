@@ -44,6 +44,7 @@ from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import create_unigram_phone_lm
 
 
 def get_objf(batch: Dict,
@@ -461,6 +462,14 @@ def get_parser():
              'so that they can be simply loaded with torch.jit.load(). '
              '-1 disables this option.'
     )
+
+    parser.add_argument(
+        '--use-unigram-lm',
+        type=str2bool,
+        default=False,
+        help='True to use unigram LM for P. False to use bigram LM for P.'
+    )
+
     return parser
 
 
@@ -487,7 +496,10 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
+    if args.use_unigram_lm:
+        exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer-unigram')
+    else:
+        exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -507,7 +519,14 @@ def run(rank, world_size, args):
         device=device,
     )
     phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
+
+    if args.use_unigram_lm:
+        logging.info('Use unigram LM for P')
+        P = create_bigram_phone_lm(phone_ids)
+    else:
+        logging.info('Use bigram LM for P')
+        P = create_bigram_phone_lm(phone_ids)
+
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
 

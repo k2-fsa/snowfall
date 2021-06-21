@@ -71,6 +71,7 @@ from snowfall.models.conformer import Conformer
 from snowfall.models.contextnet import ContextNet
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph import create_unigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 def nbest_decoding(lats: k2.Fsa, num_paths: int):
@@ -401,6 +402,15 @@ def get_parser():
         type=str2bool,
         default=True,
         help='When enabled, it uses vgg style network for subsampling')
+
+    parser.add_argument(
+        '--use-unigram-lm',
+        type=str2bool,
+        default=False,
+        help='True to use unigram LM for P. False to use bigram LM for P. '
+             'This is used only for checkpoint-loading'.
+    )
+
     return parser
 
 
@@ -423,7 +433,10 @@ def main():
 
     output_beam_size = args.output_beam_size
 
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
+    if args.use_unigram_lm:
+        exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer-unigram')
+    else:
+        exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')
@@ -434,7 +447,12 @@ def main():
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
 
     phone_ids = get_phone_symbols(phone_symbol_table)
-    P = create_bigram_phone_lm(phone_ids)
+    if args.use_unigram_lm:
+        logging.info('Use unigram LM for P')
+        P = create_unigram_phone_lm(phone_ids)
+    else:
+        logging.info('Use bigram LM for P')
+        P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
