@@ -522,7 +522,7 @@ def run(rank, world_size, args):
 
     if args.use_unigram_lm:
         logging.info('Use unigram LM for P')
-        P = create_bigram_phone_lm(phone_ids)
+        P = create_unigram_phone_lm(phone_ids)
     else:
         logging.info('Use bigram LM for P')
         P = create_bigram_phone_lm(phone_ids)
