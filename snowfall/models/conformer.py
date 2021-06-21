@@ -35,11 +35,12 @@ class Conformer(Transformer):
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, cnn_module_kernel: int = 31,
                  normalize_before: bool = True, vgg_frontend: bool = False,
-                 is_espnet_structure: bool = False) -> None:
+                 is_espnet_structure: bool = False, mmi_loss: bool = True) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
                                         d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                                         num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
-                                        dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend)
+                                        dropout=dropout, normalize_before=normalize_before, vgg_frontend=vgg_frontend,
+                                        mmi_loss=mmi_loss)
 
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
