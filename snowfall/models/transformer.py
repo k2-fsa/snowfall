@@ -37,7 +37,7 @@ class Transformer(AcousticModel):
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, normalize_before: bool = True,
-                 vgg_frontend: bool = False) -> None:
+                 vgg_frontend: bool = False, mmi_loss: bool = True) -> None:
         super().__init__()
         self.num_features = num_features
         self.num_classes = num_classes
@@ -64,7 +64,10 @@ class Transformer(AcousticModel):
         )
 
         if num_decoder_layers > 0:
-            self.decoder_num_class = self.num_classes + 1  # +1 for the sos/eos symbol
+            if mmi_loss:
+                self.decoder_num_class = self.num_classes + 1  # +1 for the sos/eos symbol
+            else:
+                self.decoder_num_class = self.num_classes  # bpe model already has sos/eos symbol
 
             self.decoder_embed = nn.Embedding(self.decoder_num_class, d_model)
             self.decoder_pos = PositionalEncoding(d_model, dropout)
@@ -133,8 +136,8 @@ class Transformer(AcousticModel):
         x = nn.functional.log_softmax(x, dim=1)  # (B, F, T)
         return x
 
-    def decoder_forward(self, x: Tensor, encoder_mask: Tensor, supervision: Supervisions,
-                        graph_compiler: object) -> Tensor:
+    def decoder_forward(self, x: Tensor, encoder_mask: Tensor, supervision: Supervisions = None,
+            graph_compiler: object = None, token_ids: List[int] = None) -> Tensor:
         """
         Args:
             x: Tensor of dimension (input_length, batch_size, d_model).
@@ -146,9 +149,28 @@ class Transformer(AcousticModel):
         Returns:
             Tensor: Decoder loss.
         """
-        batch_text = get_normal_transcripts(supervision, graph_compiler.lexicon.words, graph_compiler.oov)
-        ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
-                                            self.decoder_num_class - 1)
+        if supervision is not None and graph_compiler is not None:
+            batch_text = get_normal_transcripts(supervision, graph_compiler.lexicon.words, graph_compiler.oov)
+            ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
+                                                self.decoder_num_class - 1)
+        elif token_ids is not None:
+            # speical token ids:
+            # <blank> 0
+            # <UNK> 1
+            # <sos/eos> self.decoder_num_class - 1
+            sos_id = self.decoder_num_class - 1
+            eos_id = self.decoder_num_class - 1
+            _sos = torch.tensor([sos_id])
+            _eos = torch.tensor([eos_id])
+            ys_in = [torch.cat([_sos, torch.tensor(y)], dim=0) for y in token_ids]
+            ys_out = [torch.cat([torch.tensor(y), _eos], dim=0) for y in token_ids]
+            ys_in_pad = pad_list(ys_in, eos_id)
+            ys_out_pad = pad_list(ys_in, -1)
+
+        else:
+            raise ValueError("Invalid input for decoder self attetion")
+
+
         ys_in_pad = ys_in_pad.to(x.device)
         ys_out_pad = ys_out_pad.to(x.device)
 
