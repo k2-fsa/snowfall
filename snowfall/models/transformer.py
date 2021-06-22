@@ -168,7 +168,7 @@ class Transformer(AcousticModel):
             ys_out_pad = pad_list(ys_in, -1)
 
         else:
-            raise VAlueError("Invalid input for decoder self attetion")
+            raise ValueError("Invalid input for decoder self attetion")
 
 
         ys_in_pad = ys_in_pad.to(x.device)
