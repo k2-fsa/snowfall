@@ -1,1 +1,7 @@
 *.txt
+exp/
+exp
+exp-*
+*.model
+*.vocab
+data
