@@ -408,7 +408,7 @@ def get_parser():
         type=str2bool,
         default=False,
         help='True to use unigram LM for P. False to use bigram LM for P. '
-             'This is used only for checkpoint-loading'.
+             'This is used only for checkpoint-loading.'
     )
 
     return parser
