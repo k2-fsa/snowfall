@@ -361,6 +361,7 @@ def get_parser():
     parser.add_argument(
         '--warm-step',
         type=int,
+        # Reference: https://zenodo.org/record/4604066#.YNPzOOgzaUk
         default=40000,
         help='The number of warm-up steps for Noam optimizer.'
     )
@@ -384,6 +385,8 @@ def get_parser():
     parser.add_argument(
         '--att-rate',
         type=float,
+        # Reference: https://zenodo.org/record/4604066#.YNPzOOgzaUk
+        # as ctc_weight=0.1 in previous reference.
         default=0.7,
         help="Attention loss rate.")
     parser.add_argument(
