@@ -96,7 +96,7 @@ def get_objf(batch: Dict,
         bni = input_lengths.shape[0]  # batch_size of input
         bno = nnet_output.shape[1]  # batch_size of nnet_output
         bnt = target_lengths.shape[0]  # batch_size of target_legnths
-        assert bno == bni or bno == bnt or bni == bnt, 'Inconsistent batch-size!'
+        assert bno == bni and bno == bnt and bni == bnt, 'Inconsistent batch-size!'
 
         ctc_loss = model.module.ctc_loss_fn(nnet_output, target, input_lengths, target_lengths)
 

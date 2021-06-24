@@ -5,7 +5,7 @@
 
 # Example of Bpe training with ctc loss and lable smooth loss
 
-stage=1
+stage=0
 download_model=1
 if [ $download_model -eq 1 ]; then
   echo "Use pretrained model from model zoo for decoding and evaluation"
