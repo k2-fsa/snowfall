@@ -87,6 +87,9 @@ class Transformer(AcousticModel):
         else:
             self.decoder_criterion = None
 
+        # Reference: https://github.com/espnet/espnet/blob/master/espnet2/asr/ctc.py#L37
+        self.ctc_loss_fn = torch.nn.CTCLoss(reduction='none')
+
     def forward(self, x: Tensor, supervision: Optional[Supervisions] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
         """
         Args:

@@ -5,7 +5,7 @@
 
 # Example of Bpe training with ctc loss and lable smooth loss
 
-stage=0
+stage=1
 download_model=1
 if [ $download_model -eq 1 ]; then
   echo "Use pretrained model from model zoo for decoding and evaluation"
@@ -25,6 +25,19 @@ if [ ! -f exp/data/cuts_test-clean.json.gz ]; then
 fi
 
 if [ $stage -le 1 ]; then
+  export CUDA_VISIBLE_DEVICES="0, 1, 2, 3"
+  python3 bpe_ctc_att_conformer_train.py \
+    --bucketing-sampler True \
+    --lr-factor 10.0 \
+    --num-epochs 50 \
+    --full-libri True \
+    --max-duration 200 \
+    --concatenate-cuts False \
+    --world-size 4 \
+    > train_log.txt
+fi
+
+if [ $stage -eq 2 ]; then
   export CUDA_VISIBLE_DEVICES=3
   python bpe_ctc_att_conformer_decode.py \
     --max-duration=10 \
