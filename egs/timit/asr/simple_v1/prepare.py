@@ -71,12 +71,8 @@ def get_parser():
         '--num-jobs',
         type=int,
         default=min(15, os.cpu_count()),
-        help='When enabled, use 960h LibriSpeech.')
-    parser.add_argument(
-        '--full-libri',
-        type=str2bool,
-        default=False,
-        help='When enabled, use 960h LibriSpeech.')
+        help='When enabled, processing more quickly.')
+    
     return parser
 
 
