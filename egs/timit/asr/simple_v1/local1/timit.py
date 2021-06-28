@@ -1,3 +1,9 @@
+  
+#!/usr/bin/env python3
+
+# Copyright 2021 Xiaomi Corporation (Author: Mingshuang Luo)
+# Apache 2.0
+
 from collections import defaultdict
 
 import os
