@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Junbo Zhang, Haowen Qiu)
-# Copyright (c)  2020  Xiaomi Corporation (authors: Mingshuang Luo)
+# Copyright (c)  2021  Xiaomi Corporation (authors: Mingshuang Luo)
 # Apache 2.0
+
 import argparse
 import os
 import subprocess
