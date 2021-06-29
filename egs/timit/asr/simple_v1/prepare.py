@@ -79,9 +79,9 @@ def get_parser():
 def main():
 
     corpus_dir = locate_corpus(
-        Path('/ceph-fj/data/timit'),
-        Path('/export/corpora5/timit'),
-        Path('/kome/luomingshuang/audio-data/timit')
+        Path('/ceph-fj/data/timit/data'),
+        Path('/export/corpora5/timit/data'),
+        Path('/kome/luomingshuang/audio-data/timit/data')
     )
 
     musan_dir = locate_corpus(
