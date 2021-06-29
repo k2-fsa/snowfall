@@ -46,6 +46,7 @@ def download_and_unzip(
 
 def prepare_timit(
         corpus_dir: Pathlike,
+        splits_dir: Pathlike,
         output_dir: Optional[Pathlike] = None,
         num_jobs: int = 1
 ) -> Dict[str, Dict[str, Union[RecordingSet, SupervisionSet]]]:
@@ -53,7 +54,10 @@ def prepare_timit(
     """
     corpus_dir = Path(corpus_dir)
     assert corpus_dir.is_dir(), f'No such directory: {corpus_dir}'
-
+    
+    splits_dir = Path(splits_dir)
+    assert corpus_dir.is_dir(), f'No such directory: {splits_dir}'
+    
     if output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -69,13 +73,13 @@ def prepare_timit(
         for part in dataset_parts:
           wav_files = []
           file_name = ''
-          pwd_dir = os.getcwd()
+          
           if part == 'TRAIN':
-            file_name = os.path.join(pwd_dir, 'local1/train_samples.txt') 
+            file_name = os.path.join(splits_dir, 'train_samples.txt') 
           elif part == 'DEV':
-            file_name = os.path.join(pwd_dir, 'local1/dev_samples.txt')
+            file_name = os.path.join(splits_dir, 'dev_samples.txt')
           else:
-            file_name = os.path.join(pwd_dir, 'tst_samples.txt')
+            file_name = os.path.join(splits_dir, 'tst_samples.txt')
           wav_files = []
           with open(file_name, 'r') as f:
             lines = f.readlines()
