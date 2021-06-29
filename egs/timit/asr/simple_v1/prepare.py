@@ -90,12 +90,14 @@ def main():
         Path('/ceph-fj/data/musan'),
         Path('/kome/luomingshuang/audio-data/musan')
     )
-
+    
+    splits_dir = Path('local1')
     output_dir = Path('exp/data')
 
     print('Timit manifest preparation:')
     timit_manifests = prepare_timit(
             corpus_dir = corpus_dir,
+            splits_dir = splits_dir,
             output_dir = output_dir,
             num_jobs = num_jobs)
 
