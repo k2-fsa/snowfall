@@ -28,6 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
+from snowfall.common import find_first_disambig_symbol
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
@@ -43,13 +44,11 @@ from snowfall.models.transformer import Noam, Transformer
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
-from snowfall.training.mmi_graph import create_bigram_phone_lm
 
 
 def get_objf(batch: Dict,
              model: AcousticModel,
              ali_model: Optional[AcousticModel],
-             P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              use_pruned_intersect: bool,
@@ -74,7 +73,6 @@ def get_objf(batch: Dict,
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
-        P=P,
         den_scale=den_scale,
         use_pruned_intersect=use_pruned_intersect
     )
@@ -92,7 +90,10 @@ def get_objf(batch: Dict,
 
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
-            att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            if hasattr(model, 'module'):
+                att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            else:
+                att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
         if (ali_model is not None and global_batch_idx_train is not None and
                 global_batch_idx_train // accum_grad < 4000):
@@ -153,7 +154,6 @@ def get_objf(batch: Dict,
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         ali_model: Optional[AcousticModel],
-                        P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
                         use_pruned_intersect: bool,
@@ -172,7 +172,6 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             batch=batch,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,
@@ -192,7 +191,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel,
                     ali_model: Optional[AcousticModel],
-                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     use_pruned_intersect: bool,
@@ -213,7 +211,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         dataloader: Training dataloader
         valid_dataloader: Validation dataloader
         model: Acoustic model to be trained
-        P: An FSA representing the bigram phone LM
         device: Training device, torch.device("cpu") or torch.device("cuda", device_id)
         graph_compiler: MMI training graph compiler
         optimizer: Training optimizer
@@ -250,15 +247,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.module.P_scores)
-            assert P.requires_grad is True
-
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,
@@ -307,7 +299,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 dataloader=valid_dataloader,
                 model=model,
                 ali_model=ali_model,
-                P=P,
                 device=device,
                 graph_compiler=graph_compiler,
                 use_pruned_intersect=use_pruned_intersect,
@@ -333,7 +324,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                if hasattr(model, 'module'):
+                    model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                else:
+                    model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -485,7 +479,8 @@ def run(rank, world_size, args):
     use_pruned_intersect = args.use_pruned_intersect
 
     fix_random_seed(42)
-    setup_dist(rank, world_size, args.master_port)
+    if world_size > 1:
+        setup_dist(rank, world_size, args.master_port)
 
     exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
@@ -502,14 +497,39 @@ def run(rank, world_size, args):
     device_id = rank
     device = torch.device('cuda', device_id)
 
+    if not Path(lang_dir / 'P.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
+        with open(lang_dir / 'P.fst.txt') as f:
+            # P is not an acceptor because there is
+            # a back-off state, whose incoming arcs
+            # have label #0 and aux_label eps.
+            P = k2.Fsa.from_openfst(f.read(), acceptor=False)
+
+        phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+
+        # P.aux_labels is not needed in later computations, so
+        # remove it here.
+        del P.aux_labels
+        # CAUTION(fangjun): The following line is crucial.
+        # Arcs entering the back-off state have label equal to #0.
+        # We have to change it to 0 here.
+        P.labels[P.labels >= first_phone_disambig_id] = 0
+
+        P = k2.remove_epsilon(P)
+        P = k2.arc_sort(P)
+        torch.save(P.as_dict(), lang_dir / 'P.pt')
+    else:
+        logging.debug('Loading pre-compiled P')
+        d = torch.load(lang_dir / 'P.pt')
+        P = k2.Fsa.from_dict(d)
+
     graph_compiler = MmiTrainingGraphCompiler(
         lexicon=lexicon,
+        P=P,
         device=device,
     )
     phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-    P = P.to(device)
 
     librispeech = LibriSpeechAsrDataModule(args)
     train_dl = librispeech.train_dataloaders()
@@ -557,8 +577,6 @@ def run(rank, world_size, args):
     else:
         raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
 
-    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
-
     if args.torchscript:
         logging.info('Applying TorchScript to model...')
         model = torch.jit.script(model)
@@ -566,7 +584,8 @@ def run(rank, world_size, args):
     model.to(device)
     describe(model)
 
-    model = DDP(model, device_ids=[rank])
+    if world_size > 1:
+        model = DDP(model, device_ids=[rank])
 
     # Now for the alignment model, if any
     if args.use_ali_model:
@@ -624,7 +643,6 @@ def run(rank, world_size, args):
             valid_dataloader=valid_dl,
             model=model,
             ali_model=ali_model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             use_pruned_intersect=use_pruned_intersect,
@@ -706,7 +724,10 @@ def main():
     args = parser.parse_args()
     world_size = args.world_size
     assert world_size >= 1
-    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    if world_size > 1:
+        mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    else:
+        run(rank=0, world_size=1, args=args)
 
 
 torch.set_num_threads(1)
