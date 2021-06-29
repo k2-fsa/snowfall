@@ -13,9 +13,7 @@ from pathlib import Path
 
 import torch
 from lhotse import CutSet, Fbank, FbankConfig, LilcomHdf5Writer, combine
-#from lhotse.recipes import prepare_timit, prepare_musan
-from lhotse.recipes import prepare_musan
-from local1.timit import prepare_timit
+from lhotse.recipes import download_timit, prepare_timit, prepare_musan
 
 from snowfall.common import str2bool
 
@@ -60,8 +58,9 @@ def locate_corpus(*corpus_dirs):
     for d in corpus_dirs:
         if os.path.exists(d):
             return d
-    print("Please create a place on your system to put the downloaded Librispeech data "
-          "and add it to `corpus_dirs`")
+    print("Please create a place on your system to put the downloaded timit data "
+          "and add it to `corpus_dirs`"
+          "Maybe you can use download_timit to download and unzip the timit.zip.")
     sys.exit(1)
 
 
@@ -74,7 +73,6 @@ def get_parser():
         help='When enabled, processing more quickly.')
     
     return parser
-
 
 def main():
 
