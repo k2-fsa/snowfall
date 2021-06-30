@@ -455,4 +455,4 @@ def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str
         hyp_count = corr + hyp_sub + ins
 
         print(f"{word}   {corr} {tot_errs} {ref_count} {hyp_count}", file=f)
-    return tot_err_rate
+    return float(tot_err_rate)
