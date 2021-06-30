@@ -754,9 +754,7 @@ def generate_square_subsequent_mask(sz: int) -> Tensor:
     Returns:
         Tensor: a square mask of dimension (sz, sz)
     """
-    mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-    return mask
+    return torch.triu(torch.full((sz, sz), float('-inf')), diagonal=1)
 
 
 def add_sos_eos(ys: List[List[int]], lexicon: k2.Fsa, sos: int, eos: int, ignore_id: int = -1) -> Tuple[Tensor, Tensor]:
