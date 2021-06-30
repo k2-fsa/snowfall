@@ -70,7 +70,6 @@ from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
 from snowfall.models.contextnet import ContextNet
 from snowfall.training.ctc_graph import build_ctc_topo
-from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 def nbest_decoding(lats: k2.Fsa, num_paths: int):
@@ -434,7 +433,6 @@ def main():
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
 
     phone_ids = get_phone_symbols(phone_symbol_table)
-    P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
@@ -474,8 +472,6 @@ def main():
         num_classes=len(phone_ids) + 1) # +1 for the blank symbol
     else:
         raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
-
-    model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     if avg == 1:
         checkpoint = os.path.join(exp_dir, 'epoch-' + str(epoch - 1) + '.pt')

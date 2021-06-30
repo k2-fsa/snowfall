@@ -714,8 +714,9 @@ def run(rank, world_size, args):
                            local_rank=rank)
 
     logging.warning('Done')
-    torch.distributed.barrier()
-    cleanup_dist()
+    if world_size > 1:
+        torch.distributed.barrier()
+        cleanup_dist()
 
 
 def main():
