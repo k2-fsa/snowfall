@@ -120,5 +120,5 @@ class CtcTrainingGraphCompiler(object):
         decoding_graph = k2.compose(self.ctc_topo, decoding_graph)
         decoding_graph = k2.connect(decoding_graph)
         # make sure the gradient is not accumulated
-        decoding_graphs.requires_grad_(False)
+        decoding_graph.requires_grad_(False)
         return decoding_graph
