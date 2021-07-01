@@ -153,9 +153,9 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
             src_key = '{}.{}'.format('module', key)
             dst_state_dict[key] = src_state_dict.pop(src_key)
         assert len(src_state_dict) == 0
-        model.load_state_dict(dst_state_dict)
+        model.load_state_dict(dst_state_dict, strict=False)
     else:
-        model.load_state_dict(checkpoint['state_dict'])
+        model.load_state_dict(checkpoint['state_dict'], strict=False)
 
     model.num_features = checkpoint['num_features']
     model.num_classes = checkpoint['num_classes']
