@@ -14,7 +14,6 @@ def _compute_mmi_loss_exact_optimized(
         texts: List[str],
         supervision_segments: torch.Tensor,
         graph_compiler: MmiTrainingGraphCompiler,
-        P: k2.Fsa,
         den_scale: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''
@@ -36,13 +35,10 @@ def _compute_mmi_loss_exact_optimized(
         A 2-D tensor that will be passed to :func:`k2.DenseFsaVec`.
       graph_compiler:
         Used to build num_graphs and den_graphs
-      P:
-        Represents a bigram Fsa.
       den_scale:
         The scale applied to the denominator tot_scores.
     '''
     num_graphs, den_graphs = graph_compiler.compile(texts,
-                                                    P,
                                                     replicate_den=False)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
@@ -111,7 +107,6 @@ def _compute_mmi_loss_exact_non_optimized(
         texts: List[str],
         supervision_segments: torch.Tensor,
         graph_compiler: MmiTrainingGraphCompiler,
-        P: k2.Fsa,
         den_scale: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''
@@ -124,7 +119,6 @@ def _compute_mmi_loss_exact_non_optimized(
       It uses less memory at the cost of speed. It is slower.
     '''
     num_graphs, den_graphs = graph_compiler.compile(texts,
-                                                    P,
                                                     replicate_den=True)
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
@@ -149,7 +143,6 @@ def _compute_mmi_loss_pruned(
         texts: List[str],
         supervision_segments: torch.Tensor,
         graph_compiler: MmiTrainingGraphCompiler,
-        P: k2.Fsa,
         den_scale: float = 1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''
@@ -163,7 +156,6 @@ def _compute_mmi_loss_pruned(
       to pruning.
     '''
     num_graphs, den_graphs = graph_compiler.compile(texts,
-                                                    P,
                                                     replicate_den=False)
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
 
@@ -200,13 +192,11 @@ class LFMMILoss(nn.Module):
     def __init__(
             self,
             graph_compiler: MmiTrainingGraphCompiler,
-            P: k2.Fsa,
             use_pruned_intersect: bool = False,
             den_scale: float = 1.0,
     ):
         super().__init__()
         self.graph_compiler = graph_compiler
-        self.P = P
         self.den_scale = den_scale
         self.use_pruned_intersect = use_pruned_intersect
 
@@ -223,5 +213,4 @@ class LFMMILoss(nn.Module):
                     texts=texts,
                     supervision_segments=supervision_segments,
                     graph_compiler=self.graph_compiler,
-                    P=self.P,
                     den_scale=self.den_scale)

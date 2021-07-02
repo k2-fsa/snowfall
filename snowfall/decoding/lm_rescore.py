@@ -311,10 +311,9 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
     # scores = (scores - lm_scores)/lm_scale + lm_scores
     #        = scores/lm_scale + lm_scores*(1 - 1/lm_scale)
     #
-    saved_scores = inv_lats.scores.clone()
+    saved_am_scores = inv_lats.scores - inv_lats.lm_scores
     for lm_scale in lm_scale_list:
-        am_scores = saved_scores - inv_lats.lm_scores
-        am_scores /= lm_scale
+        am_scores = saved_am_scores / lm_scale
         inv_lats.scores = am_scores + inv_lats.lm_scores
 
         best_paths = k2.shortest_path(inv_lats, use_double_scores=True)
