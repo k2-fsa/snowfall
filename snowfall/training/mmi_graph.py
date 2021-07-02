@@ -38,7 +38,33 @@ def create_bigram_phone_lm(phones: List[int]) -> k2.Fsa:
             rules += f'{i} {j} {phones[j-1]} 0.0\n'
         rules += f'{i} {final_state} -1 0.0\n'
     rules += f'{final_state}'
-    return k2.Fsa.from_str(rules)
+    ans = k2.Fsa.from_str(rules)
+    return k2.arc_sort(ans)
+
+def create_unigram_phone_lm(phones: List[int]) -> k2.Fsa:
+    '''Create a unigram phone LM.
+    The resulting FSA (P) has two states: a start state and a
+    final state. For each phone, there is a corresponding self-loop
+    at the start state.
+
+    Caution:
+      blank is not a phone.
+
+    Args:
+      A list of phone IDs.
+
+    Returns:
+      An FSA representing the unigram phone LM.
+    '''
+    assert 0 not in phones
+
+    rules = '0 1 -1 0.0\n'
+    for i in phones:
+        rules += f'0 0 {i} 0.0\n'
+    rules += '1\n'
+
+    ans = k2.Fsa.from_str(rules)
+    return k2.arc_sort(ans)
 
 
 class MmiTrainingGraphCompiler(object):
