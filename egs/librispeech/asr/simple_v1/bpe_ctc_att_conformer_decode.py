@@ -31,6 +31,7 @@ from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.decoding.lm_rescore import rescore_with_n_best_list
 from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
+from snowfall.decoding.lm_rescore import compute_am_scores, _intersect_device
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.text.numericalizer import Numericalizer
@@ -38,27 +39,29 @@ from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
-def nbest_decoding(lats: k2.Fsa, num_paths: int):
+def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: int):
     '''
-    (Ideas of this function are from Dan)
-
-    It implements something like CTC prefix beam search using n-best lists
-
-    The basic idea is to first extra n-best paths from the given lattice,
-    build a word seqs from these paths, and compute the total scores
-    of these sequences in the log-semiring. The one with the max score
-    is used as the decoding output.
+    N-best rescore with transformer-decoder model.
+    The basic idea is to first extra n-best paths from the given lattice.
+    Then extract word_seqs and token_seqs for each path.
+    Compute the negative log-likehood for each token_seq as 'language model score', called decoder_scores.
+    Compute am score for each token_seq.
+    Total scores is a weight sum of am_score and decoder_scores.
+    The one with the max total score is used as the decoding output.
     '''
 
+    # lats has token IDs as labels
+    # and word IDs as aux_labels.
     # First, extract `num_paths` paths for each sequence.
     # paths is a k2.RaggedInt with axes [seq][path][arc_pos]
     paths = k2.random_paths(lats, num_paths=num_paths, use_double_scores=True)
 
-    # word_seqs is a k2.RaggedInt sharing the same shape as `paths`
+    # token_seqs/word_seqs is a k2.RaggedInt sharing the same shape as `paths`
     # but it contains word IDs. Note that it also contains 0s and -1s.
     # The last entry in each sublist is -1.
+    token_seqs = k2.index(lats.labels.contiguous(), paths)
+    word_seqs = k2.index(lats.aux_labels.contiguous(), paths)
 
-    word_seqs = k2.index(lats.aux_labels, paths)
     # Note: the above operation supports also the case when
     # lats.aux_labels is a ragged tensor. In that case,
     # `remove_axis=True` is used inside the pybind11 binding code,
@@ -66,6 +69,7 @@ def nbest_decoding(lats: k2.Fsa, num_paths: int):
     # The 3 axes are [seq][path][word]
 
     # Remove epsilons and -1 from word_seqs
+    token_seqs = k2.ragged.remove_values_leq(token_seqs, 0)
     word_seqs = k2.ragged.remove_values_leq(word_seqs, 0)
 
     # Remove repeated sequences to avoid redundant computation later.
@@ -74,11 +78,11 @@ def nbest_decoding(lats: k2.Fsa, num_paths: int):
     # `new2old` is a 1-D torch.Tensor mapping from the output path index
     # to the input path index.
     # new2old.numel() == unique_word_seqs.num_elements()
-    unique_word_seqs, _, new2old = k2.ragged.unique_sequences(
-        word_seqs, need_num_repeats=False, need_new2old_indexes=True)
-    # Note: unique_word_seqs still has the same axes as word_seqs
+    unique_token_seqs, _, new2old = k2.ragged.unique_sequences(
+        token_seqs, need_num_repeats=False, need_new2old_indexes=True)
+    # Note: unique_token_seqs still has the same axes as token_seqs
 
-    seq_to_path_shape = k2.ragged.get_layer(unique_word_seqs.shape(), 0)
+    seq_to_path_shape = k2.ragged.get_layer(unique_token_seqs.shape(), 0)
 
     # path_to_seq_map is a 1-D torch.Tensor.
     # path_to_seq_map[i] is the seq to which the i-th path
@@ -87,66 +91,54 @@ def nbest_decoding(lats: k2.Fsa, num_paths: int):
 
     # Remove the seq axis.
     # Now unique_word_seqs has only two axes [path][word]
-    unique_word_seqs = k2.ragged.remove_axis(unique_word_seqs, 0)
+    unique_token_seqs = k2.ragged.remove_axis(unique_token_seqs, 0)
 
-    # word_fsas is an FsaVec with axes [path][state][arc]
-    word_fsas = k2.linear_fsa(unique_word_seqs)
+    # token_fsas is an FsaVec with axes [path][state][arc]
+    token_fsas = k2.linear_fsa(unique_token_seqs)
 
-    word_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(word_fsas)
+    token_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(token_fsas)
 
-    # lats has phone IDs as labels and word IDs as aux_labels.
-    # inv_lats has word IDs as labels and phone IDs as aux_labels
+    # lats has token IDs as labels and word IDs as aux_labels.
+    # inv_lats has word IDs as labels and token IDs as aux_labels
+    # Do k2.invert to make it compatible to function compute_am_scores
     inv_lats = k2.invert(lats)
     inv_lats = k2.arc_sort(inv_lats) # no-op if inv_lats is already arc-sorted
+    am_scores = compute_am_scores(inv_lats, token_fsas_with_epsilon_loops, path_to_seq_map)
 
-    path_lats = k2.intersect_device(inv_lats,
-                                    word_fsas_with_epsilon_loops,
-                                    b_to_a_map=path_to_seq_map,
-                                    sorted_match_a=True)
-    # path_lats has word IDs as labels and phone IDs as aux_labels
+    lats = k2.arc_sort(lats)
+    fgram_lm_lats = _intersect_device(lats, token_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
+    fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats.to('cpu')).to(lats.device))
+    # am_scores is computed with log_semiring=True
+    # set log_semiring=True here to make fgram_lm_scores comparable to am_scores
+    fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=True)
+    fgram_lm_scores = fgram_tot_scores - am_scores
 
-    path_lats = k2.top_sort(k2.connect(path_lats.to('cpu')).to(lats.device))
 
-    tot_scores = path_lats.get_tot_scores(True, True)
-    # RaggedFloat currently supports float32 only.
-    # We may bind Ragged<double> as RaggedDouble if needed.
-    ragged_tot_scores = k2.RaggedFloat(seq_to_path_shape,
-                                       tot_scores.to(torch.float32))
+    # now compute lm scores from transformer decoder
+    token_ids = k2.ragged.to_list(unique_token_seqs)
+    num_seqs = len(token_ids)
+    time_steps = encoder_memory.shape[0]
+    feature_dim = encoder_memory.shape[2]
+    encoder_memory = encoder_memory.expand(time_steps, num_seqs, feature_dim)
+    memory_mask = memory_mask.expand(num_seqs, time_steps)
 
-    argmax_indexes = k2.ragged.argmax_per_sublist(ragged_tot_scores)
+    # nll: negative log-likelihood
+    nll = model.decoder_nll(encoder_memory, memory_mask, token_ids=token_ids)
+    assert nll.shape[0] == num_seqs
+    decoder_scores = - nll.sum(dim=1)
+    tot_scores = am_scores + fgram_lm_scores + decoder_scores
+    best_seq_idx = new2old[torch.argmax(tot_scores)]
+    best_word_seq = [k2.ragged.to_list(word_seqs)[0][best_seq_idx]]
 
-    # Since we invoked `k2.ragged.unique_sequences`, which reorders
-    # the index from `paths`, we use `new2old`
-    # here to convert argmax_indexes to the indexes into `paths`.
-    #
-    # Use k2.index here since argmax_indexes' dtype is torch.int32
-    best_path_indexes = k2.index(new2old, argmax_indexes)
+    return best_word_seq
 
-    paths_2axes = k2.ragged.remove_axis(paths, 0)
-
-    # best_paths is a k2.RaggedInt with 2 axes [path][arc_pos]
-    best_paths = k2.index(paths_2axes, best_path_indexes)
-
-    # labels is a k2.RaggedInt with 2 axes [path][phone_id]
-    # Note that it contains -1s.
-    labels = k2.index(lats.labels.contiguous(), best_paths)
-
-    labels = k2.ragged.remove_values_eq(labels, -1)
-
-    # lats.aux_labels is a k2.RaggedInt tensor with 2 axes, so
-    # aux_labels is also a k2.RaggedInt with 2 axes
-    aux_labels = k2.index(lats.aux_labels, best_paths.values())
-
-    best_path_fsas = k2.linear_fsa(labels)
-    best_path_fsas.aux_labels = aux_labels
-
-    return best_path_fsas
 def decode_one_batch(batch: Dict[str, Any],
                      model: AcousticModel,
                      HLG: k2.Fsa,
                      output_beam_size: float,
                      num_paths: int,
                      use_whole_lattice: bool,
+                     nbest_rescore_with_decoder: bool = True,
                      G: Optional[k2.Fsa] = None)->Dict[str, List[List[int]]]:
     '''
     Decode one batch and return the result in a dict. The dict has the
@@ -178,7 +170,7 @@ def decode_one_batch(batch: Dict[str, Any],
         If False and if `G` is not None, then `num_paths` must be positive
         and it will use n-best list for LM rescoring.
       num_paths:
-        It specifies the size of `n` in n-best list decoding.
+        It specifies the size of `n` in n-best list decoding with transforer decoder model.
       G:
         The LM. If it is None, no rescoring is used.
         Otherwise, LM rescoring is used.
@@ -194,13 +186,15 @@ def decode_one_batch(batch: Dict[str, Any],
     feature = batch['inputs']
     assert feature.ndim == 3
     feature = feature.to(device)
+    batch_size = feature.shape[0]
+    assert batch_size == 1, 'Currently only surrort batch_size=1'
 
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
 
     supervisions = batch['supervisions']
 
-    nnet_output, _, _ = model(feature, supervisions)
+    nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
     # nnet_output is [N, C, T]
 
     nnet_output = nnet_output.permute(0, 2, 1)
@@ -220,36 +214,27 @@ def decode_one_batch(batch: Dict[str, Any],
 
     lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30, 10000)
 
-    if G is None:
-        if num_paths > 1:
-            best_paths = nbest_decoding(lattices, num_paths)
-            key=f'no_rescore-{num_paths}'
-        else:
-            key = 'no_rescore'
-            best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        hyps = get_texts(best_paths, indices)
-        return {key: hyps}
+    # TODO(Guo Liyong): figure out a way to combine lm_scale_list with transformer decoder n-best rescore
+    # lm_scale_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+    # lm_scale_list += [0.45, 0.55, 0.65]
+    # lm_scale_list += [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
+    # lm_scale_list += [1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
 
-    lm_scale_list = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-    lm_scale_list += [0.45, 0.55, 0.65]
-    lm_scale_list += [0.8, 0.9, 1.0, 1.1, 1.2, 1.3]
-    lm_scale_list += [1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+    lm_scale_list = [0.6] # lowest wer = 2.92 without transformer n-best rescore
 
     if use_whole_lattice:
         best_paths_dict = rescore_with_whole_lattice(lattices, G,
-                                                     lm_scale_list)
-    else:
-        best_paths_dict = rescore_with_n_best_list(lattices, G, num_paths,
-                                                   lm_scale_list)
-    # best_paths_dict is a dict
-    #  - key: lm_scale_xxx, where xxx is the value of lm_scale. An example
-    #         key is lm_scale_1.2
-    #  - value: it is the best path obtained using the corresponding lm scale
-    #           from the dict key.
-
+                                                     lm_scale_list,
+                                                     need_rescored_lats=True)
     ans = dict()
-    for lm_scale_str, best_paths in best_paths_dict.items():
-        hyps = get_texts(best_paths, indices)
+    for lm_scale_str, (best_paths, ngram_rescored_lattices) in best_paths_dict.items():
+        assert best_paths.shape[0] == 1, 'Figuring out a way to do batch decoding'
+        if nbest_rescore_with_decoder:
+            best_word_seq = nbest_decoding(model, encoder_memory, memory_mask, ngram_rescored_lattices, num_paths)
+            hyps = best_word_seq
+
+        else:
+            hyps = get_texts(best_paths, indices)
         ans[lm_scale_str] = hyps
     return ans
 
@@ -355,13 +340,10 @@ def get_parser():
         default=True,
         help='When enabled, it uses LM for rescoring')
     parser.add_argument(
-        '--num-paths',
+        '--num-paths-for-decoder-rescore',
         type=int,
-        default=-1,
-        help='Number of paths for rescoring using n-best list.' \
-             'If it is negative, then rescore with the whole lattice.'\
-             'CAUTION: You have to reduce max_duration in case of CUDA OOM'
-             )
+        default=500,
+        help='Number of paths for rescoring using n-best list with transformer decoder model.')
 
     parser.add_argument(
         '--is-espnet-structure',
@@ -417,13 +399,8 @@ def main():
     att_rate = args.att_rate
     model_type = args.model_type
     epoch = args.epoch
-    num_paths = args.num_paths
     use_lm_rescoring = args.use_lm_rescoring
-    use_whole_lattice = False
-    if use_lm_rescoring and num_paths < 1:
-        # It doesn't make sense to use n-best list for rescoring
-        # when n is less than 1
-        use_whole_lattice = True
+    use_whole_lattice = True
 
     output_beam_size = args.output_beam_size
 
@@ -519,8 +496,6 @@ def main():
     if use_lm_rescoring:
         if use_whole_lattice:
             logging.info('Rescoring with the whole lattice')
-        else:
-            logging.info(f'Rescoring with n-best list, n is {num_paths}')
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
         if not os.path.exists(lang_dir / 'G_4_gram.pt'):
             logging.debug('Loading G_4_gram.fst.txt')
@@ -551,12 +526,8 @@ def main():
         # LM rescoring.
         G.lm_scores = G.scores.clone()
     else:
-        logging.debug('Decoding without LM rescoring')
-        G = None
-        if num_paths > 1:
-            logging.debug(f'Use n-best list decoding, n is {num_paths}')
-        else:
-            logging.debug('Use 1-best decoding')
+        logging.debug('Currently 4-gram lattice rescore is required.')
+        sys.exit()
 
     logging.debug("convert HLG to device")
     HLG = HLG.to(device)
@@ -569,6 +540,8 @@ def main():
     librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
+        # if 'test-clean' == test_set:
+        #     continue
         logging.info(f'* DECODING: {test_set}')
 
         test_set_wers = dict()
@@ -576,7 +549,7 @@ def main():
                               model=model,
                               HLG=HLG,
                               symbols=symbol_table,
-                              num_paths=num_paths,
+                              num_paths=args.num_paths_for_decoder_rescore,
                               G=G,
                               use_whole_lattice=use_whole_lattice,
                               output_beam_size=output_beam_size)

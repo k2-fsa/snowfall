@@ -244,7 +244,8 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
 
 @torch.no_grad()
 def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
-                               lm_scale_list: List[float]
+                               lm_scale_list: List[float],
+                               need_rescored_lats: bool = False,
                               ) -> Dict[str, k2.Fsa]:
     '''Use whole lattice to rescore.
 
@@ -319,5 +320,8 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
 
         best_paths = k2.shortest_path(inv_lats, use_double_scores=True)
         key = f'lm_scale_{lm_scale}'
-        ans[key] = best_paths
+        if need_rescored_lats:
+            ans[key] = (best_paths, inv_lats)
+        else:
+            ans[key] = best_paths
     return ans

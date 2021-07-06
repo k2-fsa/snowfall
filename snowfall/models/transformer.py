@@ -165,7 +165,7 @@ class Transformer(AcousticModel):
             ys_in = [torch.cat([_sos, torch.tensor(y)], dim=0) for y in token_ids]
             ys_out = [torch.cat([torch.tensor(y), _eos], dim=0) for y in token_ids]
             ys_in_pad = pad_list(ys_in, eos_id)
-            ys_out_pad = pad_list(ys_in, -1)
+            ys_out_pad = pad_list(ys_out, -1)
 
         else:
             raise ValueError("Invalid input for decoder self attetion")
@@ -192,6 +192,62 @@ class Transformer(AcousticModel):
         decoder_loss = self.decoder_criterion(pred_pad, ys_out_pad)
 
         return decoder_loss
+
+    def decoder_nll(self, x: Tensor, encoder_mask: Tensor, token_ids: List[int] = None) -> Tensor:
+        """
+        Args:
+            x: encoder-output, Tensor of dimension (input_length, batch_size, d_model).
+            encoder_mask: Mask tensor of dimension (batch_size, input_length)
+            token_ids: n-best list extracted from lattice before rescore
+
+        Returns:
+            Tensor: negative log-likelihood.
+        """
+        # The common part between this fuction and decoder_forward could be
+        # extracted as a seperated function.
+        if token_ids is not None:
+            # speical token ids:
+            # <blank> 0
+            # <UNK> 1
+            # <sos/eos> self.decoder_num_class - 1
+            sos_id = self.decoder_num_class - 1
+            eos_id = self.decoder_num_class - 1
+            _sos = torch.tensor([sos_id])
+            _eos = torch.tensor([eos_id])
+            ys_in = [torch.cat([_sos, torch.tensor(y)], dim=0) for y in token_ids]
+            ys_out = [torch.cat([torch.tensor(y), _eos], dim=0) for y in token_ids]
+            ys_in_pad = pad_list(ys_in, eos_id)
+        else:
+            raise ValueError("Invalid input for decoder self attetion")
+
+
+        ys_in_pad = ys_in_pad.to(x.device, dtype=torch.int64)
+        ys_out_pad = ys_out_pad.to(x.device, dtype=torch.int64)
+
+        tgt_mask = generate_square_subsequent_mask(ys_in_pad.shape[-1]).to(x.device)
+
+        tgt_key_padding_mask = decoder_padding_mask(ys_in_pad)
+
+        tgt = self.decoder_embed(ys_in_pad)  # (B, T) -> (B, T, F)
+        tgt = self.decoder_pos(tgt)
+        tgt = tgt.permute(1, 0, 2)  # (B, T, F) -> (T, B, F)
+        pred_pad = self.decoder(tgt=tgt,
+                                memory=x,
+                                tgt_mask=tgt_mask,
+                                tgt_key_padding_mask=tgt_key_padding_mask,
+                                memory_key_padding_mask=encoder_mask)  # (T, B, F)
+        pred_pad = pred_pad.permute(1, 0, 2)  # (T, B, F) -> (B, T, F)
+        pred_pad = self.decoder_output_layer(pred_pad)  # (B, T, F)
+        # nll: negative log-likelihood
+        nll = torch.nn.functional.cross_entropy(
+                pred_pad.view(-1, self.decoder_num_class),
+                ys_out_pad.view(-1),
+                ignore_index=-1,
+                reduction='none')
+
+        nll = nll.view(pred_pad.shape[0], -1)
+
+        return nll
 
 
 class TransformerEncoderLayer(nn.Module):

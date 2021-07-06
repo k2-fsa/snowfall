@@ -37,12 +37,14 @@ if [ $stage -le 2 ]; then
   mkdir -p $dir
   token_file=./data/en_token_list/bpe_unigram5000/tokens.txt
   model_file=./data/en_token_list/bpe_unigram5000/bpe.model
-  cp $token_file $dir/tokens.txt
-  ln -fv $dir/tokens.txt $dir/phones.txt
-  echo "<eps> 0" > $dir/words.txt
-  echo "<UNK> 1" >> $dir/words.txt
-  cat data/local/lm/librispeech-vocab.txt | sort | uniq |
-    awk '{print $1 " " NR+1}' >> $dir/words.txt
+  if [ ! -f $dir/tokens.txt ]; then
+    cp $token_file $dir/tokens.txt
+    ln -fv $dir/tokens.txt $dir/phones.txt
+    echo "<eps> 0" > $dir/words.txt
+    echo "<UNK> 1" >> $dir/words.txt
+    cat data/local/lm/librispeech-vocab.txt | sort | uniq |
+      awk '{print $1 " " NR+1}' >> $dir/words.txt
+  fi
 
   if [ ! -f $dir/lexicon.txt ]; then
     python3 ./generate_bpe_lexicon.py \
@@ -101,8 +103,10 @@ fi
 
 if [ $stage -le 3 ]; then
   export CUDA_VISIBLE_DEVICES=2
+  # Set max-duration=1 because rescore with decoder only support batch_size=1
   python bpe_ctc_att_conformer_decode.py \
-    --max-duration=5 \
+    --max-duration=1 \
     --generate-release-model=False \
-    --decode_with_released_model=True
+    --decode_with_released_model=True \
+    --num-paths-for-decoder-rescore=500
 fi
