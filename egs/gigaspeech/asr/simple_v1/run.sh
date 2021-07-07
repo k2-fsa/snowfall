@@ -7,7 +7,7 @@
 
 set -eou pipefail
 
-stage=0
+stage=4
 
 gigaspeech_dirs=(
 /export/corpora5/gigaspeech
@@ -66,7 +66,7 @@ if [ $stage -le 4 ]; then
       --read-symbol-table="data/lang_nosp/words.txt" \
       --disambig-symbol='#0' \
       --max-order=3 \
-      data/local/lm/lm_4gram.arpa.gz >data/lang_nosp/G.fst.txt
+      data/local/lm/lm_4gram.arpa >data/lang_nosp/G.fst.txt
   else
     echo "Skip generating data/lang_nosp/G.fst.txt"
   fi
@@ -76,7 +76,7 @@ if [ $stage -le 4 ]; then
       --read-symbol-table="data/lang_nosp/words.txt" \
       --disambig-symbol='#0' \
       --max-order=4 \
-      data/local/lm/lm_4gram.arpa.gz >data/lang_nosp/G_4_gram.fst.txt
+      data/local/lm/lm_4gram.arpa >data/lang_nosp/G_4_gram.fst.txt
   else
     echo "Skip generating data/lang_nosp/G_4_gram.fst.txt"
   fi
