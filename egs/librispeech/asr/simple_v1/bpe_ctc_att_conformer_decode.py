@@ -107,10 +107,9 @@ def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: 
 
     lats = k2.arc_sort(lats)
     fgram_lm_lats = _intersect_device(lats, token_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
-    fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats.to('cpu')).to(lats.device))
-    # am_scores is computed with log_semiring=True
-    # set log_semiring=True here to make fgram_lm_scores comparable to am_scores
-    fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=True)
+    fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats))
+    # log_semiring=False is a little better than log_semiring=True.
+    fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
     fgram_lm_scores = fgram_tot_scores - am_scores
 
 
@@ -309,7 +308,7 @@ def get_parser():
         '--avg',
         type=int,
         default=10,
-        help="Number of checkpionts to average. Automaticly select "
+        help="Number of checkpionts to average. Automatically select "
              "consecutive checkpoints before checkpoint specified by'--epoch'. ")
     parser.add_argument(
         '--att-rate',
@@ -540,8 +539,6 @@ def main():
     librispeech = LibriSpeechAsrDataModule(args)
     test_sets = ['test-clean', 'test-other']
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
-        # if 'test-clean' == test_set:
-        #     continue
         logging.info(f'* DECODING: {test_set}')
 
         test_set_wers = dict()
