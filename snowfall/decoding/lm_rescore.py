@@ -93,8 +93,7 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
                                      b_to_a_map=path_to_seq_map,
                                      sorted_match_a=True)
 
-    # NOTE: `k2.connect` supports only CPU at present
-    am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu')).to(device))
+    am_path_lats = k2.top_sort(k2.connect(am_path_lats))
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
     am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores

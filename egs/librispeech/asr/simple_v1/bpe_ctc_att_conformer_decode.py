@@ -78,11 +78,11 @@ def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: 
     # `new2old` is a 1-D torch.Tensor mapping from the output path index
     # to the input path index.
     # new2old.numel() == unique_word_seqs.num_elements()
-    unique_token_seqs, _, new2old = k2.ragged.unique_sequences(
-        token_seqs, need_num_repeats=False, need_new2old_indexes=True)
-    # Note: unique_token_seqs still has the same axes as token_seqs
+    unique_word_seqs, _, new2old = k2.ragged.unique_sequences(
+        word_seqs, need_num_repeats=False, need_new2old_indexes=True)
+    # Note: unique_word_seqs still has the same axes as word_seqs
 
-    seq_to_path_shape = k2.ragged.get_layer(unique_token_seqs.shape(), 0)
+    seq_to_path_shape = k2.ragged.get_layer(unique_word_seqs.shape(), 0)
 
     # path_to_seq_map is a 1-D torch.Tensor.
     # path_to_seq_map[i] is the seq to which the i-th path
@@ -91,22 +91,24 @@ def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: 
 
     # Remove the seq axis.
     # Now unique_word_seqs has only two axes [path][word]
-    unique_token_seqs = k2.ragged.remove_axis(unique_token_seqs, 0)
+    unique_word_seqs = k2.ragged.remove_axis(unique_word_seqs, 0)
 
-    # token_fsas is an FsaVec with axes [path][state][arc]
-    token_fsas = k2.linear_fsa(unique_token_seqs)
+    # word_fsas is an FsaVec with axes [path][state][arc]
+    word_fsas = k2.linear_fsa(unique_word_seqs)
 
-    token_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(token_fsas)
+    word_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(word_fsas)
+
+    am_scores = compute_am_scores(lats, word_fsas_with_epsilon_loops, path_to_seq_map)
+    import pdb; pdb.set_trace()
 
     # lats has token IDs as labels and word IDs as aux_labels.
     # inv_lats has word IDs as labels and token IDs as aux_labels
     # Do k2.invert to make it compatible to function compute_am_scores
-    inv_lats = k2.invert(lats)
-    inv_lats = k2.arc_sort(inv_lats) # no-op if inv_lats is already arc-sorted
-    am_scores = compute_am_scores(inv_lats, token_fsas_with_epsilon_loops, path_to_seq_map)
+    # inv_lats = k2.invert(lats)
+    inv_lats = k2.arc_sort(k2.invert(lats)) # no-op if inv_lats is already arc-sorted
 
-    lats = k2.arc_sort(lats)
-    fgram_lm_lats = _intersect_device(lats, token_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
+    # lats = k2.arc_sort(lats)
+    fgram_lm_lats = _intersect_device(inv_lats, word_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
     fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats))
     # log_semiring=False is a little better than log_semiring=True.
     fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
@@ -114,7 +116,10 @@ def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: 
 
 
     # now compute lm scores from transformer decoder
-    token_ids = k2.ragged.to_list(unique_token_seqs)
+    # Now token_seqs has only two axes [path][word]
+    token_seqs = k2.ragged.remove_axis(token_seqs, 0)
+    token_ids, _ = k2.ragged.index(token_seqs, new2old, axis=0)
+    token_ids = k2.ragged.to_list(token_ids)
     num_seqs = len(token_ids)
     time_steps = encoder_memory.shape[0]
     feature_dim = encoder_memory.shape[2]

@@ -217,6 +217,7 @@ class Transformer(AcousticModel):
             ys_in = [torch.cat([_sos, torch.tensor(y)], dim=0) for y in token_ids]
             ys_out = [torch.cat([torch.tensor(y), _eos], dim=0) for y in token_ids]
             ys_in_pad = pad_list(ys_in, eos_id)
+            ys_out_pad = pad_list(ys_out, -1)
         else:
             raise ValueError("Invalid input for decoder self attetion")
 
