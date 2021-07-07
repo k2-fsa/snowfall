@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 
-# Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang)
+# Copyright 2021 Johns Hopkins University (author: Piotr Żelasko)
 # Apache 2.0
-
-# Example of how to build L and G FST for K2. Most scripts of this example are copied from Kaldi.
 
 set -eou pipefail
 
 stage=4
+subset='{XS}'
 
 gigaspeech_dirs=(
 /export/corpora5/gigaspeech
@@ -83,20 +82,7 @@ if [ $stage -le 4 ]; then
 fi
 
 if [ $stage -le 5 ]; then
-  python3 ./prepare.py
-  for sup in data/supervisions*.jsonl; do
-    # Similar text filtering procedure as in:
-    # https://github.com/SpeechColab/GigaSpeech/blob/main/toolkits/kaldi/gigaspeech_data_prep.sh
-    # We directly edit the whole JSON line like the following:
-    # | remove punctuation
-    # | remove repeated whitespaces
-    # | filter out utterances with garbage tags
-    cat $sup \
-     | sed 's/<\(COMMA\|PERIOD\|QUESTIONMARK\|EXCLAMATIONPOINT\)>//g' \
-     | sed 's/ \+/ /g' \
-     | grep -v '<\(SIL\|MUSIC\|NOISE\|OTHER\)>' \
-     > ${sup//.jsonl/_filt.jsonl}
-  done
+  python3 ./prepare.py --subset $subset
 fi
 
 if [ $stage -le 6 ]; then
@@ -106,7 +92,7 @@ if [ $stage -le 6 ]; then
     # extract text field \
     # | remove quotes \
     # > save
-    jq '.text' 'data/supervisions_{XS}.jsonl' \
+    jq '.text' "data/supervisions_${subset}.jsonl" \
      | sed 's/"//g' \
      > data/local/tmp/transcript.txt
   fi
@@ -154,7 +140,7 @@ fi
 # exit 0
 
 if [ $stage -le 9 ]; then
-  python3 ./mmi_att_transformer_train.py
+  python3 ./mmi_att_transformer_train.py --subset "$subset"
 fi
 
 if [ $stage -le 10 ]; then

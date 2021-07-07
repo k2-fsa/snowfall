@@ -4,6 +4,7 @@
 # Apache 2.0
 import argparse
 import os
+import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -98,6 +99,22 @@ def get_parser():
     return parser
 
 
+# Similar text filtering and normalization procedure as in:
+# https://github.com/SpeechColab/GigaSpeech/blob/main/toolkits/kaldi/gigaspeech_data_prep.sh
+
+
+def normalize_text(
+    utt: str,
+    punct_pattern=re.compile(r"<(COMMA|PERIOD|QUESTIONMARK|EXCLAMATIONPOINT)>"),
+    whitespace_pattern=re.compile(r"\s\s+"),
+) -> str:
+    return whitespace_pattern.sub(" ", punct_pattern.sub("", utt))
+
+
+def has_no_oov(utt: str, oov_pattern=re.compile(r"<(SIL|MUSIC|NOISE|OTHER)>")) -> bool:
+    return oov_pattern.search(utt) is not None
+
+
 def main():
     args = get_parser().parse_args()
     dataset_parts = ["{" + args.subset + "}", "{DEV}", "{TEST}"]
@@ -136,12 +153,20 @@ def main():
             if (output_dir / f"cuts_{partition}.jsonl.gz").is_file():
                 print(f"{partition} already exists - skipping.")
                 continue
+            # Note this step makes the recipe different than LibriSpeech:
+            # We must filter out some utterances and remove punctuation to be consistent with Kaldi.
+            print("Filtering OOV utterances from supervisions")
+            manifests["supervisions"] = manifests["supervisions"].filter(has_no_oov)
+            print("Normalizing text in", partition)
+            for sup in manifests["supervisions"]:
+                sup.text = normalize_text(sup.text)
             print("Processing", partition)
+            # Create long-recording cut manifests.
             cut_set = CutSet.from_manifests(
                 recordings=manifests["recordings"],
                 supervisions=manifests["supervisions"],
             )
-            cut_set.to_file(output_dir / f'cuts_{partition}_raw.jsonl.gz')
+            cut_set.to_file(output_dir / f"cuts_{partition}_raw.jsonl.gz")
             # Note this step makes the recipe different than LibriSpeech:
             # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
             # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
