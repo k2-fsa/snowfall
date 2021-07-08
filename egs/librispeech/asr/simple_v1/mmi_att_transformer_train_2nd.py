@@ -84,7 +84,10 @@ def get_objf(batch: Dict,
     with autocast(enabled=scaler.is_enabled()), grad_context():
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
-            att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            if hasattr(model, 'module'):
+                att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            else:
+                att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
         if (ali_model is not None and global_batch_idx_train is not None and
                 global_batch_idx_train * accum_grad < 4000):
@@ -285,7 +288,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
         if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.module.P_scores)
+            if hasattr(model, 'module'):
+                P.set_scores_stochastic_(model.module.P_scores)
+            else:
+                P.set_scores_stochastic_(model.P_scores)
             assert P.requires_grad is True
 
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
@@ -368,7 +374,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 tb_writer.add_scalar('train/global_valid_average_objf',
                                      valid_average_objf,
                                      global_batch_idx_train)
-                model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                if hasattr(model, 'module'):
+                    model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                else:
+                    model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
@@ -485,9 +494,10 @@ def run(rank, world_size, args):
     att_rate = args.att_rate
 
     fix_random_seed(42)
-    setup_dist(rank, world_size, args.master_port)
+    if world_size > 1:
+        setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-new')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -548,7 +558,8 @@ def run(rank, world_size, args):
     model.to(device)
     describe(model)
 
-    model = DDP(model, device_ids=[rank])
+    if world_size > 1:
+        model = DDP(model, device_ids=[rank])
 
 
     second_pass = SecondPassModel(max_phone_id=graph_compiler.max_phone_id).to(device)
@@ -698,8 +709,10 @@ def run(rank, world_size, args):
                            local_rank=rank)
 
     logging.warning('Done')
-    torch.distributed.barrier()
-    cleanup_dist()
+
+    if world_size > 1:
+        torch.distributed.barrier()
+        cleanup_dist()
 
 
 def main():
@@ -708,7 +721,10 @@ def main():
     args = parser.parse_args()
     world_size = args.world_size
     assert world_size >= 1
-    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    if world_size > 1:
+        mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    else:
+        run(rank=0, world_size=world_size, args=args)
 
 
 torch.set_num_threads(1)

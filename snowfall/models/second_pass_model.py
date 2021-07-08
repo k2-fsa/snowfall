@@ -7,7 +7,7 @@ import logging
 import torch
 import torch.nn as nn
 from snowfall.models.transformer import PositionalEncoding
-from snowfall.models.transformer import TransformerEncoderLayer
+from snowfall.models.transformer import TransformerDecoderLayer
 from snowfall.models.transformer import generate_square_subsequent_mask
 
 import k2
@@ -75,13 +75,11 @@ class SecondPassModel(nn.Module):
     Therefore, for each input frame, we can get its corresponding phone
     ID, i.e., its alignment.
 
-    The phone IDs of each best path is used as input to an encoder
-    model. The encoder model uses masked multihead attention.
+    The phone IDs of each best path is used as a query to an decoder
+    model. The encoder memory output from the first pass model is used
+    as input memory for the decoder model.
 
-    The output of the encoder model is concatenated with the encoder memory
-    output from the first pass model. The concatenated result is fed into
-    a linear layer. log_softmax is called on the output of the linear layer
-    and the output of log_softmax is the output of the second pass model.
+    At the inference stage, the second pass model is used for rescoring.
     '''
 
     def __init__(self,
@@ -90,34 +88,32 @@ class SecondPassModel(nn.Module):
                  dropout: float = 0.1,
                  nhead: int = 4,
                  dim_feedforward: int = 2048,
-                 num_encoder_layers: int = 6):
+                 num_decoder_layers: int = 6):
         super().__init__()
         normalize_before = True  # True to use pre_LayerNorm
 
         num_classes = max_phone_id + 1  # +1 for the blank symbol
 
-        self.encoder_embed = nn.Embedding(num_classes, d_model)
+        self.decoder_embed = nn.Embedding(num_classes, d_model)
 
-        self.encoder_pos = PositionalEncoding(d_model, dropout)
+        self.decoder_pos = PositionalEncoding(d_model, dropout)
 
-        encoder_layer = TransformerEncoderLayer(
+        decoder_layer = TransformerDecoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout)
 
         if normalize_before:
-            encoder_norm = nn.LayerNorm(d_model)
+            decoder_norm = nn.LayerNorm(d_model)
         else:
-            encoder_norm = None
+            decoder_norm = None
 
-        self.encoder = nn.TransformerEncoder(encoder_layer=encoder_layer,
-                                             num_layers=num_encoder_layers,
-                                             norm=encoder_norm)
+        self.decoder = nn.TransformerDecoder(decoder_layer=decoder_layer,
+                                             num_layers=num_decoder_layers,
+                                             norm=decoder_norm)
 
-        # *2 because we concatenate the outputs of the two encoders from the first
-        # pass and the second pass model
-        self.output_linear = nn.Linear(d_model * 2, num_classes)
+        self.output_linear = nn.Linear(d_model, num_classes)
 
     def forward(self, encoder_memory: torch.Tensor, best_paths: k2.Fsa,
                 supervision_segments: torch.Tensor):
@@ -180,18 +176,19 @@ class SecondPassModel(nn.Module):
                                                      batch_first=True)
         # padded_acoustics is of shape (num_seqs, T, F)
 
-        x2 = self.encoder_embed(padded_phones.long())
+        x2 = self.decoder_embed(padded_phones.long())
         # x2 is (num_seqs, T, F)
-        x2 = self.encoder_pos(x2)
+        x2 = self.decoder_pos(x2)
 
         assert x2.shape == padded_acoustics.shape
 
         # (B, T, F) -> (T, B, F)
         x2 = x2.permute(1, 0, 2)
+        padded_acoustics = padded_acoustics.permute(1, 0, 2)
 
         # compute two masks
         # (1) padding_mask
-        # (2) src_mask for masked self-attention
+        # (2) attn_mask for masked self-attention
 
         key_padding_mask = _compute_padding_mask(len_per_seq)
         # key_padding_mask is of shape (B, T)
@@ -199,21 +196,21 @@ class SecondPassModel(nn.Module):
         attn_mask = generate_square_subsequent_mask(x2.shape[0]).to(device)
         # attn_mask is of shape (T, T)
 
-        x2 = self.encoder(src=x2,
-                          mask=attn_mask,
-                          src_key_padding_mask=key_padding_mask)
+        x2 = self.decoder(tgt=x2,
+                          memory=padded_acoustics,
+                          tgt_mask=attn_mask,
+                          tgt_key_padding_mask=key_padding_mask,
+                          memory_key_padding_mask=key_padding_mask)
 
         # x2 is (T, B, F)
 
         x2 = x2.permute(1, 0, 2)
 
-        # now x2 is (B, T, F)
+        # x2 is (B, T, F)
 
-        x_concat = torch.cat((padded_acoustics, x2), dim=-1)
+        out = self.output_linear(x2)
 
-        out = self.output_linear(x_concat)
-
-        out = nn.functional.log_softmax(out, dim=2)  # (num_seqs, T, F)
+        out = nn.functional.log_softmax(out, dim=2)  # (B, T, F)
 
         return out
 
