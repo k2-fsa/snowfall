@@ -12,7 +12,8 @@ from math import isclose
 from pathlib import Path
 
 import torch
-from lhotse import CutSet, Fbank, FbankConfig, LilcomHdf5Writer, ChunkedLilcomHdf5Writer, SupervisionSegment, combine
+
+from lhotse import ChunkedLilcomHdf5Writer, CutSet, Fbank, FbankConfig, LilcomHdf5Writer, SupervisionSegment, combine
 from lhotse.recipes import prepare_gigaspeech, prepare_musan
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
@@ -150,7 +151,7 @@ def main():
     extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
-            if (output_dir / f"cuts_{partition}.jsonl.gz").is_file():
+            if (output_dir / f"cuts_gigaspeech_{partition}.jsonl.gz").is_file():
                 print(f"{partition} already exists - skipping.")
                 continue
             # Note this step makes the recipe different than LibriSpeech:
@@ -175,13 +176,13 @@ def main():
             # We leverage the chunked HDF5 storage to make reading this efficient later.
             cut_set = cut_set.compute_and_store_features(
                 extractor=extractor,
-                storage_path=f"{output_dir}/feats_{partition}",
+                storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
                 # when an executor is specified, make more partitions
                 num_jobs=args.num_jobs if ex is None else 80,
                 executor=ex,
                 storage_type=ChunkedLilcomHdf5Writer,
             )
-            cut_set.to_file(output_dir / f"cuts_{partition}_raw.jsonl.gz")
+            cut_set.to_file(output_dir / f"cuts_gigaspeech_{partition}_raw.jsonl.gz")
             # Note this step makes the recipe different than LibriSpeech:
             # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
             # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
@@ -194,7 +195,7 @@ def main():
                 context_direction=args.context_direction,
             )
             gigaspeech_manifests[partition]["cuts"] = cut_set
-            cut_set.to_file(output_dir / f"cuts_{partition}.jsonl.gz")
+            cut_set.to_file(output_dir / f"cuts_gigaspeech_{partition}.jsonl.gz")
         # Now onto Musan
         if not musan_cuts_path.is_file():
             print("Extracting features for Musan")
