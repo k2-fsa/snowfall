@@ -5,7 +5,7 @@
 
 set -eou pipefail
 
-stage=6
+stage=0
 subset='XS'
 
 gigaspeech_dirs=(
@@ -105,7 +105,7 @@ if [ $stage -le 7 ]; then
     echo "Generating data/lm/P.arpa"
     ./local/add_silence_to_transcript.py \
       --transcript data/local/tmp/transcript.txt \
-      --sil-word "<SIL>" \
+      --sil-word "!SIL" \
       --sil-prob 0.5 \
       --seed 20210629 \
       > data/lm/transcript_with_sil.txt
