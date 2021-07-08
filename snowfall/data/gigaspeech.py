@@ -33,11 +33,11 @@ class GigaSpeechAsrDataModule(AsrDataModule):
     @lru_cache()
     def valid_cuts(self) -> CutSet:
         logging.info("About to get dev cuts")
-        cuts_valid = load_manifest(self.args.feature_dir / 'cuts_{DEV}.jsonl.gz')
+        cuts_valid = load_manifest(self.args.feature_dir / 'cuts_DEV.jsonl.gz')
         return cuts_valid
 
     @lru_cache()
     def test_cuts(self) -> CutSet:
         logging.info("About to get test cuts")
-        cuts_test = load_manifest(self.args.feature_dir / 'cuts_{TEST}.jsonl.gz')
+        cuts_test = load_manifest(self.args.feature_dir / 'cuts_TEST.jsonl.gz')
         return cuts_test

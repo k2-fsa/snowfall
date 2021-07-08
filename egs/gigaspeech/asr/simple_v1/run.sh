@@ -5,8 +5,8 @@
 
 set -eou pipefail
 
-stage=4
-subset='{XS}'
+stage=6
+subset='XS'
 
 gigaspeech_dirs=(
 /export/corpora5/gigaspeech
@@ -92,7 +92,7 @@ if [ $stage -le 6 ]; then
     # extract text field \
     # | remove quotes \
     # > save
-    jq '.text' "data/supervisions_${subset}.jsonl" \
+    jq '.text' "exp/data/supervisions_{${subset}}.jsonl" \
      | sed 's/"//g' \
      > data/local/tmp/transcript.txt
   fi

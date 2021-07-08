@@ -12,7 +12,7 @@ from math import isclose
 from pathlib import Path
 
 import torch
-from lhotse import CutSet, Fbank, FbankConfig, LilcomHdf5Writer, combine
+from lhotse import CutSet, Fbank, FbankConfig, LilcomHdf5Writer, ChunkedLilcomHdf5Writer, SupervisionSegment, combine
 from lhotse.recipes import prepare_gigaspeech, prepare_musan
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
@@ -111,13 +111,13 @@ def normalize_text(
     return whitespace_pattern.sub(" ", punct_pattern.sub("", utt))
 
 
-def has_no_oov(utt: str, oov_pattern=re.compile(r"<(SIL|MUSIC|NOISE|OTHER)>")) -> bool:
-    return oov_pattern.search(utt) is not None
+def has_no_oov(sup: SupervisionSegment, oov_pattern=re.compile(r"<(SIL|MUSIC|NOISE|OTHER)>")) -> bool:
+    return oov_pattern.search(sup.text) is None
 
 
 def main():
     args = get_parser().parse_args()
-    dataset_parts = ["{" + args.subset + "}", "{DEV}", "{TEST}"]
+    dataset_parts = [args.subset, "DEV", "TEST"]
 
     print("Parts we will prepare: ", dataset_parts)
 
@@ -141,7 +141,7 @@ def main():
     )
 
     print("Musan manifest preparation:")
-    musan_cuts_path = output_dir / "cuts_musan.jsonl.gz"
+    musan_cuts_path = output_dir / "cuts_musan.json.gz"
     musan_manifests = prepare_musan(
         corpus_dir=musan_dir, output_dir=output_dir, parts=("music", "speech", "noise")
     )
@@ -166,6 +166,21 @@ def main():
                 recordings=manifests["recordings"],
                 supervisions=manifests["supervisions"],
             )
+            # Run data augmentation that needs to be done in the time domain.
+            if partition not in ["DEV", "TEST"]:
+                cut_set = (
+                    cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
+                )
+            # Extract the features before cutting into smaller cuts:
+            # We leverage the chunked HDF5 storage to make reading this efficient later.
+            cut_set = cut_set.compute_and_store_features(
+                extractor=extractor,
+                storage_path=f"{output_dir}/feats_{partition}",
+                # when an executor is specified, make more partitions
+                num_jobs=args.num_jobs if ex is None else 80,
+                executor=ex,
+                storage_type=ChunkedLilcomHdf5Writer,
+            )
             cut_set.to_file(output_dir / f"cuts_{partition}_raw.jsonl.gz")
             # Note this step makes the recipe different than LibriSpeech:
             # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
@@ -177,18 +192,6 @@ def main():
                 if isclose(args.context_window, 0.0)
                 else args.context_window,
                 context_direction=args.context_direction,
-            )
-            if partition not in ["{DEV}", "{TEST}"]:
-                cut_set = (
-                    cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
-                )
-            cut_set = cut_set.compute_and_store_features(
-                extractor=extractor,
-                storage_path=f"{output_dir}/feats_{partition}",
-                # when an executor is specified, make more partitions
-                num_jobs=args.num_jobs if ex is None else 80,
-                executor=ex,
-                storage_type=LilcomHdf5Writer,
             )
             gigaspeech_manifests[partition]["cuts"] = cut_set
             cut_set.to_file(output_dir / f"cuts_{partition}.jsonl.gz")
