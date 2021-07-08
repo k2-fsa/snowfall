@@ -299,11 +299,14 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
                                              b_to_a_map,
                                              sorted_match_a=True)
 
-    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats.to('cpu')).to(device))
+    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats))
 
     # inv_lats has phone IDs as labels
     # and word IDs as aux_labels.
     inv_lats = k2.invert(rescoring_lats)
+
+    if need_rescored_lats:
+        return inv_lats
 
     ans = dict()
     #
@@ -319,8 +322,5 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
 
         best_paths = k2.shortest_path(inv_lats, use_double_scores=True)
         key = f'lm_scale_{lm_scale}'
-        if need_rescored_lats:
-            ans[key] = (best_paths, inv_lats)
-        else:
-            ans[key] = best_paths
+        ans[key] = best_paths
     return ans
