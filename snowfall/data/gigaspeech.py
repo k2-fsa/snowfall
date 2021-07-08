@@ -1,8 +1,6 @@
 import argparse
-
-from functools import lru_cache
-
 import logging
+from functools import lru_cache
 
 from lhotse import CutSet, load_manifest
 from snowfall.data.asr_datamodule import AsrDataModule
@@ -27,17 +25,17 @@ class GigaSpeechAsrDataModule(AsrDataModule):
     @lru_cache()
     def train_cuts(self) -> CutSet:
         logging.info("About to get train cuts")
-        cuts_train = load_manifest(self.args.feature_dir / f'cuts_{self.args.subset}.jsonl.gz')
+        cuts_train = load_manifest(self.args.feature_dir / f'cuts_gigaspeech_{self.args.subset}.jsonl.gz')
         return cuts_train
 
     @lru_cache()
     def valid_cuts(self) -> CutSet:
         logging.info("About to get dev cuts")
-        cuts_valid = load_manifest(self.args.feature_dir / 'cuts_DEV.jsonl.gz')
+        cuts_valid = load_manifest(self.args.feature_dir / 'cuts_gigaspeech_DEV.jsonl.gz')
         return cuts_valid
 
     @lru_cache()
     def test_cuts(self) -> CutSet:
         logging.info("About to get test cuts")
-        cuts_test = load_manifest(self.args.feature_dir / 'cuts_TEST.jsonl.gz')
+        cuts_test = load_manifest(self.args.feature_dir / 'cuts_gigaspeech_TEST.jsonl.gz')
         return cuts_test
