@@ -40,39 +40,37 @@
 '''
 
 import argparse
-import k2
 import logging
-import numpy as np
 import os
-import torch
-from k2 import Fsa, SymbolTable
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
-from typing import Union
 
+import k2
+import torch
+from k2 import Fsa, SymbolTable
 
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
-from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.common import str2bool
-from snowfall.data import LibriSpeechAsrDataModule
+from snowfall.common import write_error_stats
 from snowfall.data.gigaspeech import GigaSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.decoding.lm_rescore import rescore_with_n_best_list
 from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
 from snowfall.models.contextnet import ContextNet
+from snowfall.models.transformer import Transformer
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
+
 
 def nbest_decoding(lats: k2.Fsa, num_paths: int):
     '''
@@ -325,13 +323,13 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
             results[lm_scale].extend(this_batch)
 
+        num_cuts += len(texts)
+
         if batch_idx % 10 == 0:
             logging.info(
                 'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
                     batch_idx, num_cuts, tot_num_cuts,
                     float(num_cuts) / tot_num_cuts * 100))
-
-        num_cuts += len(texts)
 
     return results
 
@@ -558,7 +556,7 @@ def main():
 
     # load dataset
     gigaspeech = GigaSpeechAsrDataModule(args)
-    test_sets = ['{DEV}', '{TEST}']
+    test_sets = ['DEV', 'TEST']
     for test_set, test_dl in zip(test_sets, [gigaspeech.valid_dataloaders(), gigaspeech.test_dataloaders()]):
         logging.info(f'* DECODING: {test_set}')
 
