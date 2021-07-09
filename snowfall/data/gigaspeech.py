@@ -60,7 +60,7 @@ class GigaSpeechAsrDataModule(AsrDataModule):
         logging.info("About to get dev cuts")
         cuts_valid = load_manifest(
             self.args.feature_dir
-            / f"gigaspeech_cuts_{get_context_suffix(self.args)}.jsonl.gz"
+            / f"gigaspeech_cuts_DEV{get_context_suffix(self.args)}.jsonl.gz"
         )
         return cuts_valid
 
