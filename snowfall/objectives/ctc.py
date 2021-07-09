@@ -29,6 +29,7 @@ class CTCLoss(nn.Module):
             supervision_segments: torch.Tensor
     ) -> Tuple[torch.Tensor, int, int]:
         num_graphs = self.graph_compiler.compile(texts).to(nnet_output.device)
+
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
 
         num_lats = k2.intersect_dense(num_graphs, dense_fsa_vec, 10.0)

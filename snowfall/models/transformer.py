@@ -146,7 +146,7 @@ class Transformer(AcousticModel):
         Returns:
             Tensor: Decoder loss.
         """
-        batch_text = get_normal_transcripts(supervision, graph_compiler.lexicon.words, graph_compiler.oov)
+        batch_text = get_normal_transcripts(supervision, graph_compiler.words, graph_compiler.oov)
         ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
                                             self.decoder_num_class - 1)
         ys_in_pad = ys_in_pad.to(x.device)

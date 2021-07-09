@@ -230,7 +230,7 @@ def main():
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
     # load L, G, symbol_table
-    lang_dir = Path('data/lang_nosp')
+    lang_dir = Path('data/lang_bpe')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
 
@@ -309,6 +309,7 @@ def main():
 
     model.to(device)
     describe(model)
+
 
     learning_rate = 1e-3
     optimizer = optim.AdamW(model.parameters(),

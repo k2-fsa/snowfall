@@ -24,6 +24,7 @@ from snowfall.decoding.graph import compile_HLG
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
+from snowfall.training.ctc_graph import build_ctc_topo2
 
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
@@ -93,12 +94,12 @@ def main():
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
-    lang_dir = Path('data/lang_nosp')
+    lang_dir = Path('data/lang_bpe')
     symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
     phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
     phone_ids = get_phone_symbols(phone_symbol_table)
     phone_ids_with_blank = [0] + phone_ids
-    ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
+    ctc_topo = k2.arc_sort(build_ctc_topo2(phone_ids_with_blank))
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         print("Loading L_disambig.fst.txt")

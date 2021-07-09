@@ -6,3 +6,4 @@ tensorboard
 torch>=1.6.0
 torchaudio
 click>=7.1
+sentencepiece
