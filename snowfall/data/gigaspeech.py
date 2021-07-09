@@ -51,7 +51,7 @@ class GigaSpeechAsrDataModule(AsrDataModule):
         logging.info("About to get train cuts")
         cuts_train = load_manifest(
             self.args.feature_dir
-            / f"cuts_gigaspeech_{self.args.subset}{get_context_suffix(self.args)}.jsonl.gz"
+            / f"gigaspeech_cuts_{self.args.subset}{get_context_suffix(self.args)}.jsonl.gz"
         )
         return cuts_train
 
@@ -60,7 +60,7 @@ class GigaSpeechAsrDataModule(AsrDataModule):
         logging.info("About to get dev cuts")
         cuts_valid = load_manifest(
             self.args.feature_dir
-            / f"cuts_gigaspeech_DEV{get_context_suffix(self.args)}.jsonl.gz"
+            / f"gigaspeech_cuts_{get_context_suffix(self.args)}.jsonl.gz"
         )
         return cuts_valid
 
@@ -69,6 +69,6 @@ class GigaSpeechAsrDataModule(AsrDataModule):
         logging.info("About to get test cuts")
         cuts_test = load_manifest(
             self.args.feature_dir
-            / f"cuts_gigaspeech_TEST{get_context_suffix(self.args)}.jsonl.gz"
+            / f"gigaspeech_cuts_TEST{get_context_suffix(self.args)}.jsonl.gz"
         )
         return cuts_test
