@@ -8,17 +8,17 @@ import re
 import subprocess
 import sys
 from contextlib import contextmanager
-from math import isclose
 from pathlib import Path
 
 import torch
 
 from lhotse import ChunkedLilcomHdf5Writer, CutSet, Fbank, FbankConfig, LilcomHdf5Writer, SupervisionSegment, combine
 from lhotse.recipes import prepare_gigaspeech, prepare_musan
-
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() in case it needs to take effect
 # even when we are not invoking the main (e.g. when spawning subprocesses).
+from snowfall.data.gigaspeech import get_context_suffix
+
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
@@ -147,13 +147,19 @@ def main():
         corpus_dir=musan_dir, output_dir=output_dir, parts=("music", "speech", "noise")
     )
 
+    ctx_suffix = get_context_suffix(args)
+
     print("Feature extraction:")
     extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
-            if (output_dir / f"cuts_gigaspeech_{partition}.jsonl.gz").is_file():
+            raw_cuts_path = output_dir / f"cuts_gigaspeech_{partition}_raw{ctx_suffix}.jsonl.gz"
+            cuts_path = output_dir / f"cuts_gigaspeech_{partition}{ctx_suffix}.jsonl.gz"
+
+            if cuts_path.is_file():
                 print(f"{partition} already exists - skipping.")
                 continue
+
             # Note this step makes the recipe different than LibriSpeech:
             # We must filter out some utterances and remove punctuation to be consistent with Kaldi.
             print("Filtering OOV utterances from supervisions")
@@ -161,17 +167,20 @@ def main():
             print("Normalizing text in", partition)
             for sup in manifests["supervisions"]:
                 sup.text = normalize_text(sup.text)
-            print("Processing", partition)
+
             # Create long-recording cut manifests.
+            print("Processing", partition)
             cut_set = CutSet.from_manifests(
                 recordings=manifests["recordings"],
                 supervisions=manifests["supervisions"],
             )
+
             # Run data augmentation that needs to be done in the time domain.
             if partition not in ["DEV", "TEST"]:
                 cut_set = (
                     cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
                 )
+
             # Extract the features before cutting into smaller cuts:
             # We leverage the chunked HDF5 storage to make reading this efficient later.
             cut_set = cut_set.compute_and_store_features(
@@ -182,7 +191,8 @@ def main():
                 executor=ex,
                 storage_type=ChunkedLilcomHdf5Writer,
             )
-            cut_set.to_file(output_dir / f"cuts_gigaspeech_{partition}_raw.jsonl.gz")
+            cut_set.to_file(raw_cuts_path)
+
             # Note this step makes the recipe different than LibriSpeech:
             # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
             # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
@@ -190,12 +200,12 @@ def main():
             cut_set = cut_set.trim_to_supervisions(
                 keep_overlapping=False,
                 min_duration=None
-                if isclose(args.context_window, 0.0)
+                if args.context_window <= 0.0
                 else args.context_window,
                 context_direction=args.context_direction,
             )
-            gigaspeech_manifests[partition]["cuts"] = cut_set
-            cut_set.to_file(output_dir / f"cuts_gigaspeech_{partition}.jsonl.gz")
+            cut_set.to_file(cuts_path)
+
         # Now onto Musan
         if not musan_cuts_path.is_file():
             print("Extracting features for Musan")
