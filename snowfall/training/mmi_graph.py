@@ -46,6 +46,7 @@ class MmiTrainingGraphCompiler(object):
     def __init__(
             self,
             lexicon: Lexicon,
+            P: k2.Fsa,
             device: torch.device,
             oov: str = '<UNK>'
     ):
@@ -53,15 +54,19 @@ class MmiTrainingGraphCompiler(object):
         Args:
           L_inv:
             Its labels are words, while its aux_labels are phones.
-        phones:
-          The phone symbol table.
-        words:
-          The word symbol table.
-        oov:
-          Out of vocabulary word.
+          P:
+            A phone bigram LM if the pronunciations in the lexicon are in phones;
+            a word piece bigram if the pronunciations in the lexicon are word pieces.
+          phones:
+            The phone symbol table.
+          words:
+            The word symbol table.
+          oov:
+            Out of vocabulary word.
         '''
         self.lexicon = lexicon
         L_inv = self.lexicon.L_inv.to(device)
+        P = P.to(device)
 
         if L_inv.properties & k2.fsa_properties.ARC_SORTED != 0:
             L_inv = k2.arc_sort(L_inv)
@@ -81,11 +86,20 @@ class MmiTrainingGraphCompiler(object):
         ctc_topo = build_ctc_topo(phone_symbols_with_blank).to(device)
         assert ctc_topo.requires_grad is False
 
-        self.ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
+        ctc_topo_inv = k2.arc_sort(ctc_topo.invert_())
+
+        P_with_self_loops = k2.add_epsilon_self_loops(P)
+
+        ctc_topo_P = k2.intersect(ctc_topo_inv,
+                                  P_with_self_loops,
+                                  treat_epsilons_specially=False).invert()
+
+        self.ctc_topo_P = k2.arc_sort(ctc_topo_P)
+
+
 
     def compile(self,
                 texts: Iterable[str],
-                P: k2.Fsa,
                 replicate_den: bool = True) -> Tuple[k2.Fsa, k2.Fsa]:
         '''Create numerator and denominator graphs from transcripts
         and the bigram phone LM.
@@ -94,8 +108,6 @@ class MmiTrainingGraphCompiler(object):
           texts:
             A list of transcripts. Within a transcript, words are
             separated by spaces.
-          P:
-            The bigram phone LM created by :func:`create_bigram_phone_lm`.
           replicate_den:
             If True, the returned den_graph is replicated to match the number
             of FSAs in the returned num_graph; if False, the returned den_graph
@@ -110,33 +122,18 @@ class MmiTrainingGraphCompiler(object):
               shape of the `num_graph` if replicate_den is True; otherwise, it
               is an FsaVec containing only a single FSA.
         '''
-        self_device = str(self.device)
-        if self_device == 'cuda':
-            # the compilers graph device does not specify GPU ID, just check that both tensors are on GPU
-            assert str(P.device).startswith(
-                'cuda'), f'Assertion failed: GraphCompiler uses on "cuda", but P is on "{P.device}"'
-        else:
-            assert str(P.device) == str(self.device), f'Assertion failed: "{P.device} == {self.device}"'
-        P_with_self_loops = k2.add_epsilon_self_loops(P)
-
-        ctc_topo_P = k2.intersect(self.ctc_topo_inv,
-                                  P_with_self_loops,
-                                  treat_epsilons_specially=False).invert()
-
-        ctc_topo_P = k2.arc_sort(ctc_topo_P)
-
         num_graphs = self.build_num_graphs(texts)
         num_graphs_with_self_loops = k2.remove_epsilon_and_add_self_loops(
             num_graphs)
 
         num_graphs_with_self_loops = k2.arc_sort(num_graphs_with_self_loops)
 
-        num = k2.compose(ctc_topo_P,
+        num = k2.compose(self.ctc_topo_P,
                          num_graphs_with_self_loops,
                          treat_epsilons_specially=False)
         num = k2.arc_sort(num)
 
-        ctc_topo_P_vec = k2.create_fsa_vec([ctc_topo_P.detach()])
+        ctc_topo_P_vec = k2.create_fsa_vec([self.ctc_topo_P])
         if replicate_den:
             indexes = torch.zeros(len(texts),
                                   dtype=torch.int32,

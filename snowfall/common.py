@@ -88,9 +88,11 @@ def load_checkpoint(
             src_key = '{}.{}'.format('module', key)
             dst_state_dict[key] = src_state_dict.pop(src_key)
         assert len(src_state_dict) == 0
-        model.load_state_dict(dst_state_dict)
+        model.load_state_dict(dst_state_dict, strict=False)
     else:
-        model.load_state_dict(checkpoint['state_dict'])
+        model.load_state_dict(checkpoint['state_dict'], strict=False)
+    # Note we used strict=False above so that the current code
+    # can load models trained with P_scores.
 
     model.num_features = checkpoint['num_features']
     model.num_classes = checkpoint['num_classes']
@@ -151,9 +153,9 @@ def average_checkpoint(filenames: List[Pathlike], model: AcousticModel) -> Dict[
             src_key = '{}.{}'.format('module', key)
             dst_state_dict[key] = src_state_dict.pop(src_key)
         assert len(src_state_dict) == 0
-        model.load_state_dict(dst_state_dict)
+        model.load_state_dict(dst_state_dict, strict=False)
     else:
-        model.load_state_dict(checkpoint['state_dict'])
+        model.load_state_dict(checkpoint['state_dict'], strict=False)
 
     model.num_features = checkpoint['num_features']
     model.num_classes = checkpoint['num_classes']
@@ -362,7 +364,7 @@ def store_transcripts(path: Pathlike, texts: Iterable[Tuple[str, str]]):
             print(f'ref={ref}', file=f)
             print(f'hyp={hyp}', file=f)
 
-def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> None:
+def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> float:
     subs: Dict[Tuple[str,str], int] = defaultdict(int)
     ins: Dict[str, int] = defaultdict(int)
     dels: Dict[str, int] = defaultdict(int)
@@ -455,3 +457,4 @@ def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str
         hyp_count = corr + hyp_sub + ins
 
         print(f"{word}   {corr} {tot_errs} {ref_count} {hyp_count}", file=f)
+    return float(tot_err_rate)
