@@ -201,11 +201,13 @@ def main():
                     # context windows.
                     cut_set
                 except NameError:
+                    print(f"Reading {partition} raw cuts from disk.")
                     cut_set = CutSet.from_file(raw_cuts_path)
                 # Note this step makes the recipe different than LibriSpeech:
                 # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
                 # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
                 # context.
+                print(f"About to split {partition} raw cuts into smaller chunks.")
                 cut_set = cut_set.trim_to_supervisions(
                     keep_overlapping=False,
                     min_duration=None
