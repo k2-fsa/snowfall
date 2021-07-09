@@ -153,7 +153,7 @@ def main():
     extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
-            raw_cuts_path = output_dir / f"gigaspeech_cuts_{partition}.jsonl.gz"
+            raw_cuts_path = output_dir / f"gigaspeech_cuts_{partition}_raw.jsonl.gz"
             cuts_path = output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.jsonl.gz"
 
             if raw_cuts_path.is_file():
