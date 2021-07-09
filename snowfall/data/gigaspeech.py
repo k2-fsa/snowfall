@@ -7,7 +7,7 @@ from snowfall.data.asr_datamodule import AsrDataModule
 
 
 def get_context_suffix(args):
-    if args.context_window is None:
+    if args.context_window is None or args.context_window <= 0.0:
         ctx_suffix = ""
     else:
         ctx_suffix = f"_{args.context_direction}{args.context_window}"
