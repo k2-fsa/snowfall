@@ -217,6 +217,10 @@ def main():
                 )
                 cut_set.to_file(cuts_path)
 
+                # Remove cut_set so the next iteration can correctly infer whether it needs to
+                # load the raw cuts from disk or not.
+                del cut_set
+
         # Now onto Musan
         if not musan_cuts_path.is_file():
             print("Extracting features for Musan")
