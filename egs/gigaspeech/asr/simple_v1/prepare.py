@@ -156,55 +156,64 @@ def main():
             raw_cuts_path = output_dir / f"cuts_gigaspeech_{partition}_raw{ctx_suffix}.jsonl.gz"
             cuts_path = output_dir / f"cuts_gigaspeech_{partition}{ctx_suffix}.jsonl.gz"
 
-            if cuts_path.is_file():
-                print(f"{partition} already exists - skipping.")
-                continue
+            if raw_cuts_path.is_file():
+                print(f"{partition} already exists - skipping feature extraction.")
+            else:
+                # Note this step makes the recipe different than LibriSpeech:
+                # We must filter out some utterances and remove punctuation to be consistent with Kaldi.
+                print("Filtering OOV utterances from supervisions")
+                manifests["supervisions"] = manifests["supervisions"].filter(has_no_oov)
+                print("Normalizing text in", partition)
+                for sup in manifests["supervisions"]:
+                    sup.text = normalize_text(sup.text)
 
-            # Note this step makes the recipe different than LibriSpeech:
-            # We must filter out some utterances and remove punctuation to be consistent with Kaldi.
-            print("Filtering OOV utterances from supervisions")
-            manifests["supervisions"] = manifests["supervisions"].filter(has_no_oov)
-            print("Normalizing text in", partition)
-            for sup in manifests["supervisions"]:
-                sup.text = normalize_text(sup.text)
-
-            # Create long-recording cut manifests.
-            print("Processing", partition)
-            cut_set = CutSet.from_manifests(
-                recordings=manifests["recordings"],
-                supervisions=manifests["supervisions"],
-            )
-
-            # Run data augmentation that needs to be done in the time domain.
-            if partition not in ["DEV", "TEST"]:
-                cut_set = (
-                    cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
+                # Create long-recording cut manifests.
+                print("Processing", partition)
+                cut_set = CutSet.from_manifests(
+                    recordings=manifests["recordings"],
+                    supervisions=manifests["supervisions"],
                 )
 
-            # Extract the features before cutting into smaller cuts:
-            # We leverage the chunked HDF5 storage to make reading this efficient later.
-            cut_set = cut_set.compute_and_store_features(
-                extractor=extractor,
-                storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
-                # when an executor is specified, make more partitions
-                num_jobs=args.num_jobs if ex is None else 80,
-                executor=ex,
-                storage_type=ChunkedLilcomHdf5Writer,
-            )
-            cut_set.to_file(raw_cuts_path)
+                # Run data augmentation that needs to be done in the time domain.
+                if partition not in ["DEV", "TEST"]:
+                    cut_set = (
+                            cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
+                    )
 
-            # Note this step makes the recipe different than LibriSpeech:
-            # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
-            # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
-            # context.
-            cut_set = cut_set.trim_to_supervisions(
-                keep_overlapping=False,
-                min_duration=None
-                if args.context_window <= 0.0
-                else args.context_window,
-                context_direction=args.context_direction,
-            )
-            cut_set.to_file(cuts_path)
+                # Extract the features before cutting into smaller cuts:
+                # We leverage the chunked HDF5 storage to make reading this efficient later.
+                cut_set = cut_set.compute_and_store_features(
+                    extractor=extractor,
+                    storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
+                    # when an executor is specified, make more partitions
+                    num_jobs=args.num_jobs if ex is None else 80,
+                    executor=ex,
+                    storage_type=ChunkedLilcomHdf5Writer,
+                )
+                cut_set.to_file(raw_cuts_path)
+
+            if cuts_path.is_file():
+                print(f"{partition} already exists - skipping cutting into sub-segments.")
+            else:
+                try:
+                    # If we skipped initializing `cut_set` because it exists on disk, we'll load it.
+                    # This helps us avoid re-computing the features for different variants of
+                    # context windows.
+                    cut_set
+                except NameError:
+                    cut_set = CutSet.from_file(raw_cuts_path)
+                # Note this step makes the recipe different than LibriSpeech:
+                # Since recordings are long, the initial CutSet has very long cuts with a plenty of supervisions.
+                # We cut these into smaller chunks centered around each supervision, possibly adding acoustic
+                # context.
+                cut_set = cut_set.trim_to_supervisions(
+                    keep_overlapping=False,
+                    min_duration=None
+                    if args.context_window <= 0.0
+                    else args.context_window,
+                    context_direction=args.context_direction,
+                )
+                cut_set.to_file(cuts_path)
 
         # Now onto Musan
         if not musan_cuts_path.is_file():
