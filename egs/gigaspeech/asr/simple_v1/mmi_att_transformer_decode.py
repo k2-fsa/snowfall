@@ -422,7 +422,10 @@ def main():
 
     output_beam_size = args.output_beam_size
 
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
+    suffix = ''
+    if args.context_window is not None and args.context_window > 0:
+        suffix = f'-ac{args.context_window}'
+    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer' + suffix)
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')

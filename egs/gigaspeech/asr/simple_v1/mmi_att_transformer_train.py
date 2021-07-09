@@ -20,7 +20,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_
@@ -483,7 +482,10 @@ def run(rank, world_size, args):
     if world_size > 1:
         setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
+    suffix = ''
+    if args.context_window is not None and args.context_window > 0:
+        suffix = f'-ac{args.context_window}'
+    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer' + suffix)
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
