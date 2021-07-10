@@ -93,8 +93,7 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
                                      b_to_a_map=path_to_seq_map,
                                      sorted_match_a=True)
 
-    # NOTE: `k2.connect` supports only CPU at present
-    am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu')).to(device))
+    am_path_lats = k2.top_sort(k2.connect(am_path_lats))
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
     am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores
@@ -195,7 +194,7 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
                                      word_fsas_with_epsilon_loops,
                                      b_to_a_map=b_to_a_map,
                                      sorted_match_a=True)
-    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu')).to(device))
+    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats))
     lm_scores = lm_path_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
 
     ans = dict()
@@ -299,7 +298,7 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
                                              b_to_a_map,
                                              sorted_match_a=True)
 
-    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats.to('cpu')).to(device))
+    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats))
 
     # inv_lats has phone IDs as labels
     # and word IDs as aux_labels.
