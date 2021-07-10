@@ -3,6 +3,7 @@ import logging
 from functools import lru_cache
 
 from lhotse import CutSet, load_manifest
+from snowfall.common import str2bool
 from snowfall.data.asr_datamodule import AsrDataModule
 
 
@@ -45,6 +46,13 @@ class GigaSpeechAsrDataModule(AsrDataModule):
                  "If it's larger than 0, determines in which direction (relative to the supervision) "
                  "to seek for extra acoustic context. Available values: (left|right|center|random).",
         )
+        group.add_argument(
+            '--use-context-for-test',
+            type=str2bool,
+            default=False,
+            help='Should we read cuts with acoustic context or without it. '
+                 '(note: for now, they may contain duplicated segments)'
+        )
 
     @lru_cache()
     def train_cuts(self) -> CutSet:
@@ -57,18 +65,20 @@ class GigaSpeechAsrDataModule(AsrDataModule):
 
     @lru_cache()
     def valid_cuts(self) -> CutSet:
-        logging.info("About to get dev cuts")
-        cuts_valid = load_manifest(
-            self.args.feature_dir
-            / f"gigaspeech_cuts_DEV{get_context_suffix(self.args)}.jsonl.gz"
-        )
+        if self.args.use_context_for_test:
+            path = self.args.feature_dir / f"gigaspeech_cuts_DEV{get_context_suffix(self.args)}.jsonl.gz"
+        else:
+            path = self.args.feature_dir / f"gigaspeech_cuts_DEV.jsonl.gz"
+        logging.info(f"About to get valid cuts from {path}")
+        cuts_valid = load_manifest(path)
         return cuts_valid
 
     @lru_cache()
     def test_cuts(self) -> CutSet:
-        logging.info("About to get test cuts")
-        cuts_test = load_manifest(
-            self.args.feature_dir
-            / f"gigaspeech_cuts_TEST{get_context_suffix(self.args)}.jsonl.gz"
-        )
+        if self.args.use_context_for_test:
+            path = self.args.feature_dir / f"gigaspeech_cuts_TEST{get_context_suffix(self.args)}.jsonl.gz"
+        else:
+            path = self.args.feature_dir / f"gigaspeech_cuts_TEST.jsonl.gz"
+        logging.info(f"About to get test cuts from {path}")
+        cuts_test = load_manifest(path)
         return cuts_test
