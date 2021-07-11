@@ -29,6 +29,11 @@ fi
 echo "GigaSpeech dataset dir: $giga_dir"
 
 
+if [ ! -d GigaSpeech ]; then
+  git clone https://github.com/SpeechColab/GigaSpeech
+fi
+
+
 if [ $stage -le 1 ]; then
   echo TODO: train or download LM
   #local/download_lm.sh "openslr.org/resources/11" data/local/lm

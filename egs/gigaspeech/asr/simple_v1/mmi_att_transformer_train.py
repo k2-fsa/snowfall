@@ -484,8 +484,10 @@ def run(rank, world_size, args):
 
     suffix = ''
     if args.context_window is not None and args.context_window > 0:
-        suffix = f'-ac{args.context_window}'
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer' + suffix)
+        suffix = f'ac{args.context_window}'
+    giga_subset = f'giga{args.subset}'
+    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}')
+
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')

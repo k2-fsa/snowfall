@@ -42,6 +42,7 @@
 import argparse
 import logging
 import os
+import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,7 @@ import k2
 import torch
 from k2 import Fsa, SymbolTable
 
-from snowfall.common import average_checkpoint, store_transcripts
+from snowfall.common import average_checkpoint, store_transcripts, store_transcripts_for_sclite
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
@@ -424,8 +425,10 @@ def main():
 
     suffix = ''
     if args.context_window is not None and args.context_window > 0:
-        suffix = f'-ac{args.context_window}'
-    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer' + suffix)
+        suffix = f'ac{args.context_window}'
+    giga_subset = f'giga{args.subset}'
+    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}')
+
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')
@@ -577,6 +580,18 @@ def main():
             recog_path = exp_dir / f'recogs-{test_set}-{key}.txt'
             store_transcripts(path=recog_path, texts=results)
             logging.info(f'The transcripts are stored in {recog_path}')
+
+            ref_path = exp_dir / 'ref.trn'
+            hyp_path = exp_dir / 'hyp.trn'
+            store_transcripts_for_sclite(
+                ref_path=ref_path,
+                hyp_path=hyp_path,
+                texts=results
+            )
+            logging.info(f'The sclite-format transcripts are stored in {ref_path} and {hyp_path}')
+            cmd = f'python3 GigaSpeech/utils/gigaspeech_scoring.py {ref_path} {hyp_path} {exp_dir / "tmp_sclite"}'
+            logging.info(f'Running: {cmd}')
+            subprocess.run(cmd, check=True, shell=True)
 
             # The following prints out WERs, per-word error statistics and aligned
             # ref/hyp pairs.

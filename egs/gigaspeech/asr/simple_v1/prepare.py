@@ -124,7 +124,7 @@ def main():
 
     corpus_dir = locate_corpus(
         Path("/export/corpora5/gigaspeech"),
-        Path("/exp/swatanabe/data/gigaspeech/"),
+        Path("/exp/pzelasko/gigaspeech"),
     )
     musan_dir = locate_corpus(
         Path("/export/corpora5/JHU/musan"),

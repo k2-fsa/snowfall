@@ -364,6 +364,18 @@ def store_transcripts(path: Pathlike, texts: Iterable[Tuple[str, str]]):
             print(f'ref={ref}', file=f)
             print(f'hyp={hyp}', file=f)
 
+
+def store_transcripts_for_sclite(
+        ref_path: Pathlike,
+        hyp_path: Pathlike,
+        texts: Iterable[Tuple[str, str]]
+):
+    with open(ref_path, 'w') as ref_f, open(hyp_path, 'w') as hyp_f:
+        for idx, (ref, hyp) in enumerate(texts):
+            print(f'utt{idx} {ref}', file=ref_f)
+            print(f'utt{idx} {hyp}', file=hyp_f)
+
+
 def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> float:
     subs: Dict[Tuple[str,str], int] = defaultdict(int)
     ins: Dict[str, int] = defaultdict(int)
