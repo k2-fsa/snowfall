@@ -372,8 +372,8 @@ def store_transcripts_for_sclite(
 ):
     with open(ref_path, 'w') as ref_f, open(hyp_path, 'w') as hyp_f:
         for idx, (ref, hyp) in enumerate(texts):
-            print(f'utt{idx} {ref}', file=ref_f)
-            print(f'utt{idx} {hyp}', file=hyp_f)
+            print(f'utt{idx} {" ".join(ref)}', file=ref_f)
+            print(f'utt{idx} {" ".join(hyp)}', file=hyp_f)
 
 
 def write_error_stats(f: TextIO, test_set_name: str, results: List[Tuple[str,str]]) -> float:
