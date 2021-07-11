@@ -590,8 +590,11 @@ def main():
             )
             logging.info(f'The sclite-format transcripts are stored in {ref_path} and {hyp_path}')
             cmd = f'python3 GigaSpeech/utils/gigaspeech_scoring.py {ref_path} {hyp_path} {exp_dir / "tmp_sclite"}'
-            logging.info(f'Running: {cmd}')
-            subprocess.run(cmd, check=True, shell=True)
+            logging.info(cmd)
+            try:
+                subprocess.run(cmd, check=True, shell=True)
+            except subprocess.CalledProcessError:
+                logging.error('Skipping sclite scoring as it failed to run: Is "sclite" registered in your $PATH?"')
 
             # The following prints out WERs, per-word error statistics and aligned
             # ref/hyp pairs.
