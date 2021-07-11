@@ -6,7 +6,8 @@ from typing import List, Union
 from torch.utils.data import DataLoader
 
 from lhotse import Fbank, FbankConfig, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, PrecomputedFeatures, \
+    SingleCutSampler, \
     SpecAugment
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from snowfall.common import str2bool
@@ -208,7 +209,11 @@ class AsrDataModule(DataModule):
             logging.debug("About to create test dataset")
             test = K2SpeechRecognitionDataset(
                 cuts_test,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                input_strategy=(
+                    OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                    if self.args.on_the_fly_feats
+                    else PrecomputedFeatures()
+                )
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")
