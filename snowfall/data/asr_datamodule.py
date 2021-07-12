@@ -116,7 +116,8 @@ class AsrDataModule(DataModule):
         train = K2SpeechRecognitionDataset(
             cuts_train,
             cut_transforms=transforms,
-            input_transforms=input_transforms
+            input_transforms=input_transforms,
+            return_cuts=True,
         )
 
         if self.args.on_the_fly_feats:
@@ -132,7 +133,8 @@ class AsrDataModule(DataModule):
                 cuts=cuts_train,
                 cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
-                input_transforms=input_transforms
+                input_transforms=input_transforms,
+                return_cuts=True,
             )
 
         if self.args.bucketing_sampler:
@@ -178,11 +180,15 @@ class AsrDataModule(DataModule):
             validate = K2SpeechRecognitionDataset(
                 cuts_valid.drop_features(),
                 cut_transforms=transforms,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
+                return_cuts=True,
             )
         else:
-            validate = K2SpeechRecognitionDataset(cuts_valid,
-                                                  cut_transforms=transforms)
+            validate = K2SpeechRecognitionDataset(
+                cuts_valid,
+                cut_transforms=transforms,
+                return_cuts=True,
+            )
         valid_sampler = SingleCutSampler(
             cuts_valid,
             max_duration=self.args.max_duration,
@@ -213,7 +219,8 @@ class AsrDataModule(DataModule):
                     OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
                     if self.args.on_the_fly_feats
                     else PrecomputedFeatures()
-                )
+                ),
+                return_cuts=True,
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")

@@ -53,6 +53,12 @@ class GigaSpeechAsrDataModule(AsrDataModule):
             help='Should we read cuts with acoustic context or without it. '
                  '(note: for now, they may contain duplicated segments)'
         )
+        group.add_argument(
+            '--small-dev',
+            type=str2bool,
+            default=False,
+            help='Should we use only 1000 utterances for dev (speeds up training)'
+        )
 
     @lru_cache()
     def train_cuts(self) -> CutSet:
@@ -71,7 +77,10 @@ class GigaSpeechAsrDataModule(AsrDataModule):
             path = self.args.feature_dir / f"gigaspeech_cuts_DEV.jsonl.gz"
         logging.info(f"About to get valid cuts from {path}")
         cuts_valid = load_manifest(path)
-        return cuts_valid
+        if self.args.small_dev:
+            return cuts_valid.subset(first=1000)
+        else:
+            return cuts_valid
 
     @lru_cache()
     def test_cuts(self) -> CutSet:
