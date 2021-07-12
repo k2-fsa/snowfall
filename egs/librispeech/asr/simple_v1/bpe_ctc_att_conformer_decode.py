@@ -31,96 +31,79 @@ from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.decoding.lm_rescore import rescore_with_n_best_list
 from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
-from snowfall.decoding.lm_rescore import compute_am_scores, _intersect_device
+from snowfall.decoding.lm_rescore import compute_am_scores_and_fm_scores
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.text.numericalizer import Numericalizer
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
 
+def remove_repeated_and_leq(tokens: List[int], blank_id: int = 0):
+    '''
+    Genrate valid token sequence.
+    Result may be used as input of transformer decoder and neural language model.
+    Fristly, remove repeated token from a "token alignment" seqs;
+    Then remove blank symbols.
 
-def extract_nbest_list(lats: k2.Fsa, num_paths: int):
+    This fuction may be replaced by tokenizing word_seqs with tokenizer
+    or composeing word_seqs_fsas with L_inv.fst
+    or composing token_seqs with ctc_topo.
+    Current method is chosed other than previous three methods because it won't need an extra object, i.e. tokenizer, L.fst or ctc_topo.
+    '''
+    new_tokens = []
+    previous = None
+    for token in tokens:
+        if token != previous:
+            new_tokens.append(token)
+            previous = token
+    new_tokens = [token for token in new_tokens if token > blank_id]
+    return new_tokens
+
+def nbest_am_flm_scrores(lats: k2.Fsa, num_paths: int):
+    '''
+    Compute am scores with word_seqs
+    '''
     # lats has token IDs as labels
     # and word IDs as aux_labels.
     # First, extract `num_paths` paths for each sequence.
     # paths is a k2.RaggedInt with axes [seq][path][arc_pos]
     paths = k2.random_paths(lats, num_paths=num_paths, use_double_scores=True)
-    # Both token_seqs and word_seqs are k2.RaggedInt sharing the same shape as `paths`
-    # Note that they also contain 0s and -1s.
+    # word_seqs is a k2.RaggedInt sharing the same shape as `paths`
+    # but it contains word IDs. Note that it also contains 0s and -1s.
     # The last entry in each sublist is -1.
-    token_seqs = k2.index(lats.labels.contiguous(), paths)
+
     word_seqs = k2.index(lats.aux_labels.contiguous(), paths)
-
-    token_seqs = k2.ragged.remove_values_leq(token_seqs, 0)
     word_seqs = k2.ragged.remove_values_leq(word_seqs, 0)
-    return token_seqs, word_seqs
 
-def compute_am_flm_scrores_1(lats, word_seqs, token_seqs):
-    '''
-    Compute am scores with word_seqs
-    wer is worse than compute_am_flm_scores_2
-    '''
     # lats has token IDs as labels and word IDs as aux_labels.
     unique_word_seqs, _, new2old = k2.ragged.unique_sequences(
         word_seqs, need_num_repeats=False, need_new2old_indexes=True)
 
     seq_to_path_shape = k2.ragged.get_layer(unique_word_seqs.shape(), 0)
     path_to_seq_map = seq_to_path_shape.row_ids(1)
+
+    # used to split final computed tot_scores
+    seq_to_path_splits = seq_to_path_shape.row_splits(1)
+
     unique_word_seqs = k2.ragged.remove_axis(unique_word_seqs, 0)
     # word_fsas is an FsaVec with axes [path][state][arc]
     word_fsas = k2.linear_fsa(unique_word_seqs)
     word_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(word_fsas)
-    am_scores = compute_am_scores(lats, word_fsas_with_epsilon_loops, path_to_seq_map)
-    # lats has token IDs as labels and word IDs as aux_labels.
-    # inv_lats has word IDs as labels and token IDs as aux_labels
-    inv_lats = k2.arc_sort(k2.invert(lats)) # no-op if inv_lats is already arc-sorted
+    am_scores, lm_scores = compute_am_scores_and_fm_scores(lats, word_fsas_with_epsilon_loops, path_to_seq_map)
 
-    fgram_lm_lats = _intersect_device(inv_lats, word_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
-    fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats))
-
-    # log_semiring=False is a little better than log_semiring=True.
-    fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
-    fgram_lm_scores = fgram_tot_scores - am_scores
-
-    # Now token_seqs has only two axes [path][word]
+    # token_seqs is a k2.RaggedInt sharing the same shape as `paths`
+    # but it contains token IDs.
+    # Note that it also contains 0s and -1s.
+    token_seqs = k2.index(lats.labels.contiguous(), paths)
     token_seqs = k2.ragged.remove_axis(token_seqs, 0)
     token_ids, _ = k2.ragged.index(token_seqs, new2old, axis=0)
     token_ids = k2.ragged.to_list(token_ids)
-    return am_scores, fgram_lm_scores, token_ids, new2old
+    # Now remove repeated tokens and 0s and -1s.
+    token_ids = [remove_repeated_and_leq(tokens) for tokens in token_ids]
 
-def compute_am_flm_scrores_2(lats, word_seqs, token_seqs):
-    '''
-    Compute am scores with token_seqs
-    wer is better than compute_am_flm_scores_1
-    '''
-    unique_token_seqs, _, new2old = k2.ragged.unique_sequences(
-        token_seqs, need_num_repeats=False, need_new2old_indexes=True)
+    return am_scores, lm_scores, token_ids, new2old, path_to_seq_map, seq_to_path_splits, word_seqs
 
-    seq_to_path_shape = k2.ragged.get_layer(unique_token_seqs.shape(), 0)
-    path_to_seq_map = seq_to_path_shape.row_ids(1)
-
-    unique_token_seqs = k2.ragged.remove_axis(unique_token_seqs, 0)
-    # token_fsas is an FsaVec with axes [path][state][arc]
-    token_fsas = k2.linear_fsa(unique_token_seqs)
-    token_fsas_with_epsilon_loops = k2.add_epsilon_self_loops(token_fsas)
-    # lats has token IDs as labels and word IDs as aux_labels.
-    # inv_lats has word IDs as labels and token IDs as aux_labels
-    am_scores = compute_am_scores(k2.arc_sort(k2.invert(lats)), token_fsas_with_epsilon_loops, path_to_seq_map)
-
-    fgram_lm_lats = _intersect_device(k2.arc_sort(lats), token_fsas_with_epsilon_loops, path_to_seq_map, sorted_match_a=True)
-    fgram_lm_lats = k2.top_sort(k2.connect(fgram_lm_lats))
-
-    # log_semiring=False is a little better than log_semiring=True.
-    fgram_tot_scores = fgram_lm_lats.get_tot_scores(use_double_scores=True, log_semiring=False)
-    fgram_lm_scores = fgram_tot_scores - am_scores
-
-    # Now token_seqs has only two axes [path][word]
-    token_seqs = k2.ragged.remove_axis(token_seqs, 0)
-    token_ids, _ = k2.ragged.index(token_seqs, new2old, axis=0)
-    token_ids = k2.ragged.to_list(token_ids)
-    return am_scores, fgram_lm_scores, token_ids, new2old
-
-def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: int):
+def nbest_rescoring(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: int):
     '''
     N-best rescore with transformer-decoder model.
     The basic idea is to first extra n-best paths from the given lattice.
@@ -130,36 +113,51 @@ def nbest_decoding(model, encoder_memory, memory_mask, lats: k2.Fsa, num_paths: 
     Total scores is a weight sum of am_score and decoder_scores.
     The one with the max total score is used as the decoding output.
     '''
-    # token_seqs, word_seqs, unique_token_seqs, unique_word_seqs = extract_nbest_list(lats, num_paths)
-    token_seqs, word_seqs = extract_nbest_list(lats, num_paths)
+    am_scores, fgram_lm_scores, token_ids, new2old, path_to_seq_map, seq_to_path_splits, word_seqs = nbest_am_flm_scrores(lats, num_paths=num_paths)
 
-    # am_scores, fgram_lm_scores, token_ids, new2old = compute_am_flm_scrores_1(lats, word_seqs, token_seqs)
-    am_scores, fgram_lm_scores, token_ids, new2old = compute_am_flm_scrores_2(lats, word_seqs, token_seqs)
-    # now compute lm scores from transformer decoder
+    # Start to compute lm scores from transformer decoder.
+
+    # an example of path_to_seq_map is:
+    # tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    #                device='cuda:0', dtype=torch.int32)
+    path_to_seq_map = torch.tensor(path_to_seq_map).to(lats.device)
+    seq_to_path_splits = seq_to_path_splits.to('cpu').long()
     num_seqs = len(token_ids)
-    time_steps = encoder_memory.shape[0]
-    feature_dim = encoder_memory.shape[2]
-    encoder_memory = encoder_memory.expand(time_steps, num_seqs, feature_dim)
-    memory_mask = memory_mask.expand(num_seqs, time_steps)
+    # encoder_memory shape: [T, N, C] --> [T, (nbest1 + nbest2 + **), C]
+    encoder_memory = encoder_memory.index_select(1, path_to_seq_map)
+    # memory_mask shape: [N, T] --> [(nbest1+nbest2), T]
+    memory_mask = memory_mask.index_select(0, path_to_seq_map)
 
     # nll: negative log-likelihood
     nll = model.decoder_nll(encoder_memory, memory_mask, token_ids=token_ids)
     assert nll.shape[0] == num_seqs
     decoder_scores = - nll.sum(dim=1)
 
-    flm_scale_list = [0.1, 0.3, 0.5, 0.6, 0.7, 0.9, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
-
-    decoder_scale_list = [0.1, 0.3, 0.5, 0.7, 0.9, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
-    decoder_scale_list += [0.01, 0.03, 0.05, 0.08, 0.09]
+    flm_scale_list = [0.1, 0.3, 0.5, 0.6, 0.7, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 1.9, 2.0]
+    decoder_scale_list = [0.1, 0.3, 0.5, 0.6, 0.7, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 1.9, 2.0]
 
     ans = dict()
+    word_seqs = k2.ragged.to_list(k2.ragged.remove_axis(word_seqs,0))
     for flm_scale in flm_scale_list:
         for decoder_scale in decoder_scale_list:
             key = f'lm_scale_{flm_scale}_decoder_scale_{decoder_scale}'
-            tot_scores = am_scores + flm_scale * fgram_lm_scores + decoder_scale * decoder_scores
-            best_seq_idx = new2old[torch.argmax(tot_scores)]
-            best_word_seq = [k2.ragged.to_list(word_seqs)[0][best_seq_idx]]
-            ans[key] = best_word_seq
+            batch_tot_scores = am_scores + flm_scale * fgram_lm_scores + decoder_scale * decoder_scores
+            batch_tot_scores = torch.tensor_split(batch_tot_scores, seq_to_path_splits[1:])
+            ans[key] = []
+            processed_seqs = 0
+            for tot_scores in batch_tot_scores:
+                if tot_scores.nelement() == 0:
+                    # the last element by torch.tensor_split may be empty
+                    # e.g.
+                    # torch.tensor_split(torch.tensor([1,2,3,4]), torch.tensor([2,4]))
+                    # (tensor([1, 2]), tensor([3, 4]), tensor([], dtype=torch.int64))
+
+                    break
+                best_seq_idx = new2old[processed_seqs + torch.argmax(tot_scores)]
+                best_word_seq = word_seqs[best_seq_idx]
+                processed_seqs += tot_scores.nelement()
+                ans[key].append(best_word_seq)
+            assert len(ans[key]) == seq_to_path_splits.nelement() - 1
 
     return ans
 
@@ -218,7 +216,6 @@ def decode_one_batch(batch: Dict[str, Any],
     assert feature.ndim == 3
     feature = feature.to(device)
     batch_size = feature.shape[0]
-    assert batch_size == 1, 'Currently only surrort batch_size=1'
 
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
@@ -249,7 +246,7 @@ def decode_one_batch(batch: Dict[str, Any],
     fgram_rescored_lattices = rescore_with_whole_lattice(lattices, G,
                                                  lm_scale_list=None,
                                                  need_rescored_lats=True)
-    ans = nbest_decoding(model, encoder_memory, memory_mask, fgram_rescored_lattices, num_paths)
+    ans = nbest_rescoring(model, encoder_memory, memory_mask, fgram_rescored_lattices, num_paths)
     return ans
 
 
@@ -274,6 +271,8 @@ def decode(dataloader: torch.utils.data.DataLoader,
     #  - value: It is a list of tuples (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
         texts = batch['supervisions']['text']
+        # TODO(Liyong Guo): Something wrong with batch_size > 1, fix this.
+        assert len(texts) == 1
 
         hyps_dict = decode_one_batch(batch=batch,
                                      model=model,
@@ -286,13 +285,11 @@ def decode(dataloader: torch.utils.data.DataLoader,
         for lm_scale, hyps in hyps_dict.items():
             this_batch = []
             assert len(hyps) == len(texts)
-
-            for i in range(len(texts)):
-                hyp_words = [symbols.get(x) for x in hyps[i]]
-                ref_words = texts[i].split(' ')
+            for hyp, text in zip(hyps, texts):
+                hyp_words = [symbols.get(x) for x in hyp]
+                ref_words = text.split(' ')
                 this_batch.append((ref_words, hyp_words))
-
-            results[lm_scale].extend(this_batch)
+                results[lm_scale].extend(this_batch)
 
         if batch_idx % 10 == 0:
             logging.info(
