@@ -344,6 +344,65 @@ listed below.
 
 # LibriSpeech MMI training results (Conformer)
 
+## 2021-05-02
+
+(Han Zhu): Results with VGG frontend.
+
+Training log and tensorboard log can be found at <https://github.com/k2-fsa/snowfall/pull/182>.
+
+Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.) and each epoch model without model averaging are
+listed below.
+
+```
+# average over last 5 epochs (LM rescoring with whole lattice)
+2021-05-02 00:36:42,886 INFO [common.py:381] [test-clean] %WER 5.55% [2916 / 52576, 548 ins, 172 del, 2196 sub ]
+2021-05-02 00:47:15,544 INFO [common.py:381] [test-other] %WER 15.32% [8021 / 52343, 1270 ins, 501 del, 6250 sub ]
+
+# average over last 5 epochs
+2021-05-01 23:35:17,891 INFO [common.py:381] [test-clean] %WER 6.65% [3494 / 52576, 457 ins, 293 del, 2744 sub ]
+2021-05-01 23:37:23,141 INFO [common.py:381] [test-other] %WER 17.68% [9252 / 52343, 1020 ins, 858 del, 7374 sub ]
+
+# epoch 0
+2021-05-02 01:09:52,745 INFO [common.py:381] [test-clean] %WER 21.68% [11396 / 52576, 1438 ins, 998 del, 8960 sub ]
+2021-05-02 01:11:14,618 INFO [common.py:381] [test-other] %WER 45.48% [23808 / 52343, 2571 ins, 2370 del, 18867 sub ]
+
+# epoch 1
+2021-05-02 01:12:49,179 INFO [common.py:381] [test-clean] %WER 11.76% [6184 / 52576, 695 ins, 683 del, 4806 sub ]
+2021-05-02 01:14:11,675 INFO [common.py:381] [test-other] %WER 29.74% [15569 / 52343, 1442 ins, 1937 del, 12190 sub ]
+
+# epoch 2
+2021-05-02 01:15:46,336 INFO [common.py:381] [test-clean] %WER 9.45% [4966 / 52576, 552 ins, 487 del, 3927 sub ]
+2021-05-02 01:17:08,992 INFO [common.py:381] [test-other] %WER 24.86% [13013 / 52343, 1194 ins, 1685 del, 10134 sub ]
+
+# epoch 3
+2021-05-02 01:18:43,584 INFO [common.py:381] [test-clean] %WER 9.49% [4987 / 52576, 549 ins, 686 del, 3752 sub ]
+2021-05-02 01:20:08,417 INFO [common.py:381] [test-other] %WER 25.26% [13220 / 52343, 1029 ins, 2292 del, 9899 sub ]
+
+# epoch 4
+2021-05-02 01:21:43,498 INFO [common.py:381] [test-clean] %WER 8.00% [4207 / 52576, 492 ins, 382 del, 3333 sub ]
+2021-05-02 01:23:06,132 INFO [common.py:381] [test-other] %WER 20.88% [10929 / 52343, 1056 ins, 1188 del, 8685 sub ]
+
+# epoch 5
+2021-05-02 01:24:39,382 INFO [common.py:381] [test-clean] %WER 7.89% [4148 / 52576, 500 ins, 347 del, 3301 sub ]
+2021-05-02 01:26:02,202 INFO [common.py:381] [test-other] %WER 21.10% [11043 / 52343, 1233 ins, 1105 del, 8705 sub ]
+
+# epoch 6
+2021-05-02 01:27:35,616 INFO [common.py:381] [test-clean] %WER 7.72% [4058 / 52576, 471 ins, 380 del, 3207 sub ]
+2021-05-02 01:28:58,678 INFO [common.py:381] [test-other] %WER 20.40% [10677 / 52343, 1106 ins, 1174 del, 8397 sub ]
+
+# epoch 7
+2021-05-02 01:30:32,897 INFO [common.py:381] [test-clean] %WER 7.40% [3893 / 52576, 470 ins, 349 del, 3074 sub ]
+2021-05-02 01:31:54,306 INFO [common.py:381] [test-other] %WER 19.61% [10264 / 52343, 1037 ins, 1047 del, 8180 sub ]
+
+# epoch 8
+2021-05-02 01:33:28,578 INFO [common.py:381] [test-clean] %WER 7.40% [3890 / 52576, 489 ins, 329 del, 3072 sub ]
+2021-05-02 01:34:52,473 INFO [common.py:381] [test-other] %WER 19.70% [10312 / 52343, 1157 ins, 1009 del, 8146 sub ]
+
+# epoch 9
+2021-05-02 01:36:30,299 INFO [common.py:381] [test-clean] %WER 7.32% [3848 / 52576, 525 ins, 321 del, 3002 sub ]
+2021-05-02 01:37:52,445 INFO [common.py:381] [test-other] %WER 19.93% [10430 / 52343, 1251 ins, 956 del, 8223 sub ]
+```
+
 ## 2021-03-26
 
 Results when adding SpecAugment with the schedule proposed in the original paper that introduces it;
@@ -460,4 +519,73 @@ listed below.
 
 # epoch 9
 2021-03-07 15:04:47,523 INFO [mmi_att_conformer_decode.py:312] %WER 7.79% [4095 / 52576, 677 ins, 280 del, 3138 sub ]
+```
+
+
+# LibriSpeech MMI training results (ContextNet)
+
+## 2021-04-29
+
+(Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/173>
+
+TensorBoard log is available at <https://tensorboard.dev/experiment/Wka3gjonTzKa1cL7gXPpag/>
+and the training log can be downloaded
+using <https://github.com/k2-fsa/snowfall/files/6395833/log-train-0-2021-04-27-01-30-48.txt>.
+
+Results could be reproduced with: 
+```
+python mmi_att_transformer_train.py --model-type contextnet --lr-factor 2.0 --weight-decay 1e-6 --max-duration 300 --full-libri 0 --use-ali-model 0
+```
+
+Decoding results (WER) of final model averaged over last 5 epochs (i.e. epochs 5 to 9.)
+and each epoch model without model averaging are listed below.
+
+```
+# average over last 5 epochs (LM rescoring with whole lattice)
+2021-05-06 02:44:10,156 INFO [common.py:381] [test-clean] %WER 6.66% [3504 / 52576, 767 ins, 190 del, 2547 sub ]
+2021-05-06 03:05:42,063 INFO [common.py:381] [test-other] %WER 18.36% [9612 / 52343, 1651 ins, 683 del, 7278 sub ]
+
+# average over last 5 epochs
+2021-04-27 12:48:07,217 INFO [common.py:365] [test-clean] %WER 8.03% [4220 / 52576, 570 ins, 366 del, 3284 sub ]
+2021-04-27 12:49:27,507 INFO [common.py:365] [test-other] %WER 22.14% [11588 / 52343, 1232 ins, 1350 del, 9006 sub ]
+
+# epoch 0
+2021-04-29 01:46:31,265 INFO [common.py:365] [test-clean] %WER 13.48% [7088 / 52576, 767 ins, 744 del, 5577 sub ]
+2021-04-29 01:47:50,590 INFO [common.py:365] [test-other] %WER 35.13% [18390 / 52343, 1596 ins, 2473 del, 14321 sub ]
+
+# epoch 1
+2021-04-29 01:49:23,170 INFO [common.py:365] [test-clean] %WER 10.28% [5405 / 52576, 568 ins, 601 del, 4236 sub ]
+2021-04-29 01:50:44,332 INFO [common.py:365] [test-other] %WER 28.70% [15025 / 52343, 1223 ins, 2089 del, 11713 sub ]
+
+# epoch 2
+2021-04-29 01:52:14,942 INFO [common.py:365] [test-clean] %WER 9.74% [5121 / 52576, 587 ins, 536 del, 3998 sub ]
+2021-04-29 01:53:34,017 INFO [common.py:365] [test-other] %WER 26.25% [13740 / 52343, 1258 ins, 1732 del, 10750 sub ]
+
+# epoch 3
+2021-04-29 01:55:05,413 INFO [common.py:365] [test-clean] %WER 9.19% [4830 / 52576, 598 ins, 447 del, 3785 sub ]
+2021-04-29 01:56:25,599 INFO [common.py:365] [test-other] %WER 25.09% [13134 / 52343, 1372 ins, 1533 del, 10229 sub ]
+
+# epoch 4
+2021-04-29 01:57:55,792 INFO [common.py:365] [test-clean] %WER 9.25% [4863 / 52576, 561 ins, 500 del, 3802 sub ]
+2021-04-29 01:59:15,584 INFO [common.py:365] [test-other] %WER 25.37% [13281 / 52343, 1194 ins, 1927 del, 10160 sub ]
+
+# epoch 5
+2021-04-29 02:00:48,407 INFO [common.py:365] [test-clean] %WER 8.76% [4606 / 52576, 573 ins, 423 del, 3610 sub ]
+2021-04-29 02:02:09,057 INFO [common.py:365] [test-other] %WER 24.35% [12744 / 52343, 1250 ins, 1649 del, 9845 sub ]
+
+# epoch 6
+2021-04-29 02:03:41,794 INFO [common.py:365] [test-clean] %WER 8.87% [4666 / 52576, 584 ins, 459 del, 3623 sub ]
+2021-04-29 02:05:00,733 INFO [common.py:365] [test-other] %WER 24.82% [12994 / 52343, 1258 ins, 1779 del, 9957 sub ]
+
+# epoch 7
+2021-04-29 02:06:32,426 INFO [common.py:365] [test-clean] %WER 8.85% [4655 / 52576, 629 ins, 419 del, 3607 sub ]
+2021-04-29 02:07:53,611 INFO [common.py:365] [test-other] %WER 24.78% [12971 / 52343, 1389 ins, 1504 del, 10078 sub ]
+
+# epoch 8
+2021-04-29 02:09:25,071 INFO [common.py:365] [test-clean] %WER 8.70% [4572 / 52576, 628 ins, 403 del, 3541 sub ]
+2021-04-29 02:10:44,437 INFO [common.py:365] [test-other] %WER 23.76% [12435 / 52343, 1350 ins, 1360 del, 9725 sub ]
+
+# epoch 9
+2021-04-29 02:12:15,899 INFO [common.py:365] [test-clean] %WER 8.70% [4572 / 52576, 702 ins, 395 del, 3475 sub ]
+2021-04-29 02:13:36,382 INFO [common.py:365] [test-other] %WER 24.07% [12597 / 52343, 1482 ins, 1424 del, 9691 sub ]
 ```

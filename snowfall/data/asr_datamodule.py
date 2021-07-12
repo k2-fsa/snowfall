@@ -163,18 +163,29 @@ class AsrDataModule(DataModule):
         logging.info("About to get dev cuts")
         cuts_valid = self.valid_cuts()
 
+        transforms = [ ]
+        if self.args.concatenate_cuts:
+            transforms = [ CutConcatenate(
+                                 duration_factor=self.args.duration_factor,
+                                 gap=self.args.gap)
+                          ] + transforms
+
+
         logging.info("About to create dev dataset")
         if self.args.on_the_fly_feats:
             cuts_valid = cuts_valid.drop_features()
             validate = K2SpeechRecognitionDataset(
                 cuts_valid.drop_features(),
+                cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
             )
         else:
-            validate = K2SpeechRecognitionDataset(cuts_valid)
+            validate = K2SpeechRecognitionDataset(cuts_valid,
+                                                  cut_transforms=transforms)
         valid_sampler = SingleCutSampler(
             cuts_valid,
             max_duration=self.args.max_duration,
+            shuffle=True,
         )
         logging.info("About to create dev dataloader")
         valid_dl = DataLoader(

@@ -42,6 +42,38 @@ def build_ctc_topo(tokens: List[int]) -> k2.Fsa:
     return ans
 
 
+def build_ctc_topo2(phones: List[int]):
+    # See https://github.com/k2-fsa/k2/issues/746#issuecomment-856421616
+    assert 0 in phones, 'We assume 0 is the ID of the blank symbol'
+    phones = phones.copy()
+    phones.remove(0)
+
+    num_phones = len(phones)
+
+    start = 0
+    final = num_phones + 1
+
+    arcs = []
+    arcs.append([start, start, 0, 0, 0])
+    arcs.append([start, final, -1, -1, 0])
+    arcs.append([final])
+    for i, p in enumerate(phones):
+        i += 1
+        arcs.append([start, start, p, p, 0])
+
+        arcs.append([start, i, p, p, 0])
+        arcs.append([i, i, p, 0, 0])
+
+        arcs.append([i, start, p, 0, 0])
+
+    arcs = sorted(arcs, key=lambda arc: arc[0])
+    arcs = [[str(i) for i in arc] for arc in arcs]
+    arcs = [' '.join(arc) for arc in arcs]
+    arcs = '\n'.join(arcs)
+    ctc_topo = k2.Fsa.from_str(arcs, False)
+    return k2.arc_sort(ctc_topo)
+
+
 class CtcTrainingGraphCompiler(object):
 
     def __init__(self,
