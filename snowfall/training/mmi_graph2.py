@@ -8,7 +8,7 @@ import k2
 import torch
 
 from .ctc_graph import build_ctc_topo
-from snowfall.common import get_phone_symbols
+from snowfall.common2 import get_phone_symbols
 from ..lexicon import Lexicon
 
 

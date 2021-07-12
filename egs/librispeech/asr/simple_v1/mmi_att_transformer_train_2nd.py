@@ -27,10 +27,10 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from lhotse.utils import fix_random_seed, nullcontext
-from snowfall.common import describe, str2bool
-from snowfall.common import load_checkpoint, save_checkpoint
-from snowfall.common import save_training_info
-from snowfall.common import setup_logger
+from snowfall.common2 import describe, str2bool
+from snowfall.common2 import load_checkpoint, save_checkpoint
+from snowfall.common2 import save_training_info
+from snowfall.common2 import setup_logger
 from snowfall.data.librispeech import LibriSpeechAsrDataModule
 from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
@@ -40,11 +40,12 @@ from snowfall.models.conformer import Conformer
 from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
 from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.second_pass_model import SecondPassModel
-from snowfall.objectives import LFMMILoss, encode_supervisions
+from snowfall.objectives import encode_supervisions
+from snowfall.objectives.mmi2 import LFMMILoss
 from snowfall.objectives.common import get_tot_objf_and_num_frames
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
-from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
-from snowfall.training.mmi_graph import create_bigram_phone_lm
+from snowfall.training.mmi_graph2 import MmiTrainingGraphCompiler
+from snowfall.training.mmi_graph2 import create_bigram_phone_lm
 
 
 def get_objf(batch: Dict,

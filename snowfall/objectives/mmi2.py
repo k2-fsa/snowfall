@@ -5,8 +5,8 @@ from torch import nn
 
 import k2
 
-from snowfall.objectives.common import get_tot_objf_and_num_frames
-from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
+from snowfall.objectives.common2 import get_tot_objf_and_num_frames
+from snowfall.training.mmi_graph2 import MmiTrainingGraphCompiler
 
 
 class LFMMILoss(nn.Module):

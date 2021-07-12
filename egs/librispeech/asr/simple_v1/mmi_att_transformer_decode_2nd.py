@@ -17,23 +17,23 @@ from typing import List
 from typing import Optional
 from typing import Union
 
-from snowfall.common import average_checkpoint, average_checkpoint_2nd, store_transcripts
-from snowfall.common import find_first_disambig_symbol
-from snowfall.common import get_texts
-from snowfall.common import write_error_stats
-from snowfall.common import load_checkpoint
-from snowfall.common import setup_logger
-from snowfall.common import str2bool
+from snowfall.common2 import average_checkpoint, average_checkpoint_2nd, store_transcripts
+from snowfall.common2 import find_first_disambig_symbol
+from snowfall.common2 import get_texts
+from snowfall.common2 import write_error_stats
+from snowfall.common2 import load_checkpoint
+from snowfall.common2 import setup_logger
+from snowfall.common2 import str2bool
 from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
-from snowfall.decoding.lm_rescore import decode_with_lm_rescoring
+from snowfall.decoding.lm_rescore2 import decode_with_lm_rescoring
 from snowfall.models import AcousticModel
 from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
 from snowfall.models.second_pass_model import SecondPassModel
 from snowfall.training.ctc_graph import build_ctc_topo
-from snowfall.training.mmi_graph import create_bigram_phone_lm
-from snowfall.training.mmi_graph import get_phone_symbols
+from snowfall.training.mmi_graph2 import create_bigram_phone_lm
+from snowfall.training.mmi_graph2 import get_phone_symbols
 
 
 # TODO(fangjun): Replace it with
