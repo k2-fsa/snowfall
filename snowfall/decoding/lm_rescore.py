@@ -2,6 +2,7 @@
 
 from typing import Optional
 
+import logging
 import math
 
 import k2
@@ -91,8 +92,7 @@ def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
                                      b_to_a_map=path_to_seq_map,
                                      sorted_match_a=True)
 
-    # NOTE: `k2.connect` and `k2.top_sort` support only CPU at present
-    am_path_lats = k2.top_sort(k2.connect(am_path_lats.to('cpu'))).to(device)
+    am_path_lats = k2.top_sort(k2.connect(am_path_lats))
 
     # The `scores` of every arc consists of `am_scores` and `lm_scores`
     am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores
@@ -191,8 +191,8 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa,
                                      word_fsas_with_epsilon_loops,
                                      b_to_a_map=b_to_a_map,
                                      sorted_match_a=True)
-    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats.to('cpu'))).to(device)
-    lm_scores = lm_path_lats.get_tot_scores(True, True)
+    lm_path_lats = k2.top_sort(k2.connect(lm_path_lats))
+    lm_scores = lm_path_lats.get_tot_scores(True, False)
 
     tot_scores = am_scores + lm_scores
 
@@ -250,47 +250,44 @@ def rescore_with_whole_lattice(lats: k2.Fsa,
 
     device = lats.device
     lats.scores = lats.scores - lats.lm_scores
+    del lats.lm_scores
     # Now, lats.scores contains only am_scores
 
     # inverted_lats has word IDs as labels.
     # Its aux_labels are phone IDs, which is a ragged tensor k2.RaggedInt
     inverted_lats = k2.invert(lats)
     num_seqs = lats.shape[0]
-    inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(inverted_lats)
 
     b_to_a_map = torch.zeros(num_seqs, device=device, dtype=torch.int32)
     try:
         rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
-                                             inverted_lats_with_epsilon_loops,
+                                             inverted_lats,
                                              b_to_a_map,
                                              sorted_match_a=True)
     except RuntimeError as e:
-        print(f'Caught exception:\n{e}\n')
-        print(f'Number of FSAs: {inverted_lats.shape[0]}')
-        print('num_arcs before pruning: ',
-              inverted_lats_with_epsilon_loops.arcs.num_elements())
+        logging.info(f'Caught exception:\n{e}\n')
+        logging.info(f'Number of FSAs: {inverted_lats.shape[0]}')
+        logging.info(f'num_arcs before pruning: {inverted_lats.arcs.num_elements()}')
 
         # NOTE(fangjun): The choice of the threshold 1e-5 is arbitrary here
         # to avoid OOM. We may need to fine tune it.
         inverted_lats = k2.prune_on_arc_post(inverted_lats, 1e-5, True)
-        inverted_lats_with_epsilon_loops = k2.add_epsilon_self_loops(
-            inverted_lats)
-        print('num_arcs after pruning: ',
-              inverted_lats_with_epsilon_loops.arcs.num_elements())
+        logging.info(f'num_arcs after pruning: {inverted_lats.arcs.num_elements()}')
 
         rescoring_lats = k2.intersect_device(G_with_epsilon_loops,
-                                             inverted_lats_with_epsilon_loops,
+                                             inverted_lats,
                                              b_to_a_map,
                                              sorted_match_a=True)
 
-    rescoring_lats = k2.top_sort(k2.connect(
-        rescoring_lats.to('cpu'))).to(device)
+    rescoring_lats = k2.top_sort(k2.connect(rescoring_lats))
+
+    if rescoring_lats.num_arcs == 0:
+        return rescoring_lats
+
     inverted_rescoring_lats = k2.invert(rescoring_lats)
     # inverted rescoring_lats has phone IDs as labels
     # and word IDs as aux_labels.
 
-    inverted_rescoring_lats = k2.remove_epsilon_self_loops(
-        inverted_rescoring_lats)
     best_paths = k2.shortest_path(inverted_rescoring_lats,
                                   use_double_scores=True)
     return best_paths

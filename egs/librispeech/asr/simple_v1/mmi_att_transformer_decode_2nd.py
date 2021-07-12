@@ -9,6 +9,7 @@ import k2
 import logging
 import numpy as np
 import os
+import sys
 import torch
 from k2 import Fsa, SymbolTable
 from pathlib import Path
@@ -35,6 +36,99 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
+# TODO(fangjun): Replace it with
+# https://github.com/k2-fsa/snowfall/issues/232
+@torch.no_grad()
+def second_pass_decoding(second_pass: AcousticModel,
+                         lats: k2.Fsa,
+                         supervision_segments: torch.Tensor,
+                         encoder_memory: torch.Tensor,
+                         num_paths: int = 10):
+    '''
+    The fundamental idea is to get an n-best list from the first pass
+    decoding lattice and use the second pass model to do rescoring.
+    The path with the highest score is used as the final decoding output.
+
+    Args:
+      lats:
+        It's the decoding lattice from the first pass.
+    '''
+    device = lats.device
+    assert len(lats.shape) == 3
+
+    # First, extract `num_paths` paths for each sequence.
+    # paths is a k2.RaggedInt with axes [seq][path][arc_pos]
+    paths = k2.random_paths(lats, num_paths=num_paths, use_double_scores=True)
+
+    # phone_seqs is a k2.RaggedInt sharing the same shape as `paths`
+    # but it contains phone IDs. Note that it also contains 0s and -1s.
+    # The last entry in each sublist is -1.
+    phone_seqs = k2.index(lats.labels.clone(), paths)
+
+    num_seqs = phone_seqs.dim0()
+
+    indexes = torch.arange(start=0,
+                           end=(num_seqs - 1) * num_paths + 1,
+                           step=num_paths,
+                           dtype=torch.int32,
+                           device=device)
+    # From indexes, we can select
+    #
+    # (1) path 0 of seq0, seq1, seq2, ...
+    # (2) path 1 of seq0, seq1, seq2, ...
+    # (3) path 2 of seq0, seq1, seq2, ...
+
+    paths_offset = phone_seqs.row_splits(1)
+    phone_seqs = k2.ragged.remove_axis(phone_seqs, 0)
+    # Note, from now on phone_seqs has only two axes
+
+    phone_seqs = k2.ragged.remove_values_leq(phone_seqs, -1)
+    log_probs = torch.empty(num_paths, num_seqs)
+    for i in range(num_paths):
+        # path is a k2.RaggedInt with axes [path][phones], excluding -1
+        p, _ = k2.ragged.index(phone_seqs, indexes + i, axis=0)
+        phone_fsa = k2.linear_fsa(p)
+        nnet_output_2nd = second_pass(encoder_memory, phone_fsa, supervision_segments)
+
+        nnet_output_2nd = nnet_output_2nd.cpu()
+        row_splits1 = p.row_splits(1).cpu()
+        value = p.values().cpu()
+
+        for k in range(num_seqs):
+            nnet_output_this_seq = nnet_output_2nd[k]
+            start = row_splits1[k]
+            end = row_splits1[k+1]
+            num_frames = end - start
+
+            this_value = value[start:end].tolist()
+            log_p = 0
+            for idx, v in enumerate(this_value):
+                log_p += nnet_output_this_seq[idx, v]
+            log_p /= num_frames
+            log_probs[i, k] = log_p
+
+    # Now get the best score of the path within n-best list
+    # of each seq
+    best_indexes = torch.argmax(log_probs, dim=0).to(torch.int32)
+    best_paths_indexes = best_indexes.to(device) + paths_offset[:-1]
+
+    # best_paths has three axes [seq][path][arc_pos]
+    # each seq has only one path
+    best_paths, _ = k2.ragged.index(paths, best_paths_indexes, axis=1)
+
+    best_phone_seqs = k2.index(lats.labels.clone(), best_paths)
+
+    best_phone_seqs = k2.ragged.remove_values_leq(best_phone_seqs, -1)
+    best_phone_seqs = k2.ragged.remove_axis(best_phone_seqs, 0)
+
+    ans = k2.linear_fsa(best_phone_seqs)
+    ans.aux_labels = k2.index(lats.aux_labels, best_paths.values())
+
+    return ans
+
+
+
+@torch.no_grad()
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            second_pass: Optional[AcousticModel],
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable,
@@ -73,41 +167,69 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, output_beam_size, 30,
-                                             10000)
+        beam_size = output_beam_size
+        while True:
+            try:
+                if beam_size < 2:
+                    logging.error(f'beam size {beam_size} is too small')
+                    sys.exit(1)
+                lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, beam_size, 30,
+                                                     10000)
+                if second_pass is not None:
+                    best_paths = second_pass_decoding(
+                        second_pass=second_pass,
+                        lats=lattices,
+                        supervision_segments=supervision_segments,
+                        encoder_memory=encoder_memory,
+                        num_paths=num_paths)
+                else:
+                    if G is None:
+                        best_paths = k2.shortest_path(lattices, use_double_scores=True)
+                    else:
+                        best_paths = decode_with_lm_rescoring(
+                            lattices,
+                            G,
+                            num_paths=num_paths,
+                            use_whole_lattice=use_whole_lattice)
+                break
+            except RuntimeError as e:
+                logging.info(f'Caught exception:\n{e}\n')
+                new_beam_size = beam_size * 0.95
+                logging.info(f'Change beam_size from {beam_size} to {new_beam_size}')
+                beam_size = new_beam_size
 
-        if second_pass is not None:
-            # Now for the second pass model
-            best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        #  if second_pass is not None:
+        #      # Now for the second pass model
+        #      best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        #
+        #      nnet_output_2nd = second_pass(encoder_memory, best_paths, supervision_segments)
+        #      # nnet_output_2nd is [N, T, C]
+        #
+        #      assert nnet_output_2nd.shape[0] == supervision_segments.shape[0]
+        #
+        #      supervision_segments_2nd = supervision_segments.clone()
+        #
+        #      # [0, 1, 2, 3, ...]
+        #      supervision_segments_2nd[:, 0] = torch.arange(supervision_segments_2nd.shape[0], dtype=torch.int32)
+        #
+        #      # start offset
+        #      supervision_segments_2nd[:, 1] = 0
+        #
+        #      # duration of supervision_segments_2nd is kept unchanged
+        #
+        #      dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments_2nd)
+        #
+        #      lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec_2nd, 20.0, output_beam_size, 30,
+        #                                           10000)
 
-            nnet_output_2nd = second_pass(encoder_memory, best_paths, supervision_segments)
-            # nnet_output_2nd is [N, T, C]
-
-            assert nnet_output_2nd.shape[0] == supervision_segments.shape[0]
-
-            supervision_segments_2nd = supervision_segments.clone()
-
-            # [0, 1, 2, 3, ...]
-            supervision_segments_2nd[:, 0] = torch.arange(supervision_segments_2nd.shape[0], dtype=torch.int32)
-
-            # start offset
-            supervision_segments_2nd[:, 1] = 0
-
-            # duration of supervision_segments_2nd is kept unchanged
-
-            dense_fsa_vec_2nd = k2.DenseFsaVec(nnet_output_2nd, supervision_segments_2nd)
-
-            lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec_2nd, 20.0, output_beam_size, 30,
-                                                 10000)
-
-        if G is None:
-            best_paths = k2.shortest_path(lattices, use_double_scores=True)
-        else:
-            best_paths = decode_with_lm_rescoring(
-                lattices,
-                G,
-                num_paths=num_paths,
-                use_whole_lattice=use_whole_lattice)
+        #  if G is None:
+        #      best_paths = k2.shortest_path(lattices, use_double_scores=True)
+        #  else:
+        #      best_paths = decode_with_lm_rescoring(
+        #          lattices,
+        #          G,
+        #          num_paths=num_paths,
+        #          use_whole_lattice=use_whole_lattice)
 
         assert best_paths.shape[0] == len(texts)
         hyps = get_texts(best_paths, indices)
@@ -274,7 +396,7 @@ def main():
     output_beam_size = args.output_beam_size
     use_second_pass = args.use_second_pass
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-new')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     logging.info(f'output_beam_size: {output_beam_size}')
@@ -408,6 +530,7 @@ def main():
             G = k2.add_epsilon_self_loops(G)
             G = k2.arc_sort(G)
             G = G.to(device)
+        G.lm_scores = G.scores.clone()
     else:
         logging.debug('Decoding without LM rescoring')
         G = None

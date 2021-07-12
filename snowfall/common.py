@@ -351,13 +351,21 @@ def get_texts(best_paths: k2.Fsa, indices: Optional[torch.Tensor] = None) -> Lis
           decoded.
     '''
     # remove any 0's or -1's (there should be no 0's left but may be -1's.)
-    aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
-    aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
-                                                aux_labels.shape())
-    # remove the states and arcs axes.
-    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
-    aux_shape = k2.ragged.remove_axis(aux_shape, 1)
-    aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
+    if isinstance(best_paths.aux_labels, k2.RaggedInt):
+        aux_labels = k2.ragged.remove_values_leq(best_paths.aux_labels, 0)
+        aux_shape = k2.ragged.compose_ragged_shapes(best_paths.arcs.shape(),
+                                                    aux_labels.shape())
+        # remove the states and arcs axes.
+        aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+        aux_shape = k2.ragged.remove_axis(aux_shape, 1)
+        aux_labels = k2.RaggedInt(aux_shape, aux_labels.values())
+    else:
+        # remove axis corresponding to states.
+        aux_shape = k2.ragged.remove_axis(best_paths.arcs.shape(), 1)
+        aux_labels = k2.RaggedInt(aux_shape, best_paths.aux_labels)
+        # remove 0's and -1's.
+        aux_labels = k2.ragged.remove_values_leq(aux_labels, 0)
+
     assert (aux_labels.num_axes() == 2)
     aux_labels, _ = k2.ragged.index(aux_labels,
                                     invert_permutation(indices).to(dtype=torch.int32,
