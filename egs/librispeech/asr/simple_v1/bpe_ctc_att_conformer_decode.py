@@ -554,8 +554,7 @@ def main():
         HLG.lm_scores = HLG.scores.clone()
 
     librispeech = LibriSpeechAsrDataModule(args)
-    # test_sets = ['test-clean', 'test-other']
-    test_sets = ['test-clean']
+    test_sets = ['test-clean', 'test-other']
     for test_set, test_dl in zip(test_sets, librispeech.test_dataloaders()):
         logging.info(f'* DECODING: {test_set}')
 
