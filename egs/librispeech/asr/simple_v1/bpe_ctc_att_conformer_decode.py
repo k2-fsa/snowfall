@@ -236,6 +236,10 @@ def decode_one_batch(batch: Dict[str, Any],
 
     supervision_segments = torch.clamp(supervision_segments, min=0)
     indices = torch.argsort(supervision_segments[:, 2], descending=True)
+    # cuts has been sorted in lhotse dataset
+    # https://github.com/lhotse-speech/lhotse/blob/master/lhotse/dataset/speech_recognition.py#L109
+    assert torch.all(torch.argsort(indices) == indices)
+
     supervision_segments = supervision_segments[indices]
 
     dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
@@ -271,8 +275,6 @@ def decode(dataloader: torch.utils.data.DataLoader,
     #  - value: It is a list of tuples (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
         texts = batch['supervisions']['text']
-        # TODO(Liyong Guo): Something wrong with batch_size > 1, fix this.
-        assert len(texts) == 1
 
         hyps_dict = decode_one_batch(batch=batch,
                                      model=model,
@@ -289,7 +291,8 @@ def decode(dataloader: torch.utils.data.DataLoader,
                 hyp_words = [symbols.get(x) for x in hyp]
                 ref_words = text.split(' ')
                 this_batch.append((ref_words, hyp_words))
-                results[lm_scale].extend(this_batch)
+
+            results[lm_scale].extend(this_batch)
 
         if batch_idx % 10 == 0:
             logging.info(

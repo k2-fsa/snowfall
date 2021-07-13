@@ -103,9 +103,8 @@ fi
 
 if [ $stage -le 3 ]; then
   export CUDA_VISIBLE_DEVICES=2
-  # Set max-duration=1 because rescore with decoder only support batch_size=1
   python bpe_ctc_att_conformer_decode.py \
-    --max-duration=1 \
+    --max-duration=20 \
     --generate-release-model=False \
     --decode_with_released_model=True \
     --num-paths-for-decoder-rescore=500
