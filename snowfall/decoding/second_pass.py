@@ -4,8 +4,12 @@
 #
 # See https://github.com/k2-fsa/snowfall/issues/232 for more details
 #
+from typing import List
 
 import k2
+import torch
+
+# Note: We use `utterance` and `sequence` interchangeably in the comment
 
 
 class Nbest(object):
@@ -13,20 +17,22 @@ class Nbest(object):
     An Nbest object contains two fields:
 
         (1) fsa, its type is k2.Fsa
-        (2) shape, its type k2.RaggedShape (alias to _k2.RaggedShape)
+        (2) shape, its type is k2.RaggedShape (alias to _k2.RaggedShape)
 
-    The field `fsa` is an FsaVec, containing a vector of linear FSAs.
+    The field `fsa` is an FsaVec containing a vector of **linear** FSAs.
 
-    The field `shape` has two axes [seq][path]. `shape.dim0()` contains
-    the number of sequences, which is also the number of rows in the
+    The field `shape` has two axes [utt][path]. `shape.dim0()` contains
+    the number of utterances, which is also the number of rows in the
     supervision_segments. `shape.tot_size(1)` contains the number
     of paths, which is also the number of FSAs in `fsa`.
     '''
 
     def __init__(self, fsa: k2.Fsa, shape: k2.RaggedShape) -> None:
-        assert len(fsa.shape) == 3
-        assert shape.num_axes() == 2
-        assert fsa.shape[0] == shape.tot_size(1)
+        assert len(fsa.shape) == 3, f'fsa.shape: {fsa.shape}'
+        assert shape.num_axes() == 2, f'num_axes: {shape.num_axes()}'
+
+        assert fsa.shape[0] == shape.tot_size(1), \
+                f'{fsa.shape[0]} vs {shape.tot_size(1)}'
 
         self.fsa = fsa
         self.shape = shape
@@ -37,11 +43,11 @@ class Nbest(object):
         s += f'num_fsas:{self.fsa.shape[0]})'
         return s
 
-    def intersect(self, lats: k2.Fsa) -> Nbest:
+    def intersect(self, lats: k2.Fsa) -> 'Nbest':
         '''Intersect this Nbest object with a lattice and get 1-best
         path from the resulting FsaVec.
 
-        CAUTION:
+        Caution:
           We assume FSAs in `self.fsa` don't have epsilon self-loops.
           We also assume `self.fsa.labels` and `lats.labels` are token IDs.
 
@@ -53,9 +59,11 @@ class Nbest(object):
           Return a new Nbest. This new Nbest shares the same shape with `self`,
           while its `fsa` is the 1-best path from intersecting `self.fsa` and `lats.
         '''
-        assert self.fsa.device == lats.device
-        assert len(lats.shape) == 3
-        assert lats.arcs.dim0() == self.shape.dim0()
+        assert self.fsa.device == lats.device, \
+                f'{self.fsa.device} vs {lats.device}'
+        assert len(lats.shape) == 3, f'{lats.shape}'
+        assert lats.arcs.dim0() == self.shape.dim0(), \
+                f'{lats.arcs.dim0()} vs {self.shape.dim0()}'
 
         lats = k2.arc_sort(lats)  # no-op if lats is already arc sorted
 
@@ -82,13 +90,53 @@ class Nbest(object):
           semiring produce the same total scores.
 
         Returns:
-          Return a ragged tensor with two axes [seq][path_scores].
+          Return a ragged tensor with two axes [utt][path_scores].
         '''
         scores = self.fsa.get_tot_scores(use_double_scores=True,
                                          log_semiring=False)
-        # We use single precision here since we only wrapped k2.RaggedFloat.
+        # We use single precision here since we only wrap k2.RaggedFloat.
         # If k2.RaggedDouble is wrapped, we can use double precision here.
         return k2.RaggedFloat(self.shape, scores.float())
+
+    def top_k(self, k: int) -> 'Nbest':
+        '''Get a subset of paths in the Nbest. The resulting Nbest is regular
+        in that each sequence (i.e., utterance) has the same number of paths (k).
+
+        We select the top-k paths according to the total_scores of each path.
+        If a utterance has less than k paths, then its last path, after sorting
+        by tot_scores in descending order, is repeated so that each utterance
+        has exactly k paths.
+
+        Args:
+          k:
+            Number of paths in each utterance.
+        Returns:
+          Return a new Nbest with a regular shape.
+        '''
+        ragged_scores = self.total_scores()
+
+        # indexes contains idx01's for self.shape
+        # ragged_scores.values()[indexes] is sorted
+        indexes = k2.ragged.sort_sublist(ragged_scores,
+                                         descending=True,
+                                         need_new2old_indexes=True)
+
+        ragged_indexes = k2.RaggedInt(self.shape, indexes)
+
+        padded_indexes = k2.ragged.pad(ragged_indexes,
+                                       mode='replicate',
+                                       value=-1)
+        assert torch.ge(padded_indexes, 0).all(), \
+                f'Some utterances contain empty n-best: {self.shape.row_splits(1)}'
+
+        # Select the idx01's of top-k paths of each utterance
+        top_k_indexes = padded_indexes[:, :k].flatten().contiguous()
+
+        top_k_fsas = k2.index_fsa(self.fsa, top_k_indexes)
+
+        top_k_shape = k2.ragged.regular_ragged_shape(dim0=self.shape.dim0(),
+                                                     dim1=k)
+        return Nbest(top_k_fsas, top_k_shape)
 
 
 def whole_lattice_rescoring(lats: k2.Fsa,
@@ -108,9 +156,10 @@ def whole_lattice_rescoring(lats: k2.Fsa,
     Returns:
       Return a new lattice rescored with a given G.
     '''
-    assert len(lats.shape) == 3
+    assert len(lats.shape) == 3, f'{lats.shape}'
     assert hasattr(lats, 'lm_scores')
-    assert G_with_epsilon_loops.shape == (1, None, None)
+    assert G_with_epsilon_loops.shape == (1, None, None), \
+            f'{G_with_epsilon_loops.shape}'
 
     device = lats.device
     lats.scores = lats.scores - lats.lm_scores
@@ -122,6 +171,7 @@ def whole_lattice_rescoring(lats: k2.Fsa,
 
     # inverted_lats has word IDs as labels.
     # Its aux_labels are token IDs, which is a ragged tensor k2.RaggedInt
+    # if lats.aux_labels is a ragged tensor
     inverted_lats = k2.invert(lats)
     num_seqs = lats.shape[0]
 
