@@ -15,7 +15,11 @@ import sys
 import torch
 from datetime import datetime
 from pathlib import Path
-from torch.nn.utils import clip_grad_value_
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch import nn
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional
 
@@ -29,6 +33,7 @@ from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.tdnn_lstm import TdnnLstm1b
@@ -38,6 +43,7 @@ from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and
 from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 from snowfall.common import get_phone_symbols
 
+logging.info = print
 
 def get_objf(batch: Dict,
              model: AcousticModel,
@@ -99,7 +105,7 @@ def get_objf(batch: Dict,
         loss.backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
-            clip_grad_value_(model.parameters(), 5.0)
+            clip_grad_norm_(model.parameters(), 5.0, 2.0)
             maybe_log_gradients('train/clipped_grad_norms')
             if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
@@ -160,7 +166,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int):
+                    global_batch_idx_train: int,
+                    world_size: int,
+                    rank: int):
     """One epoch training and validation.
 
     Args:
@@ -220,7 +228,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         total_frames += curr_batch_frames
         total_all_frames += curr_batch_all_frames
 
-        if batch_idx % 10 == 0:
+        if batch_idx % 10 == 0 and rank == 0:
             logging.info(
                 'batch {}, epoch {}/{} '
                 'global average objf: {:.6f} over {} '
@@ -252,25 +260,46 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 ali_model=ali_model,
                 device=device,
                 graph_compiler=graph_compiler)
+
+            if world_size > 1:
+                s = torch.tensor([
+                    total_valid_objf,
+                    total_valid_frames,
+                    total_valid_all_frames,
+                ]).to(device)
+
+                dist.all_reduce(s, op=dist.ReduceOp.SUM)
+                total_valid_objf, total_valid_frames, total_valid_all_frames = s.cpu().tolist()
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
-            logging.info(
-                'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
-                    .format(valid_average_objf,
-                            total_valid_frames,
-                            100.0 * total_valid_frames / total_valid_all_frames))
+            if rank == 0:
+                logging.info(
+                    'Validation average objf: {:.6f} over {} frames ({:.1f}% kept)'
+                        .format(valid_average_objf,
+                                total_valid_frames,
+                                100.0 * total_valid_frames / total_valid_all_frames))
 
-            if tb_writer is not None:
-                tb_writer.add_scalar('train/global_valid_average_objf',
-                                     valid_average_objf,
-                                     global_batch_idx_train)
-                model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                if tb_writer is not None:
+                    tb_writer.add_scalar('train/global_valid_average_objf',
+                                        valid_average_objf,
+                                        global_batch_idx_train)
+                    model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
 def get_parser():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--world-size',
+        type=int,
+        default=1,
+        help='Number of GPUs for DDP training.')
+    parser.add_argument(
+        '--master-port',
+        type=int,
+        default=12354,
+        help='Master port to use for DDP training.')
     parser.add_argument(
         '--model-type',
         type=str,
@@ -295,8 +324,14 @@ def get_parser():
     parser.add_argument(
         '--warm-step',
         type=int,
-        default=5000,
+        default=40000,
         help='The number of warm-up steps for Noam optimizer.'
+    )
+    parser.add_argument(
+        '--weight-decay',
+        type=float,
+        default=0.0,
+        help='weight decay (L2 penalty) for Noam optimizer.'
     )
     parser.add_argument(
         '--accum-grad',
@@ -319,7 +354,23 @@ def get_parser():
         default=256,
         help="Number of units in transformer attention layers.")
     parser.add_argument(
-        '--bucketing_sampler',
+        '--is-espnet-structure',
+        type=str2bool,
+        default=True,
+        help='When enabled, the conformer will have the ' \
+             'same structure like espnet')
+    parser.add_argument(
+        '--vgg-frontend',
+        type=str2bool,
+        default=False,
+        help='When enabled, it uses vgg style network for subsampling')
+    parser.add_argument(
+        '--espnet-identical-model',
+        type=str2bool,
+        default=False,
+        help='When enabled, train an identical model to the espnet SOTA released model')
+    parser.add_argument(
+        '--bucketing-sampler',
         type=str2bool,
         default=False,
         help='When enabled, the batches will come from buckets of '
@@ -394,21 +445,36 @@ def get_parser():
     return parser
 
 
-def main():
-    args = get_parser().parse_args()
+def run(rank, world_size, args):
+    '''
+    Args:
+      rank:
+        It is a value between 0 and `world_size-1`, which is
+        passed automatically by `mp.spawn()` in :func:`main`.
+        The node with rank 0 is responsible for saving checkpoint.
+      world_size:
+        Number of GPUs for DDP training.
+      args:
+        The return value of get_parser().parse_args()
+    '''
+    assert args.start_epoch >= 0
 
     model_type = args.model_type
     start_epoch = args.start_epoch
+    curr_epoch = args.start_epoch + 1
     num_epochs = args.num_epochs
-    max_duration = args.max_duration
     accum_grad = args.accum_grad
     att_rate = args.att_rate
+    attention_dim = args.attention_dim
+    max_duration = args.max_duration
+    nhead=args.nhead
 
     fix_random_seed(42)
+    setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-ctc-att-musan-sa-bpe')
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
+    exp_dir = Path('exp-' + model_type + '-noam-ctc-att-musan-sa-bpe2')
+    setup_logger('{}/log/log-train-{}'.format(exp_dir, str(rank)))
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 1 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_bpe')
@@ -535,7 +601,7 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    device_id = 0
+    device_id = rank
     device = torch.device('cuda', device_id)
 
     if att_rate != 0.0:
@@ -558,10 +624,14 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=args.vgg_frontend,
+            is_espnet_structure=args.is_espnet_structure,
+            mmi_loss=False)
 
     model.to(device)
-    describe(model)
+    if rank == 0:
+        describe(model)
 
     # Now for the alignment model, if any
     if args.use_ali_model:
@@ -583,11 +653,12 @@ def main():
         ali_model = None
         logging.info('No ali_model')
 
-
+    model = DDP(model, device_ids=[rank])
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
                      factor=10.0,
-                     warm_step=args.warm_step)
+                     warm_step=args.warm_step,
+                     weight_decay=args.weight_decay)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -607,7 +678,7 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
-        if tb_writer is not None:
+        if tb_writer is not None and rank == 0:
             tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
             tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
@@ -626,6 +697,8 @@ def main():
             tb_writer=tb_writer,
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
+            world_size=world_size,
+            rank=rank,
         )
         # the lower, the better
         if valid_objf < best_valid_objf:
@@ -640,7 +713,8 @@ def main():
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
-                            global_batch_idx_train=global_batch_idx_train)
+                            global_batch_idx_train=global_batch_idx_train,
+                            local_rank=rank)
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -649,7 +723,8 @@ def main():
                                best_objf=best_objf,
                                valid_objf=valid_objf,
                                best_valid_objf=best_valid_objf,
-                               best_epoch=best_epoch)
+                               best_epoch=best_epoch,
+                               local_rank=rank)
 
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
@@ -661,7 +736,8 @@ def main():
                         learning_rate=curr_learning_rate,
                         objf=objf,
                         valid_objf=valid_objf,
-                        global_batch_idx_train=global_batch_idx_train)
+                        global_batch_idx_train=global_batch_idx_train,
+                        local_rank=rank)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
@@ -671,9 +747,19 @@ def main():
                            best_objf=best_objf,
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
-                           best_epoch=best_epoch)
+                           best_epoch=best_epoch,
+                           local_rank=rank)
 
     logging.warning('Done')
+    torch.distributed.barrier()
+    cleanup_dist()
+
+
+def main():
+    args = get_parser().parse_args()
+    world_size = args.world_size
+    assert world_size >= 1
+    mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
 
 
 torch.set_num_threads(1)

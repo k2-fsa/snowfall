@@ -147,7 +147,7 @@ if [ $stage -le 2 ]; then
 #    echo "Skip generating $dir/G_4_gram.fst.txt"
 #  fi
 fi
-exit 0
+# exit 0
 
 if [ $stage -le 3 ]; then
   python3 ./prepare.py
@@ -158,17 +158,28 @@ fi
 #
 
 if [ $stage -le 4 ]; then
+  # python3 ./ctc_att_transformer_train.py \
+  #   --nhead 8 \
+  #   --attention-dim 512 \
+  #   --num-epochs 50 \
+  #   --full-libri True \
+  #   --max-duration 200
 
-  python3 ./ctc_att_transformer_train.py #--full-libri true
-
-  # Single node, multi-GPU training
-  # Adapting to a multi-node scenario should be straightforward.
-  # ngpus=2
-  # python3 -m torch.distributed.launch --nproc_per_node=$ngpus ./mmi_bigram_train.py --world_size $ngpus
+  python3 ./ctc_att_transformer_train.py --world-size 3 \
+    --nhead 8 \
+    --attention-dim 512 \
+    --num-epochs 50 \
+    --full-libri True \
+    --start-epoch 2 \
+    --max-duration 200
 fi
 
 exit 0
 
 if [ $stage -le 5 ]; then
-  python3 ./ctc_att_transformer_decode.py
+  python3 ./ctc_att_transformer_decode.py \
+    --nhead 8 \
+    --attention-dim 512 \
+    --max-duration 100 \
+    --epoch 12
 fi
