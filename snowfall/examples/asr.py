@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from lhotse import CutSet, Fbank, FbankConfig
-from lhotse.cut import AnyCut, Cut, MixedCut
+from lhotse.cut import Cut, MixedCut
 from lhotse.dataset import K2SpeechRecognitionDataset, OnTheFlyFeatures
 from lhotse.supervision import AlignmentItem
 from lhotse.utils import fastcopy
@@ -50,7 +50,9 @@ class ASR:
             self.model = Conformer(
                 num_features=80,
                 num_classes=len(phone_ids) + 1,
-                num_decoder_layers=0
+                num_decoder_layers=0,
+                vgg_frontend=True,
+                is_espnet_structure=True
             )
             self.P.scores = torch.zeros_like(self.P.scores)
             self.model.P_scores = torch.nn.Parameter(self.P.scores.clone(), requires_grad=False)
@@ -67,11 +69,11 @@ class ASR:
         # Freeze the params by default.
         for p in self.model.parameters():
             p.requires_grad_(False)
-        self.compiler = MmiTrainingGraphCompiler(lexicon=self.lexicon, device=self.device)
+        self.compiler = MmiTrainingGraphCompiler(lexicon=self.lexicon, device=self.device, P=self.P)
         self.HLG = k2.Fsa.from_dict(torch.load(lang_dir / 'HLG.pt')).to(self.device)
 
-    def compute_features(self, cuts: Union[AnyCut, CutSet]) -> torch.Tensor:
-        if isinstance(cuts, (Cut, MixedCut)):
+    def compute_features(self, cuts: Union[Cut, CutSet]) -> torch.Tensor:
+        if isinstance(cuts, Cut):
             cuts = CutSet.from_cuts([cuts])
         assert cuts[0].sampling_rate == self.sampling_rate, f'{cuts[0].sampling_rate} != {self.sampling_rate}'
         otf = OnTheFlyFeatures(self.extractor)
@@ -79,13 +81,13 @@ class ASR:
         feats, _ = otf(cuts)
         return feats
 
-    def compute_posteriors(self, cuts: Union[AnyCut, CutSet]) -> torch.Tensor:
+    def compute_posteriors(self, cuts: Union[Cut, CutSet]) -> torch.Tensor:
         """
         Run the forward pass of the acoustic model and return a tensor representing a batch of phone posteriorgrams.
         """
         # Extract feats
         # (batch, seq_len, num_feats)
-        if isinstance(cuts, (Cut, MixedCut)):
+        if isinstance(cuts, Cut):
             cuts = CutSet.from_cuts([cuts])
         assert cuts[0].sampling_rate == self.sampling_rate, f'{cuts[0].sampling_rate} != {self.sampling_rate}'
         otf = OnTheFlyFeatures(self.extractor)
@@ -100,12 +102,12 @@ class ASR:
         # returns: (batch, ~seq_len / 4, n_phones)
         return posteriors.permute(0, 2, 1)
 
-    def decode(self, cuts: Union[AnyCut, CutSet]) -> List[Tuple[List[str], List[str]]]:
+    def decode(self, cuts: Union[Cut, CutSet]) -> List[Tuple[List[str], List[str]]]:
         """
         Perform decoding with an n-gram language model (HLG graph).
         Doesn't support rescoring at this time.
         """
-        if isinstance(cuts, (Cut, MixedCut)):
+        if isinstance(cuts, Cut):
             cuts = CutSet.from_cuts([cuts])
         word_results = []
         # Hacky way to get batch quickly... we may need to improve on this.
@@ -141,7 +143,7 @@ class ASR:
             word_results.append((ref_words, hyp_words))
         return word_results
 
-    def align(self, cuts: Union[AnyCut, CutSet]) -> torch.Tensor:
+    def align(self, cuts: Union[Cut, CutSet]) -> torch.Tensor:
         """
         Perform forced alignment and return a tensor that represents a batch of frame-level alignments:
         >>> alignments = torch.tensor([
@@ -154,7 +156,7 @@ class ASR:
         """
         # Extract feats
         # (batch, seq_len, num_feats)
-        if isinstance(cuts, (Cut, MixedCut)):
+        if isinstance(cuts, Cut):
             cuts = CutSet.from_cuts([cuts])
         assert cuts[0].sampling_rate == self.sampling_rate, f'{cuts[0].sampling_rate} != {self.sampling_rate}'
 
@@ -185,7 +187,7 @@ class ASR:
         frame_labels = torch.stack([best_path[i].labels[:-1] for i in range(best_path.shape[0])])
         return frame_labels
 
-    def align_ctm(self, cuts: Union[CutSet, AnyCut]) -> List[List[AlignmentItem]]:
+    def align_ctm(self, cuts: Union[CutSet, Cut]) -> List[List[AlignmentItem]]:
         """
         Perform forced alignment and parse the phones into a CTM-like format:
             >>> [[0.0, 0.12, 'SIL'], [0.12, 0.2, 'AH0'], ...]
@@ -202,7 +204,7 @@ class ASR:
             FRAME_SHIFT = 0.04  # 0.01 * 4 subsampling
             return round(n * FRAME_SHIFT, ndigits=3)
 
-        if isinstance(cuts, (Cut, MixedCut)):
+        if isinstance(cuts, Cut):
             cuts = CutSet.from_cuts([cuts])
 
         # Uppercase and remove punctuation
@@ -263,7 +265,7 @@ class ASR:
 
         return ctm_alis
 
-    def plot_alignments(self, cut: AnyCut):
+    def plot_alignments(self, cut: Cut):
         import matplotlib.pyplot as plt
         feats = self.compute_features(cut)
         phone_ids = self.align(cut)
@@ -272,7 +274,7 @@ class ASR:
         axes[1].imshow(torch.nn.functional.one_hot(phone_ids.repeat_interleave(4).to(torch.int64)).T)
         return fig, axes
 
-    def plot_posteriors(self, cut: AnyCut):
+    def plot_posteriors(self, cut: Cut):
         import matplotlib.pyplot as plt
         feats = self.compute_features(cut)
         posteriors = self.compute_posteriors(cut)

@@ -89,6 +89,7 @@ def get_objf(batch: Dict,
             del supervisions['text']
 
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
+
         if att_rate != 0.0:
             if hasattr(model, 'module'):
                 att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
@@ -99,6 +100,10 @@ def get_objf(batch: Dict,
                 global_batch_idx_train // accum_grad < 4000):
             with torch.no_grad():
                 ali_model_output = ali_model(feature)
+            if ali_model_output.isinf().any() or ali_model_output.isnan().any():
+                logging.warning("Found 'nan' or 'inf' in ali_model_output... Setting it to zero.")
+                ali_model_output[ali_model_output.isinf()] = 0.0
+                ali_model_output[ali_model_output.isnan()] = 0.0
             # subsampling is done slightly differently, may be small length
             # differences.
             min_len = min(ali_model_output.shape[2], nnet_output.shape[2])

@@ -63,7 +63,7 @@ class GigaSpeechAsrDataModule(AsrDataModule):
     @lru_cache()
     def train_cuts(self) -> CutSet:
         logging.info("About to get train cuts")
-        cuts_train = load_manifest(
+        cuts_train = CutSet.from_file(
             self.args.feature_dir
             / f"gigaspeech_cuts_{self.args.subset}{get_context_suffix(self.args)}.jsonl.gz"
         )

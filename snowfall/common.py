@@ -235,8 +235,11 @@ def save_training_info(
     logging.info('write training info to {}'.format(filename))
 
 
-def get_phone_symbols(symbol_table: k2.SymbolTable,
-                      pattern: str = r'^#\d+$') -> List[int]:
+def is_disambig_symbol(symbol: str, pattern = re.compile(r'^#\d+$')) -> bool:
+    return pattern.match(symbol) is not None
+
+
+def get_phone_symbols(symbol_table: k2.SymbolTable) -> List[int]:
     '''Return a list of phone IDs containing no disambiguation symbols.
 
     Caution:
@@ -250,11 +253,10 @@ def get_phone_symbols(symbol_table: k2.SymbolTable,
     Returns:
       Return a list of symbol IDs excluding those from disambiguation symbols.
     '''
-    regex = re.compile(pattern)
     symbols = symbol_table.symbols
     ans = []
     for s in symbols:
-        if not regex.match(s):
+        if not is_disambig_symbol(s):
             ans.append(symbol_table[s])
     if 0 in ans:
         ans.remove(0)
@@ -355,7 +357,7 @@ def invert_permutation(indices: torch.Tensor) -> torch.Tensor:
 
 
 def find_first_disambig_symbol(symbols: k2.SymbolTable) -> int:
-    return min(v for k, v in symbols._sym2id.items() if k.startswith('#'))
+    return min(v for k, v in symbols._sym2id.items() if is_disambig_symbol(k))
 
 
 def store_transcripts(path: Pathlike, texts: Iterable[Tuple[str, str]]):

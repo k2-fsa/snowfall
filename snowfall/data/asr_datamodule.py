@@ -87,6 +87,20 @@ class AsrDataModule(DataModule):
             help='When enabled, use on-the-fly cut mixing and feature extraction. '
                  'Will drop existing precomputed feature manifests if available.'
         )
+        group.add_argument(
+            '--shuffle',
+            type=str2bool,
+            default=True,
+            help='When enabled (=default), the examples will be shuffled for each epoch.'
+            )
+        group.add_argument(
+            '--check-cuts',
+            type=str2bool,
+            default=True,
+            help='When enabled (=default), we will iterate over the whole training cut set '
+                 'to validate it. It should be disabled when using Apache Arrow manifests '
+                 'to avoid an excessive starting time of the script with datasets>1000h.'
+            )
 
     def train_dataloaders(self) -> DataLoader:
         logging.info("About to get train cuts")
@@ -118,6 +132,7 @@ class AsrDataModule(DataModule):
             cut_transforms=transforms,
             input_transforms=input_transforms,
             return_cuts=True,
+            check_inputs=self.args.check_cuts,
         )
 
         if self.args.on_the_fly_feats:
@@ -135,6 +150,7 @@ class AsrDataModule(DataModule):
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
                 input_transforms=input_transforms,
                 return_cuts=True,
+                check_inputs=self.args.check_cuts,
             )
 
         if self.args.bucketing_sampler:
@@ -142,7 +158,7 @@ class AsrDataModule(DataModule):
             train_sampler = BucketingSampler(
                 cuts_train,
                 max_duration=self.args.max_duration,
-                shuffle=True,
+                shuffle=self.args.shuffle,
                 num_buckets=self.args.num_buckets
             )
         else:
@@ -150,7 +166,7 @@ class AsrDataModule(DataModule):
             train_sampler = SingleCutSampler(
                 cuts_train,
                 max_duration=self.args.max_duration,
-                shuffle=True,
+                shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
         train_dl = DataLoader(
@@ -182,17 +198,19 @@ class AsrDataModule(DataModule):
                 cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
                 return_cuts=True,
+                check_inputs=self.args.check_cuts,
             )
         else:
             validate = K2SpeechRecognitionDataset(
                 cuts_valid,
                 cut_transforms=transforms,
                 return_cuts=True,
+                check_inputs=self.args.check_cuts,
             )
         valid_sampler = SingleCutSampler(
             cuts_valid,
             max_duration=self.args.max_duration,
-            shuffle=True,
+            shuffle=False,
         )
         logging.info("About to create dev dataloader")
         valid_dl = DataLoader(
@@ -221,6 +239,7 @@ class AsrDataModule(DataModule):
                     else PrecomputedFeatures()
                 ),
                 return_cuts=True,
+                check_inputs=self.args.check_cuts,
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")

@@ -581,8 +581,8 @@ def main():
             store_transcripts(path=recog_path, texts=results)
             logging.info(f'The transcripts are stored in {recog_path}')
 
-            ref_path = exp_dir / 'ref.trn'
-            hyp_path = exp_dir / 'hyp.trn'
+            ref_path = exp_dir / f'ref-{test_set}.trn'
+            hyp_path = exp_dir / f'hyp-{test_set}.trn'
             store_transcripts_for_sclite(
                 ref_path=ref_path,
                 hyp_path=hyp_path,
