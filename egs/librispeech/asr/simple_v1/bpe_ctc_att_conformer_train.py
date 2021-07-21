@@ -252,7 +252,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             optimizer=optimizer,
         )
 
-        total_objf += curr_batch_objf
+        total_objf += curr_batch_objf * curr_batch_num_utts
         epoch_num_utts += curr_batch_num_utts
 
         loginterval_loss +=  - curr_batch_objf * curr_batch_num_utts #  objf = - loss
