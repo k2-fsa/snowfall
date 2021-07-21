@@ -20,19 +20,16 @@ import torch.multiprocessing as mp
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional
 
-from lhotse import CutSet, Fbank, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
-    SpecAugment
-from lhotse.dataset.cut_transforms.perturb_speed import PerturbSpeed
-from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe, str2bool
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.data.librispeech import LibriSpeechAsrDataModule
 from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
@@ -97,7 +94,6 @@ def get_objf(batch: Dict,
                     measure_gradient_norms(model, norm='l1'),
                     global_step=global_batch_idx_train
                 )
-
         if att_rate != 0.0:
             loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
@@ -317,11 +313,6 @@ def get_parser():
         default=0,
         help="Number of start epoch.")
     parser.add_argument(
-        '--max-duration',
-        type=int,
-        default=500.0,
-        help="Maximum pooled recordings duration (seconds) in a single batch.")
-    parser.add_argument(
         '--warm-step',
         type=int,
         default=40000,
@@ -369,48 +360,6 @@ def get_parser():
         type=str2bool,
         default=False,
         help='When enabled, train an identical model to the espnet SOTA released model')
-    parser.add_argument(
-        '--bucketing-sampler',
-        type=str2bool,
-        default=False,
-        help='When enabled, the batches will come from buckets of '
-             'similar duration (saves padding frames).')
-    parser.add_argument(
-        '--num-buckets',
-        type=int,
-        default=30,
-        help='The number of buckets for the BucketingSampler'
-             '(you might want to increase it for larger datasets).')
-    parser.add_argument(
-        '--concatenate-cuts',
-        type=str2bool,
-        default=True,
-        help='When enabled, utterances (cuts) will be concatenated '
-             'to minimize the amount of padding.')
-    parser.add_argument(
-        '--duration-factor',
-        type=float,
-        default=1.0,
-        help='Determines the maximum duration of a concatenated cut '
-             'relative to the duration of the longest cut in a batch.')
-    parser.add_argument(
-        '--gap',
-        type=float,
-        default=1.0,
-        help='The amount of padding (in seconds) inserted between concatenated cuts. '
-             'This padding is filled with noise when noise augmentation is used.')
-    parser.add_argument(
-        '--full-libri',
-        type=str2bool,
-        default=False,
-        help='When enabled, use 960h LibriSpeech.')
-    parser.add_argument(
-        '--on-the-fly-feats',
-        type=str2bool,
-        default=False,
-        help='When enabled, use on-the-fly cut mixing and feature extraction. '
-             'Will drop existing precomputed feature manifests if available.'
-    )
     parser.add_argument(
         '--tensorboard',
         type=str2bool,
@@ -474,7 +423,7 @@ def run(rank, world_size, args):
 
     exp_dir = Path('exp-' + model_type + '-noam-ctc-att-musan-sa-bpe2')
     setup_logger('{}/log/log-train-{}'.format(exp_dir, str(rank)))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 1 else None
+    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_bpe')
@@ -498,109 +447,16 @@ def run(rank, world_size, args):
     )
     logging.info("Using {} ctc topo".format('normal' if args.normal_topo else 'modified'))
 
-    phone_ids = get_phone_symbols(phone_symbol_table)
-
-    # load dataset
-    feature_dir = Path('exp/data')
-    logging.info("About to get train cuts")
-    cuts_train = load_manifest(feature_dir / 'cuts_train-clean-100.json.gz')
-    if args.full_libri:
-        cuts_train = (
-            cuts_train +
-            load_manifest(feature_dir / 'cuts_train-clean-360.json.gz') +
-            load_manifest(feature_dir / 'cuts_train-other-500.json.gz')
-        )
-    logging.info("About to get dev cuts")
-    cuts_dev = (
-        load_manifest(feature_dir / 'cuts_dev-clean.json.gz') +
-        load_manifest(feature_dir / 'cuts_dev-other.json.gz')
-    )
-    logging.info("About to get Musan cuts")
-    cuts_musan = load_manifest(feature_dir / 'cuts_musan.json.gz')
-
-    logging.info("About to create train dataset")
-    transforms = [CutMix(cuts=cuts_musan, prob=0.5, snr=(10, 20))]
-    if args.concatenate_cuts:
-        logging.info(f'Using cut concatenation with duration factor {args.duration_factor} and gap {args.gap}.')
-        # Cut concatenation should be the first transform in the list,
-        # so that if we e.g. mix noise in, it will fill the gaps between different utterances.
-        transforms = [CutConcatenate(duration_factor=args.duration_factor, gap=args.gap)] + transforms
-    train = K2SpeechRecognitionDataset(
-        cuts_train,
-        cut_transforms=transforms,
-        input_transforms=[
-             SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-        ]
-    )
-
-    if args.on_the_fly_feats:
-        # NOTE: the PerturbSpeed transform should be added only if we remove it from data prep stage.
-        # # Add on-the-fly speed perturbation; since originally it would have increased epoch
-        # # size by 3, we will apply prob 2/3 and use 3x more epochs.
-        # # Speed perturbation probably should come first before concatenation,
-        # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
-        # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
-        # Drop feats to be on the safe side.
-        cuts_train = cuts_train.drop_features()
-        from lhotse.features.fbank import FbankConfig
-        train = K2SpeechRecognitionDataset(
-            cuts=cuts_train,
-            cut_transforms=transforms,
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
-            input_transforms=[
-                SpecAugment(num_frame_masks=2, features_mask_size=27, num_feature_masks=2, frames_mask_size=100)
-            ]
-        )
-
-    if args.bucketing_sampler:
-        logging.info('Using BucketingSampler.')
-        train_sampler = BucketingSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-            num_buckets=args.num_buckets
-        )
-    else:
-        logging.info('Using SingleCutSampler.')
-        train_sampler = SingleCutSampler(
-            cuts_train,
-            max_duration=max_duration,
-            shuffle=True,
-        )
-    logging.info("About to create train dataloader")
-    train_dl = torch.utils.data.DataLoader(
-        train,
-        sampler=train_sampler,
-        batch_size=None,
-        num_workers=4,
-    )
-
-    logging.info("About to create dev dataset")
-    if args.on_the_fly_feats:
-        cuts_dev = cuts_dev.drop_features()
-        validate = K2SpeechRecognitionDataset(
-            cuts_dev.drop_features(),
-            input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
-        )
-    else:
-        validate = K2SpeechRecognitionDataset(cuts_dev)
-    valid_sampler = SingleCutSampler(
-        cuts_dev,
-        max_duration=max_duration,
-    )
-    logging.info("About to create dev dataloader")
-    valid_dl = torch.utils.data.DataLoader(
-        validate,
-        sampler=valid_sampler,
-        batch_size=None,
-        num_workers=1
-    )
+    librispeech = LibriSpeechAsrDataModule(args)
+    train_dl = librispeech.train_dataloaders()
+    valid_dl = librispeech.valid_dataloaders()
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
         sys.exit(-1)
 
     logging.info("About to create model")
+    phone_ids = get_phone_symbols(phone_symbol_table)
     device_id = rank
     device = torch.device('cuda', device_id)
 
@@ -756,7 +612,9 @@ def run(rank, world_size, args):
 
 
 def main():
-    args = get_parser().parse_args()
+    parse = get_parse()
+    LibriSpeechAsrDataModule.add_arguments(parser)
+    args = parser.parse_args()
     world_size = args.world_size
     assert world_size >= 1
     mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)

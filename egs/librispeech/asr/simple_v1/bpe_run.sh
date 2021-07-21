@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# Copyright 2021 Xiaomi Corporation (Author: Wei Kang)
+# Copyright 2021 Xiaomi Corporation (Authors: Fangjun Kuang
+#                                             Wei Kang)
 # Apache 2.0
 
 set -eou pipefail
@@ -155,26 +156,15 @@ fi
 
 # Normally, you should stop here and run the training script manually.
 # stage 1 to 3 need only to be run once.
-#
 
 if [ $stage -le 4 ]; then
-  # python3 ./ctc_att_transformer_train.py \
-  #   --nhead 8 \
-  #   --attention-dim 512 \
-  #   --num-epochs 50 \
-  #   --full-libri True \
-  #   --max-duration 200
-
   python3 ./ctc_att_transformer_train.py --world-size 3 \
     --nhead 8 \
     --attention-dim 512 \
     --num-epochs 50 \
     --full-libri True \
-    --start-epoch 2 \
     --max-duration 200
 fi
-
-exit 0
 
 if [ $stage -le 5 ]; then
   python3 ./ctc_att_transformer_decode.py \
