@@ -450,14 +450,17 @@ def main():
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=args.vgg_frontend,
             is_espnet_structure=args.is_espnet_structure,
-            mmi_loss=False)
+            mmi_loss=False,
+            use_feat_batchnorm=True)
 
         if args.espnet_identical_model:
-            assert sum([p.numel() for p in model.parameters()]) == 116146960
+            # + 160 for feat_batch_norm, used as feature mean and variance normalization
+            assert sum([p.numel() for p in model.parameters()]) == 116146960 + 160
     else:
         raise NotImplementedError("Model of type " + str(model_type) + " is not verified")
 
-    exp_dir = Path(f'exp-bpe-lrfactor{args.lr_factor}-{model_type}-{attention_dim}-{nhead}-noam/')
+    exp_dir = Path(f'exp-duration-200-feat_batchnorm-bpe-lrfactor{args.lr_factor}-{model_type}-{attention_dim}-{nhead}-noam/')
+
     if args.decode_with_released_model is True:
         released_model_path = exp_dir / f'model-epoch-{epoch}-avg-{avg}.pt'
         model.load_state_dict(torch.load(released_model_path))

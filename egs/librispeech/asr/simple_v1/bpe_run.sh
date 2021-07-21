@@ -17,7 +17,7 @@ if [ $download_model -eq 1 ]; then
           exit 0
     fi
     git clone https://huggingface.co/GuoLiyong/snowfall_bpe_model
-    for sub_dir in data exp-bpe-lrfactor10.0-conformer-512-8-noam; do
+    for sub_dir in data exp-duration-200-feat_batchnorm-bpe-lrfactor5.0-conformer-512-8-noam; do
       ln -sf snowfall_bpe_model/$sub_dir ./
     done
   fi
@@ -104,7 +104,10 @@ fi
 if [ $stage -le 3 ]; then
   export CUDA_VISIBLE_DEVICES=2
   python bpe_ctc_att_conformer_decode.py \
-    --max-duration=20 \
+    --epoch 51 \
+    --avg 20 \
+    --lr-factor 5.0 \
+    --max-duration=10 \
     --generate-release-model=False \
     --decode_with_released_model=True \
     --num-paths-for-decoder-rescore=500

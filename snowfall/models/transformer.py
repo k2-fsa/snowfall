@@ -37,8 +37,12 @@ class Transformer(AcousticModel):
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, normalize_before: bool = True,
-                 vgg_frontend: bool = False, mmi_loss: bool = True) -> None:
+                 vgg_frontend: bool = False, mmi_loss: bool = True, use_feat_batchnorm:bool = False) -> None:
         super().__init__()
+        self.use_feat_batchnorm = use_feat_batchnorm
+        if use_feat_batchnorm:
+            self.feat_batchnorm = nn.BatchNorm1d(num_features)
+
         self.num_features = num_features
         self.num_classes = num_classes
         self.subsampling_factor = subsampling_factor
@@ -99,6 +103,8 @@ class Transformer(AcousticModel):
             Optional[Tensor]: Mask tensor of dimension (batch_size, input_length) or None.
 
         """
+        if self.use_feat_batchnorm:
+            x = self.feat_batchnorm(x)
         encoder_memory, memory_mask = self.encode(x, supervision)
         x = self.encoder_output(encoder_memory)
         return x, encoder_memory, memory_mask
