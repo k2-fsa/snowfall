@@ -362,7 +362,9 @@ def get_parser():
         '--warm-step',
         type=int,
         # Reference: https://zenodo.org/record/4604066#.YNPzOOgzaUk
-        default=40000,
+        # Because the batch_size (when max_duration=200) used in current exp is a half of that used in previous refrence
+        # so we doulbe warm-steps.
+        default=80000,
         help='The number of warm-up steps for Noam optimizer.'
     )
     parser.add_argument(
@@ -449,7 +451,7 @@ def run(rank, world_size, args):
     fix_random_seed(42)
     setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path(f'exp-bpe-lrfactor{args.lr_factor}-{model_type}-{attention_dim}-{nhead}-noam')
+    exp_dir = Path(f'exp-duration-200-feat_batchnorm-bpe-lrfactor{args.lr_factor}-{model_type}-{attention_dim}-{nhead}-noam')
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
         tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
@@ -460,9 +462,6 @@ def run(rank, world_size, args):
     device = torch.device('cuda', device_id)
 
 
-    librispeech = LibriSpeechAsrDataModule(args)
-    train_dl = librispeech.train_dataloaders()
-    valid_dl = librispeech.valid_dataloaders()
 
     if not torch.cuda.is_available():
         logging.error('no gpu detected!')
@@ -493,7 +492,8 @@ def run(rank, world_size, args):
             num_decoder_layers=num_decoder_layers,
             vgg_frontend=args.vgg_frontend,
             is_espnet_structure=args.is_espnet_structure,
-            mmi_loss=False)
+            mmi_loss=False,
+            use_feat_batchnorm=True)
         if args.espnet_identical_model:
             assert sum([p.numel() for p in model.parameters()]) == 116146960
     else:
@@ -513,6 +513,11 @@ def run(rank, world_size, args):
                      warm_step=args.warm_step,
                      weight_decay=args.weight_decay)
 
+
+    librispeech = LibriSpeechAsrDataModule(args)
+    train_dl = librispeech.train_dataloaders()
+    valid_dl = librispeech.valid_dataloaders()
+
     best_objf = np.inf
     best_valid_objf = np.inf
     best_epoch = curr_epoch
@@ -521,7 +526,7 @@ def run(rank, world_size, args):
     global_batch_idx_train = 0  # for logging only
 
     if args.start_epoch > 1:
-        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch))
+        model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(args.start_epoch))
         ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
