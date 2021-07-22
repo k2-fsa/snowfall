@@ -17,6 +17,8 @@ from lhotse.recipes import prepare_gigaspeech, prepare_musan
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() in case it needs to take effect
 # even when we are not invoking the main (e.g. when spawning subprocesses).
+from lhotse.utils import is_module_available
+from snowfall.common import str2bool
 from snowfall.data.gigaspeech import get_context_suffix
 
 torch.set_num_threads(1)
@@ -97,6 +99,15 @@ def get_parser():
         "If it's larger than 0, determines in which direction (relative to the supervision) "
         "to seek for extra acoustic context. Available values: (left|right|center|random).",
     )
+    parser.add_argument(
+        '--precomputed-features',
+        type=str2bool,
+        default=True,
+        help='Should we pre-compute features and store them on disk or not. '
+             'It is recommended to disable it for L and XL splits as the pre-computation '
+             'might currently consume excessive memory and time -- use on-the-fly feature '
+             'extraction in the training script instead.'
+    )
     return parser
 
 
@@ -119,6 +130,10 @@ def has_no_oov(sup: SupervisionSegment, oov_pattern=re.compile(r"<(SIL|MUSIC|NOI
 def main():
     args = get_parser().parse_args()
     dataset_parts = [args.subset, "DEV", "TEST"]
+    if args.subset in ['L', 'XL']:
+        assert is_module_available('pyarrow'), "Running the GigaSpeech recipe for L and XL splits " \
+                                               "currently requires installing optional dependencies: " \
+                                               "'pip install pyarrow pandas'."
 
     print("Parts we will prepare: ", dataset_parts)
 
@@ -153,8 +168,10 @@ def main():
     extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
+            # For L and XL partition we are going to store the manifest using pyarrow.
+            cuts_path_ext = 'jsonl.gz' if partition not in ['L', 'XL'] else 'arrow'
             raw_cuts_path = output_dir / f"gigaspeech_cuts_{partition}_raw.jsonl.gz"
-            cuts_path = output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.jsonl.gz"
+            cuts_path = output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.{cuts_path_ext}"
 
             if raw_cuts_path.is_file():
                 print(f"{partition} already exists - skipping feature extraction.")
@@ -180,16 +197,18 @@ def main():
                             cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
                     )
 
-                # Extract the features before cutting into smaller cuts:
-                # We leverage the chunked HDF5 storage to make reading this efficient later.
-                cut_set = cut_set.compute_and_store_features(
-                    extractor=extractor,
-                    storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
-                    # when an executor is specified, make more partitions
-                    num_jobs=args.num_jobs if ex is None else 80,
-                    executor=ex,
-                    storage_type=ChunkedLilcomHdf5Writer,
-                )
+                if args.precomputed_features:
+                    # Extract the features before cutting into smaller cuts:
+                    # We leverage the chunked HDF5 storage to make reading this efficient later.
+                    cut_set = cut_set.compute_and_store_features(
+                        extractor=extractor,
+                        storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
+                        # when an executor is specified, make more partitions
+                        num_jobs=args.num_jobs if ex is None else 80,
+                        executor=ex,
+                        storage_type=ChunkedLilcomHdf5Writer,
+                    )
+
                 cut_set.to_file(raw_cuts_path)
 
             if cuts_path.is_file():

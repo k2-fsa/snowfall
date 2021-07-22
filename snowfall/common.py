@@ -235,7 +235,7 @@ def save_training_info(
     logging.info('write training info to {}'.format(filename))
 
 
-def is_disambig_symbol(symbol: str, pattern = re.compile(r'^#\d+$')) -> bool:
+def is_disambig_symbol(symbol: str, pattern: re.Pattern = re.compile(r'^#\d+$')) -> bool:
     return pattern.match(symbol) is not None
 
 
