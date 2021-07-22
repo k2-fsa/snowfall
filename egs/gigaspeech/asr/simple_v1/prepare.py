@@ -234,6 +234,10 @@ def main():
                     else args.context_window,
                     context_direction=args.context_direction,
                 )
+                if partition in ['L', 'XL']:
+                    # Before storing manifests in the arrow format, we want to pre-shuffle them,
+                    # as the sampler won't be able to do it later in an efficient manner.
+                    cut_set = cut_set.shuffle()
                 cut_set.to_file(cuts_path)
 
                 # Remove cut_set so the next iteration can correctly infer whether it needs to
