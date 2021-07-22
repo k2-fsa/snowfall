@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 
 # Copyright 2021 Johns Hopkins University (author: Piotr Żelasko)
+#           2021 Xiaomi Corporation (Author: Junbo Zhang, Yongqing Wang)
 # Apache 2.0
 
 set -eou pipefail
 
 stage=0
 subset='XS'
+nj=50
 
 gigaspeech_dirs=(
 /export/corpora5/gigaspeech
 /exp/swatanabe/data/gigaspeech/
+/home/storage07/zhangjunbo/data/gigaspeech
 )
 
 giga_dir=
@@ -20,6 +23,15 @@ for d in ${gigaspeech_dirs[@]}; do
     break
   fi
 done
+
+gigaspeech_test_sets="gigaspeech_dev gigaspeech_test"
+gigaspeech_train_sets="gigaspeech_train_${subset,,}"
+
+# G2P and LM configure.
+g2p_model=$giga_dir/dict/g2p/g2p.model.4
+lm_order=3
+lm_dir=data/local/lm
+dict_dir=data/local/dict
 
 if [ ! -f $giga_dir/GigaSpeech.json ]; then
   echo "Please set GigaSpeech dataset path before running this script"
@@ -33,18 +45,23 @@ if [ ! -d GigaSpeech ]; then
   git clone https://github.com/SpeechColab/GigaSpeech
 fi
 
-
-if [ $stage -le 1 ]; then
-  echo TODO: train or download LM
-  #local/download_lm.sh "openslr.org/resources/11" data/local/lm
+if [ $stage -le 0 ]; then
+  local/data_prep.sh --train-subset $subset $giga_dir data || exit 1;
 fi
 
-if [ $stage -le 2 ]; then
-  echo TODO: create lexicon, probably with g2p, + dict dir
-  #local/prepare_dict.sh data/local/lm data/local/dict_nosp
+if [ $stage -le 1 ]; then
+  [ ! -f $g2p_model ] && echo "$0: Cannot find G2P model $g2p_model" && exit 1
+  local/prepare_dict.sh --nj 50 $g2p_model data/$gigaspeech_train_sets $dict_dir || exit 1;
 fi
 
 if [ $stage -le 3 ]; then
+  mkdir -p $lm_dir || exit 1;
+  sed 's|\t| |' data/$train_combined/text |\
+    cut -d " " -f 2- > $lm_dir/corpus.txt || exit 1;
+  local/train_lm.sh --lm-order $lm_order $lm_dir/corpus.txt $lm_dir || exit 1;
+fi
+
+if [ $stage -le 4 ]; then
   local/prepare_lang.sh \
     --position-dependent-phones false \
     data/local/dict_nosp \
@@ -53,7 +70,7 @@ if [ $stage -le 3 ]; then
     data/lang_nosp
 fi
 
-if [ $stage -le 4 ]; then
+if [ $stage -le 5 ]; then
   # Build G
 #  if [ ! -f data/lang_nosp/G_uni.fst.txt ]; then
 #    python3 -m kaldilm \
@@ -86,11 +103,11 @@ if [ $stage -le 4 ]; then
   fi
 fi
 
-if [ $stage -le 5 ]; then
+if [ $stage -le 6 ]; then
   python3 ./prepare.py --subset $subset
 fi
 
-if [ $stage -le 6 ]; then
+if [ $stage -le 7 ]; then
   mkdir -p data/local/tmp
   if [ ! -f data/local/tmp/transcript.txt ]; then
     echo "Generating data/local/tmp/transcript.txt"
@@ -103,7 +120,7 @@ if [ $stage -le 6 ]; then
   fi
 fi
 
-if [ $stage -le 7 ]; then
+if [ $stage -le 8 ]; then
   # this stage takes about 3 minutes
   mkdir -p data/lm
   if [ ! -f data/lm/P.arpa ]; then
@@ -128,7 +145,7 @@ if [ $stage -le 7 ]; then
   fi
 fi
 
-if [ $stage -le 8 ]; then
+if [ $stage -le 9 ]; then
   if [ ! -f data/lang_nosp/P.fst.txt ]; then
     python3 -m kaldilm \
       --read-symbol-table="data/lang_nosp/phones.txt" \
@@ -144,10 +161,10 @@ fi
 #
 # exit 0
 
-if [ $stage -le 9 ]; then
+if [ $stage -le 10 ]; then
   python3 ./mmi_att_transformer_train.py --subset "$subset"
 fi
 
-if [ $stage -le 10 ]; then
+if [ $stage -le 11 ]; then
   python3 ./mmi_att_transformer_decode.py
 fi
