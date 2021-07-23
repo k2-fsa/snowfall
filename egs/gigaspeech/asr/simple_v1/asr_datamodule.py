@@ -1,6 +1,7 @@
+# Copyright (c)  2021  Johns Hopkins University (Piotr Żelasko)
+# Apache 2.0
 import argparse
 import logging
-from concurrent.futures import ProcessPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Union
@@ -8,9 +9,15 @@ from typing import List, Union
 from torch.utils.data import DataLoader
 
 from lhotse import CutSet, Fbank, FbankConfig, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, PrecomputedFeatures, \
-    SingleCutSampler, \
-    SpecAugment, AudioSamples
+from lhotse.dataset import (
+    BucketingSampler,
+    CutConcatenate,
+    CutMix,
+    K2SpeechRecognitionDataset,
+    PrecomputedFeatures,
+    SingleCutSampler,
+    SpecAugment,
+)
 from lhotse.dataset.dataloading import LhotseDataLoader
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from snowfall.common import str2bool
@@ -152,13 +159,21 @@ class GigaSpeechAsrDataModule(DataModule):
 
     def validate_args(self):
         if self.args.subset in ['L', 'XL']:
-            assert self.args.shuffle == False, "For GigaSpeech L/XL, you must use --shuffle 0 to avoid eagerly reading pyarrow manifests."
-            assert self.args.check_cuts == False, "For GigaSpeech L/XL, you must use --check-cuts 0 to avoid eagerly reading pyarrow manifests."
-            assert self.args.bucketing_sampler == False, "For GigaSpeech L/XL, you must use --bucketing-sampler 0 to avoid eagerly reading pyarrow manifests."
-            assert self.args.on_the_fly_feats == True, "For GigaSpeech L/XL, you must use --on-the-fly-feats 1 as we do not pre-compute them by default."
-
+            assert (
+                self.args.shuffle == False
+            ), "For GigaSpeech L/XL, you must use --shuffle 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.check_cuts == False
+            ), "For GigaSpeech L/XL, you must use --check-cuts 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.bucketing_sampler == False
+            ), "For GigaSpeech L/XL, you must use --bucketing-sampler 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.on_the_fly_feats == True
+            ), "For GigaSpeech L/XL, you must use --on-the-fly-feats 1 as we do not pre-compute them by default."
 
     def train_dataloaders(self) -> DataLoader:
+        self.validate_args()
         logging.info("About to get train cuts")
         cuts_train = self.train_cuts()
 
@@ -239,6 +254,7 @@ class GigaSpeechAsrDataModule(DataModule):
         return train_dl
 
     def valid_dataloaders(self) -> DataLoader:
+        self.validate_args()
         logging.info("About to get dev cuts")
         cuts_valid = self.valid_cuts()
 
@@ -287,6 +303,7 @@ class GigaSpeechAsrDataModule(DataModule):
         return valid_dl
 
     def test_dataloaders(self) -> Union[DataLoader, List[DataLoader]]:
+        self.validate_args()
         cuts = self.test_cuts()
         is_list = isinstance(cuts, list)
         test_loaders = []
