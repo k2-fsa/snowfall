@@ -14,7 +14,6 @@ import torch
 
 from asr_datamodule import get_context_suffix
 from lhotse import (
-    ChunkedLilcomHdf5Writer,
     CutSet,
     Fbank,
     FbankConfig,
@@ -213,18 +212,6 @@ def main():
                         + cut_set.perturb_speed(1.1)
                     )
 
-                if args.precomputed_features:
-                    # Extract the features before cutting into smaller cuts:
-                    # We leverage the chunked HDF5 storage to make reading this efficient later.
-                    cut_set = cut_set.compute_and_store_features(
-                        extractor=extractor,
-                        storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
-                        # when an executor is specified, make more partitions
-                        num_jobs=args.num_jobs if ex is None else 80,
-                        executor=ex,
-                        storage_type=ChunkedLilcomHdf5Writer,
-                    )
-
                 cut_set.to_file(raw_cuts_path)
 
             if cuts_path.is_file():
@@ -256,6 +243,22 @@ def main():
                     # Before storing manifests in the arrow format, we want to pre-shuffle them,
                     # as the sampler won't be able to do it later in an efficient manner.
                     cut_set = cut_set.shuffle()
+
+                if args.precomputed_features:
+                    # Extract the features after cutting large recordings into smaller cuts.
+                    # Note: we support very efficient "chunked" feature reads with the argument
+                    #       `storage_type=ChunkedLilcomHdf5Writer`, but we don't support efficient
+                    #       data augmentation and feature computation for long recordings yet.
+                    #       Therefore, we sacrifice some storage for the ability to precompute
+                    #       features on shorter chunks, without memory blow-ups.
+                    cut_set = cut_set.compute_and_store_features(
+                        extractor=extractor,
+                        storage_path=f"{output_dir}/feats_gigaspeech_{partition}",
+                        # when an executor is specified, make more partitions
+                        num_jobs=args.num_jobs if ex is None else 80,
+                        executor=ex,
+                    )
+
                 cut_set.to_file(cuts_path)
 
                 # Remove cut_set so the next iteration can correctly infer whether it needs to
