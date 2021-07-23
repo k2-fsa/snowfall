@@ -32,7 +32,6 @@ from snowfall.common import find_first_disambig_symbol
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.data.gigaspeech import GigaSpeechAsrDataModule
 from snowfall.dist import cleanup_dist
 from snowfall.dist import setup_dist
 from snowfall.lexicon import Lexicon
@@ -44,6 +43,8 @@ from snowfall.models.transformer import Noam, Transformer
 from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
+
+from asr_datamodule import GigaSpeechAsrDataModule
 
 
 def get_objf(batch: Dict,
@@ -491,7 +492,7 @@ def run(rank, world_size, args):
     if args.context_window is not None and args.context_window > 0:
         suffix = f'ac{args.context_window}'
     giga_subset = f'giga{args.subset}'
-    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}')
+    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}-dupa')
 
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
@@ -742,6 +743,13 @@ def main():
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
+
+# Workaround for logging not working in multi GPU training on some systems:
+#def print_(x):
+#    now = datetime.now()
+#    print(now, x)
+#
+#logging.info = print_
 
 if __name__ == '__main__':
     main()

@@ -12,15 +12,23 @@ from pathlib import Path
 
 import torch
 
-from lhotse import ChunkedLilcomHdf5Writer, CutSet, Fbank, FbankConfig, LilcomHdf5Writer, SupervisionSegment, combine
+from asr_datamodule import get_context_suffix
+from lhotse import (
+    ChunkedLilcomHdf5Writer,
+    CutSet,
+    Fbank,
+    FbankConfig,
+    LilcomHdf5Writer,
+    SupervisionSegment,
+    combine,
+)
 from lhotse.recipes import prepare_gigaspeech, prepare_musan
+from lhotse.utils import is_module_available
+from snowfall.common import str2bool
+
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
 # slow things down.  Do this outside of main() in case it needs to take effect
 # even when we are not invoking the main (e.g. when spawning subprocesses).
-from lhotse.utils import is_module_available
-from snowfall.common import str2bool
-from snowfall.data.gigaspeech import get_context_suffix
-
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
@@ -100,13 +108,13 @@ def get_parser():
         "to seek for extra acoustic context. Available values: (left|right|center|random).",
     )
     parser.add_argument(
-        '--precomputed-features',
+        "--precomputed-features",
         type=str2bool,
         default=True,
-        help='Should we pre-compute features and store them on disk or not. '
-             'It is recommended to disable it for L and XL splits as the pre-computation '
-             'might currently consume excessive memory and time -- use on-the-fly feature '
-             'extraction in the training script instead.'
+        help="Should we pre-compute features and store them on disk or not. "
+        "It is recommended to disable it for L and XL splits as the pre-computation "
+        "might currently consume excessive memory and time -- use on-the-fly feature "
+        "extraction in the training script instead.",
     )
     return parser
 
@@ -123,17 +131,21 @@ def normalize_text(
     return whitespace_pattern.sub(" ", punct_pattern.sub("", utt))
 
 
-def has_no_oov(sup: SupervisionSegment, oov_pattern=re.compile(r"<(SIL|MUSIC|NOISE|OTHER)>")) -> bool:
+def has_no_oov(
+    sup: SupervisionSegment, oov_pattern=re.compile(r"<(SIL|MUSIC|NOISE|OTHER)>")
+) -> bool:
     return oov_pattern.search(sup.text) is None
 
 
 def main():
     args = get_parser().parse_args()
     dataset_parts = [args.subset, "DEV", "TEST"]
-    if args.subset in ['L', 'XL']:
-        assert is_module_available('pyarrow'), "Running the GigaSpeech recipe for L and XL splits " \
-                                               "currently requires installing optional dependencies: " \
-                                               "'pip install pyarrow pandas'."
+    if args.subset in ["L", "XL"]:
+        assert is_module_available("pyarrow"), (
+            "Running the GigaSpeech recipe for L and XL splits "
+            "currently requires installing optional dependencies: "
+            "'pip install pyarrow pandas'."
+        )
 
     print("Parts we will prepare: ", dataset_parts)
 
@@ -169,9 +181,11 @@ def main():
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
             # For L and XL partition we are going to store the manifest using pyarrow.
-            cuts_path_ext = 'jsonl.gz' if partition not in ['L', 'XL'] else 'arrow'
+            cuts_path_ext = "jsonl.gz" if partition not in ["L", "XL"] else "arrow"
             raw_cuts_path = output_dir / f"gigaspeech_cuts_{partition}_raw.jsonl.gz"
-            cuts_path = output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.{cuts_path_ext}"
+            cuts_path = (
+                output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.{cuts_path_ext}"
+            )
 
             if raw_cuts_path.is_file():
                 print(f"{partition} already exists - skipping feature extraction.")
@@ -194,7 +208,9 @@ def main():
                 # Run data augmentation that needs to be done in the time domain.
                 if partition not in ["DEV", "TEST"]:
                     cut_set = (
-                            cut_set + cut_set.perturb_speed(0.9) + cut_set.perturb_speed(1.1)
+                        cut_set
+                        + cut_set.perturb_speed(0.9)
+                        + cut_set.perturb_speed(1.1)
                     )
 
                 if args.precomputed_features:
@@ -212,7 +228,9 @@ def main():
                 cut_set.to_file(raw_cuts_path)
 
             if cuts_path.is_file():
-                print(f"{partition} already exists - skipping cutting into sub-segments.")
+                print(
+                    f"{partition} already exists - skipping cutting into sub-segments."
+                )
             else:
                 try:
                     # If we skipped initializing `cut_set` because it exists on disk, we'll load it.
@@ -234,6 +252,10 @@ def main():
                     else args.context_window,
                     context_direction=args.context_direction,
                 )
+                if partition in ["L", "XL"]:
+                    # Before storing manifests in the arrow format, we want to pre-shuffle them,
+                    # as the sampler won't be able to do it later in an efficient manner.
+                    cut_set = cut_set.shuffle()
                 cut_set.to_file(cuts_path)
 
                 # Remove cut_set so the next iteration can correctly infer whether it needs to
