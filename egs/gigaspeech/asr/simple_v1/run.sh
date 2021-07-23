@@ -11,9 +11,9 @@ subset='XS'
 nj=50
 
 gigaspeech_dirs=(
-/export/corpora5/gigaspeech
-/exp/swatanabe/data/gigaspeech/
-/home/storage07/zhangjunbo/data/gigaspeech
+/export/corpora5/gigaspeech/
+/exp/pzelasko/gigaspeech/
+/home/storage07/zhangjunbo/data/gigaspeech/
 )
 
 giga_dir=
