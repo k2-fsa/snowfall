@@ -54,6 +54,7 @@ import k2
 import torch
 from k2 import Fsa, SymbolTable
 
+from asr_datamodule import GigaSpeechAsrDataModule
 from snowfall.common import average_checkpoint, store_transcripts, store_transcripts_for_sclite
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
@@ -61,7 +62,6 @@ from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.common import str2bool
 from snowfall.common import write_error_stats
-from snowfall.data.gigaspeech import GigaSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.decoding.lm_rescore import rescore_with_n_best_list
 from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
