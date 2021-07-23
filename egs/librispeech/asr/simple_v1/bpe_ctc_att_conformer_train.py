@@ -33,7 +33,9 @@ from snowfall.dist import setup_dist
 from snowfall.models import AcousticModel
 from snowfall.models.conformer import Conformer
 from snowfall.models.transformer import Noam
+from snowfall.objectives import CTCLoss, encode_supervisions
 from snowfall.text.numericalizer import Numericalizer
+from snowfall.training.ctc_graph import CtcTrainingGraphCompiler
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 
 
@@ -44,6 +46,7 @@ logging.info = print
 def get_objf(batch: Dict,
              model: AcousticModel,
              device: torch.device,
+             graph_compiler: CtcTrainingGraphCompiler,
              numericalizer: Numericalizer,
              is_training: bool,
              is_update: bool,
@@ -61,6 +64,7 @@ def get_objf(batch: Dict,
 
     supervisions = batch['supervisions']
 
+    loss_fn = CTCLoss(graph_compiler)
     supervision_segments = torch.stack(
         (supervisions['sequence_idx'],
          (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
@@ -77,32 +81,36 @@ def get_objf(batch: Dict,
         blank_id = 0
         unk_id = 1 # i.e. oov_id
         token_ids = []
-        for text in texts:
-            token_ids.append(list(filter(lambda x: x != blank_id and x != unk_id, numericalizer.EncodeAsIds(text.upper()))))
+        # for text in texts:
+        #     token_ids.append(list(filter(lambda x: x != blank_id and x != unk_id, numericalizer.EncodeAsIds(text.upper()))))
 
 
         if att_rate != 0.0:
-            att_loss = model.module.decoder_forward(encoder_memory, memory_mask, token_ids=token_ids)
+            att_loss = model.module.decoder_forward(encoder_memory, memory_mask,
+                       supervision=supervisions, graph_compiler=graph_compiler)
 
         # Prepare to compute ctc_loss
         nnet_output = nnet_output.permute(2, 0, 1)  # Now is [T, N, C], as required by torch.nn.CTCLoss
 
-        target_lengths = torch.tensor([len(token_id) for token_id in token_ids])  # N
-        target= torch.tensor(list(np.concatenate(token_ids).flat))  # size is sum(target_lengths)
-        assert sum(target_lengths) == len(target)
+        # target_lengths = torch.tensor([len(token_id) for token_id in token_ids])  # N
+        # target= torch.tensor(list(np.concatenate(token_ids).flat))  # size is sum(target_lengths)
+        # assert sum(target_lengths) == len(target)
 
         input_lengths = supervision_segments[:,2]
 
         bni = input_lengths.shape[0]  # batch_size of input
         bno = nnet_output.shape[1]  # batch_size of nnet_output
-        bnt = target_lengths.shape[0]  # batch_size of target_legnths
-        assert bno == bni and bno == bnt and bni == bnt, 'Inconsistent batch-size!'
+        # bnt = target_lengths.shape[0]  # batch_size of target_legnths
+        assert bno == bni, 'Inconsistent batch-size!'
 
-        ctc_loss = model.module.ctc_loss_fn(nnet_output, target, input_lengths, target_lengths)
+        # ctc_loss = model.module.ctc_loss_fn(nnet_output, target, input_lengths, target_lengths)
+        tot_score, tot_frames, all_frames = loss_fn(nnet_output.permute(1, 0, 2), texts, supervision_segments)
 
         # Normalized by batch_size
         # Reference: https://github.com/espnet/espnet/blob/master/espnet2/asr/ctc.py#L98
-        ctc_loss = ctc_loss.sum() / bno
+        # ctc_loss = ctc_loss.sum() / bno
+        ctc_loss = -tot_score.sum() / bno
+        # print ("ctc_loss : {}, tot_score : {}".format(ctc_loss, tot_score))
 
         if att_rate != 0.0:
             loss = ((1.0 - att_rate) * ctc_loss + att_rate * att_loss) *  accum_grad
@@ -146,6 +154,7 @@ def get_objf(batch: Dict,
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
                         device: torch.device,
+                        graph_compiler: CtcTrainingGraphCompiler,
                         numericalizer: Numericalizer,
                         att_rate: int,
                         ):
@@ -161,6 +170,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
             batch=batch,
             model=model,
             device=device,
+            graph_compiler=graph_compiler,
             numericalizer=numericalizer,
             is_training=False,
             is_update=False,
@@ -178,6 +188,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
                     model: AcousticModel,
                     device: torch.device,
+                    graph_compiler: CtcTrainingGraphCompiler,
                     numericalizer: Numericalizer,
                     optimizer: torch.optim.Optimizer,
                     accum_grad: int,
@@ -242,6 +253,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             batch=batch,
             model=model,
             device=device,
+            graph_compiler=graph_compiler,
             numericalizer=numericalizer,
             is_training=True,
             is_update=is_update,
@@ -296,6 +308,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                 dataloader=valid_dataloader,
                 model=model,
                 device=device,
+                graph_compiler=graph_compiler,
                 numericalizer=numericalizer,
                 att_rate=att_rate)
 
@@ -461,17 +474,31 @@ def run(rank, world_size, args):
     device_id = rank
     device = torch.device('cuda', device_id)
 
-
-
     if not torch.cuda.is_available():
         logging.error('no gpu detected!')
         sys.exit(-1)
 
     # TODO(Liyong Guo) make this configurable.
-    lang_dir = Path('data/en_token_list/bpe_unigram5000/')
+    lang_dir = Path('data/lang_bpe2/')
     bpe_model_path = lang_dir / 'bpe.model'
     tokens_file = lang_dir / 'tokens.txt'
     numericalizer = Numericalizer.build_numericalizer(bpe_model_path, tokens_file)
+
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
+
+    logging.info("Loading L.fst")
+    if (lang_dir / 'Linv.pt').exists():
+        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
+    else:
+        with open(lang_dir / 'L.fst.txt') as f:
+            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
+            L_inv = k2.arc_sort(L.invert_())
+            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+    graph_compiler = CtcTrainingGraphCompiler(
+        L_inv=L_inv,
+        phones=phone_symbol_table,
+        words=word_symbol_table)
 
     if rank == 0:
         logging.info("about to create model")
@@ -550,6 +577,7 @@ def run(rank, world_size, args):
             valid_dataloader=valid_dl,
             model=model,
             device=device,
+            graph_compiler=graph_compiler,
             numericalizer=numericalizer,
             optimizer=optimizer,
             accum_grad=accum_grad,
