@@ -27,19 +27,11 @@ lexicon=$3
 [ ! -f $g2p_model ] && echo "$0: Can't G2P model: $g2p_model" && exit 1;
 [ ! -f $words ] && echo "$0: Can't find the G2P input: $words" && exit 1;
 
-sequitur=$KALDI_ROOT/tools/sequitur-g2p/g2p.py
-sequitur_path=$KALDI_ROOT/tools/sequitur-g2p/lib/python3.8/site-packages
-
-if [ -z $sequitur ] || [ ! -x $sequitur ]; then
-  echo "$0: Can't find the Sequitur G2P script. Please check $KALDI_ROOT/tools"
-  echo "$0: for installation script and instructions."
-  exit 1;
-fi
+sequitur=g2p.py
 
 # Applies Sequitur G2P
 echo "$0: Applying Sequitur G2P to $words"
-PYTHONPATH=$sequitur_path:$PYTHONPATH \
-           $sequitur --model=$g2p_model --apply $words > ${lexicon}.tmp || exit 1;
+$sequitur --model=$g2p_model --apply $words > ${lexicon}.tmp || exit 1;
 
 # Turns out Sequitur has some sort of bug and it doesn't output pronunciations
 # for some (admittedly peculiar) words. We manually specify these exceptions

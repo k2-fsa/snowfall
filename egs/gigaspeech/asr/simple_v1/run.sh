@@ -29,9 +29,9 @@ gigaspeech_train_sets="gigaspeech_train_${subset,,}"
 
 # G2P and LM configure.
 g2p_model=$giga_dir/dict/g2p/g2p.model.4
-lm_order=3
+lm_order=4
 lm_dir=data/local/lm
-dict_dir=data/local/dict
+dict_dir=data/local/dict_nosp
 
 if [ ! -f $giga_dir/GigaSpeech.json ]; then
   echo "Please set GigaSpeech dataset path before running this script"
@@ -56,7 +56,7 @@ fi
 
 if [ $stage -le 3 ]; then
   mkdir -p $lm_dir || exit 1;
-  sed 's|\t| |' data/$train_combined/text |\
+  sed 's|\t| |' data/$gigaspeech_train_sets/text |\
     cut -d " " -f 2- > $lm_dir/corpus.txt || exit 1;
   local/train_lm.sh --lm-order $lm_order $lm_dir/corpus.txt $lm_dir || exit 1;
 fi
@@ -87,7 +87,7 @@ if [ $stage -le 5 ]; then
       --read-symbol-table="data/lang_nosp/words.txt" \
       --disambig-symbol='#0' \
       --max-order=3 \
-      data/local/lm/lm_4gram.arpa >data/lang_nosp/G.fst.txt
+      data/local/lm/lm_${lm_order}gram.arpa >data/lang_nosp/G.fst.txt
   else
     echo "Skip generating data/lang_nosp/G.fst.txt"
   fi
