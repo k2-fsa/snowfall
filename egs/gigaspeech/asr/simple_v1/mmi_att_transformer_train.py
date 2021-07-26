@@ -492,7 +492,7 @@ def run(rank, world_size, args):
     if args.context_window is not None and args.context_window > 0:
         suffix = f'ac{args.context_window}'
     giga_subset = f'giga{args.subset}'
-    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}-dupa')
+    exp_dir = Path(f'exp-{model_type}-mmi-att-sa-vgg-normlayer-{giga_subset}-{suffix}')
 
     setup_logger(f'{exp_dir}/log/log-train-{rank}')
     if args.tensorboard and rank == 0:
@@ -507,9 +507,9 @@ def run(rank, world_size, args):
     device_id = rank
     device = torch.device('cuda', device_id)
 
-    if not Path(lang_dir / 'P.pt').is_file():
-        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
-        with open(lang_dir / 'P.fst.txt') as f:
+    if not Path(lang_dir / f'P_{args.subset}.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P_{args.subset}.fst.txt')
+        with open(lang_dir / f'P_{args.subset}.fst.txt') as f:
             # P is not an acceptor because there is
             # a back-off state, whose incoming arcs
             # have label #0 and aux_label eps.
@@ -528,10 +528,10 @@ def run(rank, world_size, args):
 
         P = k2.remove_epsilon(P)
         P = k2.arc_sort(P)
-        torch.save(P.as_dict(), lang_dir / 'P.pt')
+        torch.save(P.as_dict(), lang_dir / f'P_{args.subset}.pt')
     else:
         logging.debug('Loading pre-compiled P')
-        d = torch.load(lang_dir / 'P.pt')
+        d = torch.load(lang_dir / f'P_{args.subset}.pt')
         P = k2.Fsa.from_dict(d)
 
     graph_compiler = MmiTrainingGraphCompiler(

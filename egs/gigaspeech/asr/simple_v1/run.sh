@@ -8,7 +8,7 @@ set -eou pipefail
 
 stage=0
 subset='XS'
-nj=50
+nj=30
 
 gigaspeech_dirs=(
 /export/corpora5/gigaspeech/
@@ -104,17 +104,18 @@ if [ $stage -le 5 ]; then
 fi
 
 if [ $stage -le 6 ]; then
-  python3 ./prepare.py --subset $subset
+  python3 ./prepare.py --subset $subset --num-jobs $nj
 fi
 
 if [ $stage -le 7 ]; then
   mkdir -p data/local/tmp
-  if [ ! -f data/local/tmp/transcript.txt ]; then
-    echo "Generating data/local/tmp/transcript.txt"
+  if [ ! -f data/local/tmp/transcript_${subset}.txt ]; then
+    echo "Generating data/local/tmp/transcript_${subset}.txt"
     # extract text field \
     # | remove quotes \
     # > save
-    jq '.text' "exp/data/supervisions_${subset}.jsonl" \
+    gunzip -c "exp/data/gigaspeech_supervisions_${subset}.jsonl.gz" \
+     | jq '.text' \
      | sed 's/"//g' \
      > data/local/tmp/transcript_${subset}.txt
   fi
