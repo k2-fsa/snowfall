@@ -1,20 +1,38 @@
+# Copyright (c)  2021  Johns Hopkins University (Piotr Żelasko)
+# Apache 2.0
 import argparse
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Union
 
 from torch.utils.data import DataLoader
 
-from lhotse import Fbank, FbankConfig, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, PrecomputedFeatures, \
-    SingleCutSampler, \
-    SpecAugment
+from lhotse import CutSet, Fbank, FbankConfig, load_manifest
+from lhotse.dataset import (
+    BucketingSampler,
+    CutConcatenate,
+    CutMix,
+    K2SpeechRecognitionDataset,
+    PrecomputedFeatures,
+    SingleCutSampler,
+    SpecAugment,
+)
+from lhotse.dataset.dataloading import LhotseDataLoader
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from snowfall.common import str2bool
 from snowfall.data.datamodule import DataModule
 
 
-class AsrDataModule(DataModule):
+def get_context_suffix(args):
+    if args.context_window is None or args.context_window <= 0.0:
+        ctx_suffix = ""
+    else:
+        ctx_suffix = f"_{args.context_direction}{args.context_window}"
+    return ctx_suffix
+
+
+class GigaSpeechAsrDataModule(DataModule):
     """
     DataModule for K2 ASR experiments.
     It assumes there is always one train and valid dataloader,
@@ -102,7 +120,60 @@ class AsrDataModule(DataModule):
                  'to avoid an excessive starting time of the script with datasets>1000h.'
             )
 
+        # GigaSpeech specific arguments
+        group.add_argument(
+            "--subset",
+            type=str,
+            default="XS",
+            help="Select the GigaSpeech subset (XS|S|M|L|XL)",
+        )
+        group.add_argument(
+            "--context-window",
+            type=float,
+            default=0.0,
+            help="Training cut duration in seconds. "
+                 "Use 0 to train on supervision segments without acoustic context, with variable cut lengths; "
+                 "number larger than zero will create multi-supervisions cuts with actual acoustic context. ",
+        )
+        group.add_argument(
+            "--context-direction",
+            type=str,
+            default="center",
+            help="If context-window is 0, does nothing. "
+                 "If it's larger than 0, determines in which direction (relative to the supervision) "
+                 "to seek for extra acoustic context. Available values: (left|right|center|random).",
+        )
+        group.add_argument(
+            '--use-context-for-test',
+            type=str2bool,
+            default=False,
+            help='Should we read cuts with acoustic context or without it. '
+                 '(note: for now, they may contain duplicated segments)'
+        )
+        group.add_argument(
+            '--small-dev',
+            type=str2bool,
+            default=False,
+            help='Should we use only 1000 utterances for dev (speeds up training)'
+        )
+
+    def validate_args(self):
+        if self.args.subset in ['L', 'XL']:
+            assert (
+                self.args.shuffle == False
+            ), "For GigaSpeech L/XL, you must use --shuffle 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.check_cuts == False
+            ), "For GigaSpeech L/XL, you must use --check-cuts 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.bucketing_sampler == False
+            ), "For GigaSpeech L/XL, you must use --bucketing-sampler 0 to avoid eagerly reading pyarrow manifests."
+            assert (
+                self.args.on_the_fly_feats == True
+            ), "For GigaSpeech L/XL, you must use --on-the-fly-feats 1 as we do not pre-compute them by default."
+
     def train_dataloaders(self) -> DataLoader:
+        self.validate_args()
         logging.info("About to get train cuts")
         cuts_train = self.train_cuts()
 
@@ -142,12 +213,10 @@ class AsrDataModule(DataModule):
             # # Speed perturbation probably should come first before concatenation,
             # # but in principle the transforms order doesn't have to be strict (e.g. could be randomized)
             # transforms = [PerturbSpeed(factors=[0.9, 1.1], p=2 / 3)] + transforms
-            # Drop feats to be on the safe side.
-            cuts_train = cuts_train.drop_features()
             train = K2SpeechRecognitionDataset(
                 cuts=cuts_train,
                 cut_transforms=transforms,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
+                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)), num_workers=20),
                 input_transforms=input_transforms,
                 return_cuts=True,
                 check_inputs=self.args.check_cuts,
@@ -169,16 +238,23 @@ class AsrDataModule(DataModule):
                 shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
-        train_dl = DataLoader(
+        #train_dl = DataLoader(
+        #    train,
+        #    sampler=train_sampler,
+        #    batch_size=None,
+        #    num_workers=16,
+        #    persistent_workers=True,
+        #)
+        train_dl = LhotseDataLoader(
             train,
             sampler=train_sampler,
-            batch_size=None,
-            num_workers=4,
-            persistent_workers=True,
+            num_workers=3,
+            prefetch_factor=5,
         )
         return train_dl
 
     def valid_dataloaders(self) -> DataLoader:
+        self.validate_args()
         logging.info("About to get dev cuts")
         cuts_valid = self.valid_cuts()
 
@@ -192,11 +268,10 @@ class AsrDataModule(DataModule):
 
         logging.info("About to create dev dataset")
         if self.args.on_the_fly_feats:
-            cuts_valid = cuts_valid.drop_features()
             validate = K2SpeechRecognitionDataset(
-                cuts_valid.drop_features(),
+                cuts_valid,
                 cut_transforms=transforms,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
+                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)), num_workers=8),
                 return_cuts=True,
                 check_inputs=self.args.check_cuts,
             )
@@ -213,16 +288,22 @@ class AsrDataModule(DataModule):
             shuffle=False,
         )
         logging.info("About to create dev dataloader")
-        valid_dl = DataLoader(
+        #valid_dl = DataLoader(
+        #    validate,
+        #    sampler=valid_sampler,
+        #    batch_size=None,
+        #    num_workers=8,
+        #    persistent_workers=True,
+        #)
+        valid_dl = LhotseDataLoader(
             validate,
             sampler=valid_sampler,
-            batch_size=None,
             num_workers=2,
-            persistent_workers=True,
         )
         return valid_dl
 
     def test_dataloaders(self) -> Union[DataLoader, List[DataLoader]]:
+        self.validate_args()
         cuts = self.test_cuts()
         is_list = isinstance(cuts, list)
         test_loaders = []
@@ -234,7 +315,7 @@ class AsrDataModule(DataModule):
             test = K2SpeechRecognitionDataset(
                 cuts_test,
                 input_strategy=(
-                    OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                    OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)), num_workers=8)
                     if self.args.on_the_fly_feats
                     else PrecomputedFeatures()
                 ),
@@ -243,10 +324,45 @@ class AsrDataModule(DataModule):
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")
-            test_dl = DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
+            #test_dl = DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
+            test_dl = LhotseDataLoader(test, sampler=sampler, num_workers=2)
             test_loaders.append(test_dl)
 
         if is_list:
             return test_loaders
         else:
             return test_loaders[0]
+
+    @lru_cache()
+    def train_cuts(self) -> CutSet:
+        logging.info("About to get train cuts")
+        # Note: for L and XL subsets, we are expecting that the training manifest is stored using pyarrow and pre-shuffled.
+        cuts_path_ext = 'jsonl.gz' if self.args.subset not in ['L', 'XL'] else 'arrow'
+        cuts_train = CutSet.from_file(
+            self.args.feature_dir
+            / f"gigaspeech_cuts_{self.args.subset}{get_context_suffix(self.args)}.{cuts_path_ext}"
+        )
+        return cuts_train
+
+    @lru_cache()
+    def valid_cuts(self) -> CutSet:
+        if self.args.use_context_for_test:
+            path = self.args.feature_dir / f"gigaspeech_cuts_DEV{get_context_suffix(self.args)}.jsonl.gz"
+        else:
+            path = self.args.feature_dir / f"gigaspeech_cuts_DEV.jsonl.gz"
+        logging.info(f"About to get valid cuts from {path}")
+        cuts_valid = load_manifest(path)
+        if self.args.small_dev:
+            return cuts_valid.subset(first=1000)
+        else:
+            return cuts_valid
+
+    @lru_cache()
+    def test_cuts(self) -> CutSet:
+        if self.args.use_context_for_test:
+            path = self.args.feature_dir / f"gigaspeech_cuts_TEST{get_context_suffix(self.args)}.jsonl.gz"
+        else:
+            path = self.args.feature_dir / f"gigaspeech_cuts_TEST.jsonl.gz"
+        logging.info(f"About to get test cuts from {path}")
+        cuts_test = load_manifest(path)
+        return cuts_test
