@@ -401,6 +401,12 @@ def get_parser():
         type=str2bool,
         default=True,
         help='When enabled, it uses vgg style network for subsampling')
+    parser.add_argument(
+        '--torchscript',
+        type=str2bool,
+        default=False,
+        help='When enabled, save a TorchScripted variant of the model in '
+             'exp_dir.')
     return parser
 
 
@@ -486,6 +492,13 @@ def main():
         checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
                        range(epoch - avg, epoch)]
         average_checkpoint(checkpoints, model)
+
+    if args.torchscript:
+        logging.info('Applying TorchScript to model...')
+        model = torch.jit.script(model)
+        ts_path = exp_dir / f'model_ts_epoch{epoch}_avg{avg}.pt'
+        logging.info(f'Storing the TorchScripted model in {ts_path}')
+        model.save(ts_path)
 
     model.to(device)
     model.eval()

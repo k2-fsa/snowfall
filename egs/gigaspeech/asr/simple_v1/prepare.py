@@ -22,7 +22,6 @@ from lhotse import (
     combine,
 )
 from lhotse.recipes import prepare_gigaspeech, prepare_musan
-from lhotse.utils import is_module_available
 from snowfall.common import str2bool
 
 # Torch's multithreaded behavior needs to be disabled or it wastes a lot of CPU and
@@ -139,12 +138,6 @@ def has_no_oov(
 def main():
     args = get_parser().parse_args()
     dataset_parts = [args.subset, "DEV", "TEST"]
-    if args.subset in ["L", "XL"]:
-        assert is_module_available("pyarrow"), (
-            "Running the GigaSpeech recipe for L and XL splits "
-            "currently requires installing optional dependencies: "
-            "'pip install pyarrow pandas'."
-        )
 
     print("Parts we will prepare: ", dataset_parts)
 
@@ -179,11 +172,9 @@ def main():
     extractor = Fbank(FbankConfig(num_mel_bins=80))
     with get_executor() as ex:  # Initialize the executor only once.
         for partition, manifests in gigaspeech_manifests.items():
-            # For L and XL partition we are going to store the manifest using pyarrow.
-            cuts_path_ext = "jsonl.gz" if partition not in ["L", "XL"] else "arrow"
             raw_cuts_path = output_dir / f"gigaspeech_cuts_{partition}_raw.jsonl.gz"
             cuts_path = (
-                output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.{cuts_path_ext}"
+                    output_dir / f"gigaspeech_cuts_{partition}{ctx_suffix}.jsonl.gz"
             )
 
             if raw_cuts_path.is_file():
@@ -240,7 +231,7 @@ def main():
                     context_direction=args.context_direction,
                 )
                 if partition in ["L", "XL"]:
-                    # Before storing manifests in the arrow format, we want to pre-shuffle them,
+                    # Before storing manifests in, we want to pre-shuffle them,
                     # as the sampler won't be able to do it later in an efficient manner.
                     cut_set = cut_set.shuffle()
 
