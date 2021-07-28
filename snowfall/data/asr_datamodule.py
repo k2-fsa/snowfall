@@ -93,14 +93,6 @@ class AsrDataModule(DataModule):
             default=True,
             help='When enabled (=default), the examples will be shuffled for each epoch.'
             )
-        group.add_argument(
-            '--check-cuts',
-            type=str2bool,
-            default=True,
-            help='When enabled (=default), we will iterate over the whole training cut set '
-                 'to validate it. It should be disabled when using Apache Arrow manifests '
-                 'to avoid an excessive starting time of the script with datasets>1000h.'
-            )
 
     def train_dataloaders(self) -> DataLoader:
         logging.info("About to get train cuts")
@@ -128,11 +120,9 @@ class AsrDataModule(DataModule):
         ]
 
         train = K2SpeechRecognitionDataset(
-            cuts_train,
             cut_transforms=transforms,
             input_transforms=input_transforms,
             return_cuts=True,
-            check_inputs=self.args.check_cuts,
         )
 
         if self.args.on_the_fly_feats:
@@ -145,12 +135,10 @@ class AsrDataModule(DataModule):
             # Drop feats to be on the safe side.
             cuts_train = cuts_train.drop_features()
             train = K2SpeechRecognitionDataset(
-                cuts=cuts_train,
                 cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
                 input_transforms=input_transforms,
                 return_cuts=True,
-                check_inputs=self.args.check_cuts,
             )
 
         if self.args.bucketing_sampler:
@@ -192,20 +180,15 @@ class AsrDataModule(DataModule):
 
         logging.info("About to create dev dataset")
         if self.args.on_the_fly_feats:
-            cuts_valid = cuts_valid.drop_features()
             validate = K2SpeechRecognitionDataset(
-                cuts_valid.drop_features(),
                 cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
                 return_cuts=True,
-                check_inputs=self.args.check_cuts,
             )
         else:
             validate = K2SpeechRecognitionDataset(
-                cuts_valid,
                 cut_transforms=transforms,
                 return_cuts=True,
-                check_inputs=self.args.check_cuts,
             )
         valid_sampler = SingleCutSampler(
             cuts_valid,
@@ -232,14 +215,12 @@ class AsrDataModule(DataModule):
         for cuts_test in cuts:
             logging.debug("About to create test dataset")
             test = K2SpeechRecognitionDataset(
-                cuts_test,
                 input_strategy=(
                     OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
                     if self.args.on_the_fly_feats
                     else PrecomputedFeatures()
                 ),
                 return_cuts=True,
-                check_inputs=self.args.check_cuts,
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")

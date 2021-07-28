@@ -293,7 +293,6 @@ def decode_one_batch(batch: Dict[str, Any],
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            HLG: Fsa, symbols: SymbolTable,
            num_paths: int, G: k2.Fsa, use_whole_lattice: bool, output_beam_size: float):
-    tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = defaultdict(list)
     # results is a dict whose keys and values are:
@@ -302,8 +301,16 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     #
     #  - value: It is a list of tuples (ref_words, hyp_words)
 
+    num_batches = None
+    try:
+        num_batches = len(dataloader)
+    except TypeError:
+        pass
+
     for batch_idx, batch in enumerate(dataloader):
-        texts = batch['supervisions']['text']
+        # We remove the non-tensor valeus under key 'text' which enables this
+        # to run with TorchScript models.
+        texts = batch['supervisions'].pop('text')
 
         hyps_dict = decode_one_batch(batch=batch,
                                      model=model,
@@ -327,10 +334,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         num_cuts += len(texts)
 
         if batch_idx % 10 == 0:
-            logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+            batch_str = f"{batch_idx}" if num_batches is None else f"{batch_idx}/{num_batches}"
+            logging.info(f"batch {batch_str}, number of cuts processed until now is {num_cuts}")
 
     return results
 
@@ -401,6 +406,12 @@ def get_parser():
         type=str2bool,
         default=True,
         help='When enabled, it uses vgg style network for subsampling')
+    parser.add_argument(
+        '--torchscript',
+        type=str2bool,
+        default=False,
+        help='When enabled, save a TorchScripted variant of the model in '
+             'exp_dir.')
     return parser
 
 
@@ -486,6 +497,13 @@ def main():
         checkpoints = [os.path.join(exp_dir, 'epoch-' + str(avg_epoch) + '.pt') for avg_epoch in
                        range(epoch - avg, epoch)]
         average_checkpoint(checkpoints, model)
+
+    if args.torchscript:
+        logging.info('Applying TorchScript to model...')
+        model = torch.jit.script(model)
+        ts_path = exp_dir / f'model_ts_epoch{epoch}_avg{avg}.pt'
+        logging.info(f'Storing the TorchScripted model in {ts_path}')
+        model.save(ts_path)
 
     model.to(device)
     model.eval()

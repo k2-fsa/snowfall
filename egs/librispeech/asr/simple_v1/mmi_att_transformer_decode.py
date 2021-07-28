@@ -39,38 +39,37 @@
 '''
 
 import argparse
-import k2
 import logging
-import numpy as np
 import os
-import torch
-from k2 import Fsa, SymbolTable
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
-from typing import Union
 
+import k2
+import torch
+from k2 import Fsa, SymbolTable
 
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
-from snowfall.common import write_error_stats
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
 from snowfall.common import str2bool
+from snowfall.common import write_error_stats
 from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.decoding.graph import compile_HLG
 from snowfall.decoding.lm_rescore import rescore_with_n_best_list
 from snowfall.decoding.lm_rescore import rescore_with_whole_lattice
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Transformer
 from snowfall.models.conformer import Conformer
 from snowfall.models.contextnet import ContextNet
+from snowfall.models.transformer import Transformer
 from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import get_phone_symbols
+
 
 def nbest_decoding(lats: k2.Fsa, num_paths: int):
     '''
@@ -292,7 +291,6 @@ def decode_one_batch(batch: Dict[str, Any],
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            HLG: Fsa, symbols: SymbolTable,
            num_paths: int, G: k2.Fsa, use_whole_lattice: bool, output_beam_size: float):
-    tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = defaultdict(list)
     # results is a dict whose keys and values are:
@@ -300,6 +298,12 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     #         If no rescoring is used, the key is the literal string: no_rescore
     #
     #  - value: It is a list of tuples (ref_words, hyp_words)
+
+    num_batches = None
+    try:
+        num_batches = len(dataloader)
+    except TypeError:
+        pass
 
     for batch_idx, batch in enumerate(dataloader):
         texts = batch['supervisions']['text']
@@ -324,10 +328,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             results[lm_scale].extend(this_batch)
 
         if batch_idx % 10 == 0:
-            logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+            batch_str = f"{batch_idx}" if num_batches is None else f"{batch_idx}/{num_batches}"
+            logging.info(f"batch {batch_str}, number of cuts processed until now is {num_cuts}")
 
         num_cuts += len(texts)
 
