@@ -3,6 +3,7 @@
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Tuple
 
 import math
 
@@ -49,6 +50,65 @@ def _intersect_device(a_fsas: k2.Fsa, b_fsas: k2.Fsa, b_to_a_map: torch.Tensor,
 
     return k2.cat(ans)
 
+def compute_am_scores_and_fm_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
+                                    path_to_seq_map: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    '''Compute AM and LM scores of n-best lists (represented as word_fsas).
+
+    Args:
+      lats:
+        An FsaVec, which is the output of `k2.intersect_dense_pruned`.
+        It must have the attribute `lm_scores`.
+      word_fsas_with_epsilon_loops:
+        An FsaVec representing a n-best list. Note that it has been processed
+        by `k2.add_epsilon_self_loops`.
+      path_to_seq_map:
+        A 1-D torch.Tensor with dtype torch.int32. path_to_seq_map[i] indicates
+        which sequence the i-th Fsa in word_fsas_with_epsilon_loops belongs to.
+        path_to_seq_map.numel() == word_fsas_with_epsilon_loops.arcs.dim0().
+    Returns:
+      Return a tuple of (1-D torch.Tensor, 1-D torch.Tensor) containing the AM and FM scores of each path.
+      `am_scores.numel() == word_fsas_with_epsilon_loops.shape[0]`
+      `lm_scores.numel() == word_fsas_with_epsilon_loops.shape[0]`
+    '''
+    device = lats.device
+    assert len(lats.shape) == 3
+    assert hasattr(lats, 'lm_scores')
+
+    # k2.compose() currently does not support b_to_a_map. To void
+    # replicating `lats`, we use k2.intersect_device here.
+    #
+    # lats has phone IDs as `labels` and word IDs as aux_labels, so we
+    # need to invert it here.
+    inverted_lats = k2.invert(lats)
+
+    # Now the `labels` of inverted_lats are word IDs (a 1-D torch.Tensor)
+    # and its `aux_labels` are phone IDs ( a k2.RaggedInt with 2 axes)
+
+    # Remove its `aux_labels` since it is not needed in the
+    # following computation
+    del inverted_lats.aux_labels
+    inverted_lats = k2.arc_sort(inverted_lats)
+
+    am_path_lats = _intersect_device(inverted_lats,
+                                     word_fsas_with_epsilon_loops,
+                                     b_to_a_map=path_to_seq_map,
+                                     sorted_match_a=True)
+
+    am_path_lats = k2.top_sort(k2.connect(am_path_lats))
+
+    # The `scores` of every arc consists of `am_scores` and `lm_scores`
+    am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores
+
+    # am_scores = am_path_lats.get_tot_scores(True, True) # wer: 2.77
+    am_scores = am_path_lats.get_tot_scores(use_double_scores=True, log_semiring=False) # wer 2.73
+
+    # Start to compute lm_scores
+    am_path_lats.scores = am_path_lats.lm_scores
+
+    # fm_scores = am_path_lats.get_tot_scores(True, True) # wer: 2.77
+    lm_scores = am_path_lats.get_tot_scores(use_double_scores=True, log_semiring=False) # wer 2.73
+
+    return am_scores, lm_scores
 
 def compute_am_scores(lats: k2.Fsa, word_fsas_with_epsilon_loops: k2.Fsa,
                       path_to_seq_map: torch.Tensor) -> torch.Tensor:
@@ -243,7 +303,8 @@ def rescore_with_n_best_list(lats: k2.Fsa, G: k2.Fsa, num_paths: int,
 
 @torch.no_grad()
 def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
-                               lm_scale_list: List[float]
+                               lm_scale_list: List[float],
+                               need_rescored_lats: bool = False,
                               ) -> Dict[str, k2.Fsa]:
     '''Use whole lattice to rescore.
 
@@ -303,6 +364,9 @@ def rescore_with_whole_lattice(lats: k2.Fsa, G_with_epsilon_loops: k2.Fsa,
     # inv_lats has phone IDs as labels
     # and word IDs as aux_labels.
     inv_lats = k2.invert(rescoring_lats)
+
+    if need_rescored_lats:
+        return inv_lats
 
     ans = dict()
     #
