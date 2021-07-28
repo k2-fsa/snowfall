@@ -302,7 +302,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     num_batches = None
     try:
         num_batches = len(dataloader)
-    except AttributeError:
+    except TypeError:
         pass
 
     for batch_idx, batch in enumerate(dataloader):

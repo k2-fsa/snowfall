@@ -38,7 +38,7 @@ def decode(
     num_batches = None
     try:
         num_batches = len(dataloader)
-    except AttributeError:
+    except TypeError:
         pass
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)

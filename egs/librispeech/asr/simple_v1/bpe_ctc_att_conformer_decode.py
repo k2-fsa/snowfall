@@ -33,7 +33,7 @@ def decode(dataloader: torch.utils.data.DataLoader,
     num_batches = None
     try:
         num_batches = len(dataloader)
-    except AttributeError:
+    except TypeError:
         pass
     num_cuts = 0
     results = []
