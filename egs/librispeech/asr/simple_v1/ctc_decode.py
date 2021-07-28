@@ -3,14 +3,15 @@
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
 # Apache 2.0
 
-import k2
 import logging
 import os
+from pathlib import Path
+from typing import Union
+
+import k2
 import torch
 from k2 import Fsa, SymbolTable
 from kaldialign import edit_distance
-from pathlib import Path
-from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset
@@ -28,7 +29,11 @@ from snowfall.training.ctc_graph import build_ctc_topo
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
-    tot_num_cuts = len(dataloader.dataset.cuts)
+    num_batches = None
+    try:
+        num_batches = len(dataloader)
+    except AttributeError:
+        pass
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
@@ -78,10 +83,8 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
             results.append((ref_words, hyp_words))
 
         if batch_idx % 10 == 0:
-            logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+            batch_str = f"{batch_idx}" if num_batches is None else f"{batch_idx}/{num_batches}"
+            logging.info(f"batch {batch_str}, number of cuts processed until now is {num_cuts}")
 
         num_cuts += len(texts)
 

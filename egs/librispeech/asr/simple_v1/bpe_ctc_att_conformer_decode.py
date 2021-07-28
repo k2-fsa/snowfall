@@ -6,26 +6,22 @@
 import argparse
 import logging
 import os
-import random
-import re
-import sys
-
 from pathlib import Path
 from typing import Union
 
 import k2
-import numpy as np
 import torch
 
-from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import str2bool
 from snowfall.common import write_error_stats
+from snowfall.data import LibriSpeechAsrDataModule
 from snowfall.models.conformer import Conformer
 from snowfall.text.numericalizer import Numericalizer
 from snowfall.training.ctc_graph import build_ctc_topo
+
 
 def decode(dataloader: torch.utils.data.DataLoader,
            model: None,
@@ -33,8 +29,12 @@ def decode(dataloader: torch.utils.data.DataLoader,
            ctc_topo: None,
            numericalizer=None,
            num_paths=-1,
-           output_beam_size: float=8):
-    tot_num_cuts = len(dataloader.dataset.cuts)
+           output_beam_size: float = 8):
+    num_batches = None
+    try:
+        num_batches = len(dataloader)
+    except AttributeError:
+        pass
     num_cuts = 0
     results = []
     for batch_idx, batch in enumerate(dataloader):
@@ -78,10 +78,8 @@ def decode(dataloader: torch.utils.data.DataLoader,
             results.append((ref_words, hyp_words))
 
         if batch_idx % 10 == 0:
-            logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+            batch_str = f"{batch_idx}" if num_batches is None else f"{batch_idx}/{num_batches}"
+            logging.info(f"batch {batch_str}, number of cuts processed until now is {num_cuts}")
         num_cuts += len(texts)
     return results
 
