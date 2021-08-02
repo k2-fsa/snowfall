@@ -9,6 +9,7 @@ import logging
 import math
 import numpy as np
 import os
+import random
 import sys
 import torch
 import torch.optim as optim
@@ -31,7 +32,7 @@ from snowfall.common import setup_logger
 from snowfall.dist import cleanup_dist, setup_dist
 from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
-from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.models.tdnn_lstm import TdnnLstm1c
 from snowfall.objectives.mmi import LFMMILoss
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
@@ -90,14 +91,13 @@ def get_objf(batch: Dict,
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
-        P=P,
         den_scale=den_scale
     )
 
     grad_context = nullcontext if is_training else torch.no_grad
 
     with grad_context():
-        nnet_output = model(feature)
+        nnet_output, aux_likes = model(feature)
         # nnet_output is [N, C, T]
         nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
         mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
@@ -116,7 +116,13 @@ def get_objf(batch: Dict,
                 )
 
         optimizer.zero_grad()
-        (-mmi_loss).backward()
+
+
+        aux_likes_scaled = -0.2 * aux_likes.mean() * tot_frames
+        if random.random() < 0.02:
+            print(f"Absolute objectives: mmi={mmi_loss} vs aux_likes={aux_likes_scaled}")
+
+        (-mmi_loss + aux_likes_scaled).backward()
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
@@ -131,6 +137,9 @@ def get_objf(batch: Dict,
             )
         else:
             optimizer.step()
+
+    if random.random() < 0.02:
+        print("aux_likes = ", aux_likes)
 
     ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
@@ -281,14 +290,17 @@ def main():
 
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
-    graph_compiler = MmiTrainingGraphCompiler(
-        lexicon=lexicon,
-        device=device,
-    )
     phone_ids = lexicon.phone_symbols()
     P = create_bigram_phone_lm(phone_ids)
     P.scores = torch.zeros_like(P.scores)
     P = P.to(device)
+
+    graph_compiler = MmiTrainingGraphCompiler(
+        lexicon=lexicon,
+        P=P,
+        device=device,
+    )
+
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -354,7 +366,7 @@ def main():
         sys.exit(-1)
 
     logging.info("About to create model")
-    model = TdnnLstm1b(num_features=80,
+    model = TdnnLstm1c(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
