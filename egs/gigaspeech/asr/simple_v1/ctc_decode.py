@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+# Copyright (c)  2020-2021  Johns Hopkins University (author: Piotr Żelasko)
 # Apache 2.0
 
 import logging
@@ -27,8 +28,13 @@ from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
 
 
-def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
-           device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
+def decode(
+        dataloader: torch.utils.data.DataLoader,
+        model: AcousticModel,
+        device: Union[str, torch.device],
+        HLG: Fsa,
+        symbols: SymbolTable,
+):
     num_batches = None
     try:
         num_batches = len(dataloader)
@@ -37,17 +43,23 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
-        feature = batch['inputs']
-        supervisions = batch['supervisions']
+        feature = batch["inputs"]
+        supervisions = batch["supervisions"]
         supervision_segments = torch.stack(
-            (supervisions['sequence_idx'],
-             torch.floor_divide(supervisions['start_frame'],
-                                model.subsampling_factor),
-             torch.floor_divide(supervisions['num_frames'],
-                                model.subsampling_factor)), 1).to(torch.int32)
+            (
+                supervisions["sequence_idx"],
+                torch.floor_divide(
+                    supervisions["start_frame"], model.subsampling_factor
+                ),
+                torch.floor_divide(
+                    supervisions["num_frames"], model.subsampling_factor
+                ),
+            ),
+            1,
+        ).to(torch.int32)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
-        texts = supervisions['text']
+        texts = supervisions["text"]
         assert feature.ndim == 3
 
         feature = feature.to(device)
@@ -56,20 +68,19 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
         with torch.no_grad():
             nnet_output = model(feature)
         # nnet_output is [N, C, T]
-        nnet_output = nnet_output.permute(0, 2,
-                                          1)  # now nnet_output is [N, T, C]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
         blank_bias = -3.0
         nnet_output[:, :, 0] += blank_bias
 
         dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
         # assert HLG.is_cuda()
-        assert HLG.device == nnet_output.device, \
-            f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
+        assert (
+            HLG.device == nnet_output.device
+        ), f"Check failed: HLG.device ({HLG.device}) == nnet_output.device ({nnet_output.device})"
         # TODO(haowen): with a small `beam`, we may get empty `target_graph`,
         # thus `tot_scores` will be `inf`. Definitely we need to handle this later.
-        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30,
-                                             10000)
+        lattices = k2.intersect_dense_pruned(HLG, dense_fsa_vec, 20.0, 7.0, 30, 10000)
 
         # lattices = k2.intersect_dense(HLG, dense_fsa_vec, 10.0)
         best_paths = k2.shortest_path(lattices, use_double_scores=True)
@@ -79,7 +90,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
         for i in range(len(texts)):
             hyp_words = [symbols.get(x) for x in hyps[i]]
-            ref_words = texts[i].split(' ')
+            ref_words = texts[i].split(" ")
             results.append((ref_words, hyp_words))
 
         if batch_idx % 10 == 0:
@@ -92,47 +103,51 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
 
 def main():
-    exp_dir = Path('exp-lstm-adam-ctc-musan')
-    setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
+    exp_dir = Path("exp-lstm-adam-ctc-musan")
+    setup_logger("{}/log/log-decode".format(exp_dir), log_level="debug")
 
     # load L, G, symbol_table
-    lang_dir = Path('data/lang_nosp')
-    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    lang_dir = Path("data/lang_nosp")
+    symbol_table = k2.SymbolTable.from_file(lang_dir / "words.txt")
+    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / "phones.txt")
     phone_ids = get_phone_symbols(phone_symbol_table)
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
 
-    if not os.path.exists(lang_dir / 'HLG.pt'):
+    if not os.path.exists(lang_dir / "HLG.pt"):
         print("Loading L_disambig.fst.txt")
-        with open(lang_dir / 'L_disambig.fst.txt') as f:
+        with open(lang_dir / "L_disambig.fst.txt") as f:
             L = k2.Fsa.from_openfst(f.read(), acceptor=False)
         print("Loading G.fst.txt")
-        with open(lang_dir / 'G.fst.txt') as f:
+        with open(lang_dir / "G.fst.txt") as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=False)
         first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
         first_word_disambig_id = find_first_disambig_symbol(symbol_table)
-        HLG = compile_HLG(L=L,
-                         G=G,
-                         H=ctc_topo,
-                         labels_disambig_id_start=first_phone_disambig_id,
-                         aux_labels_disambig_id_start=first_word_disambig_id)
-        torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
+        HLG = compile_HLG(
+            L=L,
+            G=G,
+            H=ctc_topo,
+            labels_disambig_id_start=first_phone_disambig_id,
+            aux_labels_disambig_id_start=first_word_disambig_id,
+        )
+        torch.save(HLG.as_dict(), lang_dir / "HLG.pt")
     else:
         print("Loading pre-compiled HLG")
-        d = torch.load(lang_dir / 'HLG.pt')
+        d = torch.load(lang_dir / "HLG.pt")
         HLG = k2.Fsa.from_dict(d)
 
     # load dataset
-    feature_dir = Path('exp/data')
+    feature_dir = Path("exp/data")
     print("About to get test cuts")
-    cuts_test = CutSet.from_json(feature_dir / 'cuts_test-clean.json.gz')
+    cuts_test = CutSet.from_file(feature_dir / "gigaspeech_cuts_TEST.jsonl.gz")
 
     print("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
     sampler = SingleCutSampler(cuts_test, max_frames=100000)
     print("About to create test dataloader")
-    test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
+    test_dl = torch.utils.data.DataLoader(
+        test, batch_size=None, sampler=sampler, num_workers=1
+    )
 
     #  if not torch.cuda.is_available():
     #  logging.error('No GPU detected!')
@@ -141,13 +156,14 @@ def main():
     print("About to load model")
     # Note: Use "export CUDA_VISIBLE_DEVICES=N" to setup device id to N
     # device = torch.device('cuda', 1)
-    device = torch.device('cuda')
+    device = torch.device("cuda")
     model = TdnnLstm1b(
         num_features=80,
         num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-        subsampling_factor=4)
+        subsampling_factor=4,
+    )
 
-    checkpoint = os.path.join(exp_dir, 'epoch-7.pt')
+    checkpoint = os.path.join(exp_dir, "epoch-7.pt")
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
@@ -157,21 +173,18 @@ def main():
     HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
     HLG.requires_grad_(False)
     print("About to decode")
-    results = decode(dataloader=test_dl,
-                     model=model,
-                     device=device,
-                     HLG=HLG,
-                     symbols=symbol_table)
-    s = ''
+    results = decode(
+        dataloader=test_dl, model=model, device=device, HLG=HLG, symbols=symbol_table
+    )
+    s = ""
     for ref, hyp in results:
-        s += f'ref={ref}\n'
-        s += f'hyp={hyp}\n'
+        s += f"ref={ref}\n"
+        s += f"hyp={hyp}\n"
     logging.info(s)
     # compute WER
     dists = [edit_distance(r, h) for r, h in results]
     errors = {
-        key: sum(dist[key] for dist in dists)
-        for key in ['sub', 'ins', 'del', 'total']
+        key: sum(dist[key] for dist in dists) for key in ["sub", "ins", "del", "total"]
     }
     total_words = sum(len(ref) for ref, _ in results)
     # Print Kaldi-like message:
@@ -185,5 +198,5 @@ def main():
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

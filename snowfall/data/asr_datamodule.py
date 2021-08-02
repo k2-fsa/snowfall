@@ -6,7 +6,8 @@ from typing import List, Union
 from torch.utils.data import DataLoader
 
 from lhotse import Fbank, FbankConfig, load_manifest
-from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler, \
+from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, PrecomputedFeatures, \
+    SingleCutSampler, \
     SpecAugment
 from lhotse.dataset.input_strategies import OnTheFlyFeatures
 from snowfall.common import str2bool
@@ -86,6 +87,12 @@ class AsrDataModule(DataModule):
             help='When enabled, use on-the-fly cut mixing and feature extraction. '
                  'Will drop existing precomputed feature manifests if available.'
         )
+        group.add_argument(
+            '--shuffle',
+            type=str2bool,
+            default=True,
+            help='When enabled (=default), the examples will be shuffled for each epoch.'
+            )
 
     def train_dataloaders(self) -> DataLoader:
         logging.info("About to get train cuts")
@@ -113,9 +120,9 @@ class AsrDataModule(DataModule):
         ]
 
         train = K2SpeechRecognitionDataset(
-            cuts_train,
             cut_transforms=transforms,
-            input_transforms=input_transforms
+            input_transforms=input_transforms,
+            return_cuts=True,
         )
 
         if self.args.on_the_fly_feats:
@@ -128,10 +135,10 @@ class AsrDataModule(DataModule):
             # Drop feats to be on the safe side.
             cuts_train = cuts_train.drop_features()
             train = K2SpeechRecognitionDataset(
-                cuts=cuts_train,
                 cut_transforms=transforms,
                 input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
-                input_transforms=input_transforms
+                input_transforms=input_transforms,
+                return_cuts=True,
             )
 
         if self.args.bucketing_sampler:
@@ -139,7 +146,7 @@ class AsrDataModule(DataModule):
             train_sampler = BucketingSampler(
                 cuts_train,
                 max_duration=self.args.max_duration,
-                shuffle=True,
+                shuffle=self.args.shuffle,
                 num_buckets=self.args.num_buckets
             )
         else:
@@ -147,7 +154,7 @@ class AsrDataModule(DataModule):
             train_sampler = SingleCutSampler(
                 cuts_train,
                 max_duration=self.args.max_duration,
-                shuffle=True,
+                shuffle=self.args.shuffle,
             )
         logging.info("About to create train dataloader")
         train_dl = DataLoader(
@@ -173,19 +180,20 @@ class AsrDataModule(DataModule):
 
         logging.info("About to create dev dataset")
         if self.args.on_the_fly_feats:
-            cuts_valid = cuts_valid.drop_features()
             validate = K2SpeechRecognitionDataset(
-                cuts_valid.drop_features(),
                 cut_transforms=transforms,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80))),
+                return_cuts=True,
             )
         else:
-            validate = K2SpeechRecognitionDataset(cuts_valid,
-                                                  cut_transforms=transforms)
+            validate = K2SpeechRecognitionDataset(
+                cut_transforms=transforms,
+                return_cuts=True,
+            )
         valid_sampler = SingleCutSampler(
             cuts_valid,
             max_duration=self.args.max_duration,
-            shuffle=True,
+            shuffle=False,
         )
         logging.info("About to create dev dataloader")
         valid_dl = DataLoader(
@@ -207,8 +215,12 @@ class AsrDataModule(DataModule):
         for cuts_test in cuts:
             logging.debug("About to create test dataset")
             test = K2SpeechRecognitionDataset(
-                cuts_test,
-                input_strategy=OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                input_strategy=(
+                    OnTheFlyFeatures(Fbank(FbankConfig(num_mel_bins=80)))
+                    if self.args.on_the_fly_feats
+                    else PrecomputedFeatures()
+                ),
+                return_cuts=True,
             )
             sampler = SingleCutSampler(cuts_test, max_duration=self.args.max_duration)
             logging.debug("About to create test dataloader")
