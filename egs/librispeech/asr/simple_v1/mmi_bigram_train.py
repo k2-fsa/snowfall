@@ -26,6 +26,7 @@ from lhotse import CutSet
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe
+from snowfall.common import find_first_disambig_symbol
 from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
@@ -72,7 +73,6 @@ def encode_supervisions(supervisions: Dict[str, torch.Tensor],
 
 def get_objf(batch: Dict,
              model: AcousticModel,
-             P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
@@ -85,9 +85,14 @@ def get_objf(batch: Dict,
     assert feature.ndim == 3
     feature = feature.to(device)
 
+    try:
+        subsampling_factor = model.subsampling_factor
+    except:
+        subsampling_factor = model.module.subsampling_factor
+
     supervisions = batch['supervisions']
     supervision_segments, texts = encode_supervisions(supervisions,
-                                                      model.subsampling_factor)
+                                                      subsampling_factor)
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
@@ -120,9 +125,14 @@ def get_objf(batch: Dict,
 
         aux_likes_scaled = -0.2 * aux_likes.mean() * tot_frames
         if random.random() < 0.02:
-            print(f"Absolute objectives: mmi={mmi_loss} vs aux_likes={aux_likes_scaled}")
+            print(f"Absolute objectives: mmi={-mmi_loss} vs aux_likes={aux_likes_scaled}")
 
         (-mmi_loss + aux_likes_scaled).backward()
+
+        for name, param in model.named_parameters():
+            if param.grad is None:
+                print(name)
+
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
@@ -147,7 +157,6 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
-                        P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler):
     total_objf = 0.
@@ -157,7 +166,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, P, device,
+        objf, frames, all_frames = get_objf(batch, model, device,
                                             graph_compiler, False)
         total_objf += objf
         total_frames += frames
@@ -168,7 +177,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -187,17 +196,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        if isinstance(model, DDP):
-            P.set_scores_stochastic_(model.module.P_scores)
-        else:
-            P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
-        assert P.requires_grad is True
-
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
@@ -236,7 +237,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
-                P=P,
                 device=device,
                 graph_compiler=graph_compiler)
             # Synchronize the loss to the master node so that we display it correctly.
@@ -291,9 +291,33 @@ def main():
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
     phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-    P = P.to(device)
+
+    if not Path(lang_dir / 'P.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
+        with open(lang_dir / 'P.fst.txt') as f:
+            # P is not an acceptor because there is
+            # a back-off state, whose incoming arcs
+            # have label #0 and aux_label eps.
+            P = k2.Fsa.from_openfst(f.read(), acceptor=False)
+
+        phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+
+        # P.aux_labels is not needed in later computations, so
+        # remove it here.
+        del P.aux_labels
+        # CAUTION(fangjun): The following line is crucial.
+        # Arcs entering the back-off state have label equal to #0.
+        # We have to change it to 0 here.
+        P.labels[P.labels >= first_phone_disambig_id] = 0
+
+        P = k2.remove_epsilon(P)
+        P = k2.arc_sort(P)
+        torch.save(P.as_dict(), lang_dir / 'P.pt')
+    else:
+        logging.debug('Loading pre-compiled P')
+        d = torch.load(lang_dir / 'P.pt')
+        P = k2.Fsa.from_dict(d)
 
     graph_compiler = MmiTrainingGraphCompiler(
         lexicon=lexicon,
@@ -369,7 +393,6 @@ def main():
     model = TdnnLstm1c(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
-    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)
     describe(model)
@@ -443,7 +466,6 @@ def main():
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             optimizer=optimizer,

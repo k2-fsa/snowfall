@@ -7,7 +7,7 @@
 
 set -eou pipefail
 
-stage=0
+stage=5
 
 libri_dirs=(
 /root/fangjun/data/librispeech/LibriSpeech
@@ -141,7 +141,7 @@ if [ $stage -le 7 ]; then
       data/lm/P.arpa > data/lang_nosp/P.fst.txt
   fi
 fi
-
+exit 0
 if [ $stage -le 8 ]; then
   python3 ./prepare.py
 fi
