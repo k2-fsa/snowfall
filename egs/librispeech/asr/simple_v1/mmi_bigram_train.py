@@ -9,6 +9,7 @@ import logging
 import math
 import numpy as np
 import os
+import random
 import sys
 import torch
 import torch.optim as optim
@@ -25,6 +26,7 @@ from lhotse import CutSet
 from lhotse.dataset import BucketingSampler, CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
 from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe
+from snowfall.common import find_first_disambig_symbol
 from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
@@ -45,14 +47,11 @@ def encode_supervisions(supervisions: Dict[str, torch.Tensor],
     """
     Encodes Lhotse's ``batch["supervisions"]`` dict into a pair of torch Tensor,
     and a list of transcription strings.
-
     The supervision tensor has shape ``(batch_size, 3)``.
     Its second dimension contains information about sequence index [0],
     start frames [1] and num frames [2].
-
     The batch items might become re-ordered during this operation -- the returned tensor
     and list of strings are guaranteed to be consistent with each other.
-
     This mimics subsampling by a factor of 4 with Conv1D layer with no padding.
     """
     supervision_segments = torch.stack(
@@ -71,7 +70,6 @@ def encode_supervisions(supervisions: Dict[str, torch.Tensor],
 
 def get_objf(batch: Dict,
              model: AcousticModel,
-             P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
@@ -84,13 +82,17 @@ def get_objf(batch: Dict,
     assert feature.ndim == 3
     feature = feature.to(device)
 
+    try:
+        subsampling_factor = model.subsampling_factor
+    except:
+        subsampling_factor = model.module.subsampling_factor
+
     supervisions = batch['supervisions']
     supervision_segments, texts = encode_supervisions(supervisions,
-                                                      model.subsampling_factor)
+                                                      subsampling_factor)
 
     loss_fn = LFMMILoss(
         graph_compiler=graph_compiler,
-        P=P,
         den_scale=den_scale
     )
 
@@ -117,6 +119,11 @@ def get_objf(batch: Dict,
 
         optimizer.zero_grad()
         (-mmi_loss).backward()
+
+        for name, param in model.named_parameters():
+            if param.grad is None:
+                print(name)
+
         maybe_log_gradients('train/grad_norms')
         clip_grad_value_(model.parameters(), 5.0)
         maybe_log_gradients('train/clipped_grad_norms')
@@ -138,7 +145,6 @@ def get_objf(batch: Dict,
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
-                        P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler):
     total_objf = 0.
@@ -148,7 +154,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, P, device,
+        objf, frames, all_frames = get_objf(batch, model, device,
                                             graph_compiler, False)
         total_objf += objf
         total_frames += frames
@@ -159,7 +165,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -178,17 +184,9 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        if isinstance(model, DDP):
-            P.set_scores_stochastic_(model.module.P_scores)
-        else:
-            P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
-        assert P.requires_grad is True
-
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
@@ -214,6 +212,18 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     curr_batch_frames,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
+            print(
+                'batch {}, epoch {}/{} '
+                'global average objf: {:.6f} over {} '
+                'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
+                'avg time waiting for batch {:.3f}s'.format(
+                    batch_idx, current_epoch, num_epochs,
+                    total_objf / total_frames, total_frames,
+                    100.0 * total_frames / total_all_frames,
+                    curr_batch_objf / (curr_batch_frames + 0.001),
+                    curr_batch_frames,
+                    100.0 * curr_batch_frames / curr_batch_all_frames,
+                    time_waiting_for_batch / max(1, batch_idx)))
             tb_writer.add_scalar('train/global_average_objf',
                                  total_objf / total_frames, global_batch_idx_train)
             tb_writer.add_scalar('train/current_batch_average_objf',
@@ -227,7 +237,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
-                P=P,
                 device=device,
                 graph_compiler=graph_compiler)
             # Synchronize the loss to the master node so that we display it correctly.
@@ -257,6 +266,7 @@ def get_parser():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--world_size', default=1, type=int)
     parser.add_argument('--local_rank', default=0, type=int)
+    parser.add_argument('--master_port', default=str(12345), type=str)
     parser.add_argument('--bucketing_sampler', type=str2bool, default=True)
     return parser
 
@@ -264,10 +274,10 @@ def get_parser():
 def main():
     args = get_parser().parse_args()
     print('World size:', args.world_size, 'Rank:', args.local_rank)
-    setup_dist(rank=args.local_rank, world_size=args.world_size)
+    setup_dist(rank=args.local_rank, world_size=args.world_size, master_port=args.master_port)
     fix_random_seed(42)
 
-    start_epoch = 0
+    start_epoch = 6
     num_epochs = 10
     use_adam = True
 
@@ -281,14 +291,41 @@ def main():
 
     device_id = args.local_rank
     device = torch.device('cuda', device_id)
+    phone_ids = lexicon.phone_symbols()
+
+    if not Path(lang_dir / 'P.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
+        with open(lang_dir / 'P.fst.txt') as f:
+            # P is not an acceptor because there is
+            # a back-off state, whose incoming arcs
+            # have label #0 and aux_label eps.
+            P = k2.Fsa.from_openfst(f.read(), acceptor=False)
+
+        phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+
+        # P.aux_labels is not needed in later computations, so
+        # remove it here.
+        del P.aux_labels
+        # CAUTION(fangjun): The following line is crucial.
+        # Arcs entering the back-off state have label equal to #0.
+        # We have to change it to 0 here.
+        P.labels[P.labels >= first_phone_disambig_id] = 0
+
+        P = k2.remove_epsilon(P)
+        P = k2.arc_sort(P)
+        torch.save(P.as_dict(), lang_dir / 'P.pt')
+    else:
+        logging.debug('Loading pre-compiled P')
+        d = torch.load(lang_dir / 'P.pt')
+        P = k2.Fsa.from_dict(d)
+
     graph_compiler = MmiTrainingGraphCompiler(
         lexicon=lexicon,
+        P=P,
         device=device,
     )
-    phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-    P = P.to(device)
+
 
     # load dataset
     feature_dir = Path('exp/data')
@@ -357,7 +394,6 @@ def main():
     model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
-    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     model.to(device)
     describe(model)
@@ -431,7 +467,6 @@ def main():
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             optimizer=optimizer,

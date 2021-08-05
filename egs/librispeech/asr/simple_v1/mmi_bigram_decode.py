@@ -16,10 +16,12 @@ from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
+from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.common import write_error_stats
 from snowfall.decoding.graph import compile_HLG
 from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
@@ -29,9 +31,9 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
+@torch.no_grad()
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
-    tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
@@ -83,77 +85,12 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
         if batch_idx % 10 == 0:
             logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+                'batch {}, cuts processed until now is {}'.format(
+                    batch_idx, num_cuts))
 
         num_cuts += len(texts)
 
     return results
-
-
-
-def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
-                                   phone_ids: List[int], filename: str):
-    '''Print the transition probabilities of a phone LM.
-
-    Args:
-      P:
-        A bigram phone LM.
-      phone_symbol_table:
-        The phone symbol table.
-      phone_ids:
-        A list of phone ids
-      filename:
-        Filename to save the printed result.
-    '''
-    num_phones = len(phone_ids)
-    table = np.zeros((num_phones + 1, num_phones + 2))
-    table[:, 0] = 0
-    table[0, -1] = 0 # the start state has no arcs to the final state
-    assert P.arcs.dim0() == num_phones + 2
-    arcs = P.arcs.values()[:, :3]
-    probability = P.scores.exp().tolist()
-
-    assert arcs.shape[0] - num_phones == num_phones * (num_phones + 1)
-    for i, arc in enumerate(arcs.tolist()):
-        src_state, dest_state, label = arc[0], arc[1], arc[2]
-        prob = probability[i]
-        if label != -1:
-            assert label == dest_state
-        else:
-            assert dest_state == num_phones + 1
-        table[src_state][dest_state] = prob
-
-    try:
-        from prettytable import PrettyTable
-    except ImportError:
-        print('Please run `pip install prettytable`. Skip printing')
-        return
-
-    x = PrettyTable()
-
-    field_names = ['source']
-    field_names.append('sum')
-    for i in phone_ids:
-        field_names.append(phone_symbol_table[i])
-    field_names.append('final')
-
-    x.field_names = field_names
-
-    for row in range(num_phones + 1):
-        this_row = []
-        if row == 0:
-            this_row.append('start')
-        else:
-            this_row.append(phone_symbol_table[row])
-        this_row.append('{:.6f}'.format(table[row, 1:].sum()))
-        for col in range(1, num_phones + 2):
-            this_row.append('{:.6f}'.format(table[row, col]))
-        x.add_row(this_row)
-    with open(filename, 'w') as f:
-        f.write(str(x))
-
 
 def get_parser():
     import argparse
@@ -172,7 +109,6 @@ def main():
     lexicon = Lexicon(lang_dir)
 
     phone_ids = lexicon.phone_symbols()
-    P = create_bigram_phone_lm(phone_ids)
 
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
@@ -184,19 +120,11 @@ def main():
     model = TdnnLstm1b(num_features=80,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
-    model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
     checkpoint = os.path.join(exp_dir, f'epoch-{args.epoch}.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
-
-    assert P.requires_grad is False
-    P.scores = model.P_scores.cpu()
-    print_transition_probabilities(P, lexicon.phones, phone_ids, filename='model_P_scores.txt')
-
-    P.set_scores_stochastic_(model.P_scores)
-    print_transition_probabilities(P, lexicon.phones, phone_ids, filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
@@ -244,25 +172,18 @@ def main():
                      device=device,
                      HLG=HLG,
                      symbols=lexicon.words)
-    s = ''
-    for ref, hyp in results:
-        s += f'ref={ref}\n'
-        s += f'hyp={hyp}\n'
-    logging.info(s)
-    # compute WER
-    dists = [edit_distance(r, h) for r, h in results]
-    errors = {
-        key: sum(dist[key] for dist in dists)
-        for key in ['sub', 'ins', 'del', 'total']
-    }
-    total_words = sum(len(ref) for ref, _ in results)
-    # Print Kaldi-like message:
-    # %WER 8.20 [ 4459 / 54402, 695 ins, 427 del, 3337 sub ]
-    logging.info(
-        f'%WER {errors["total"] / total_words:.2%} '
-        f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
-    )
 
+    test_set = 'test-clean'
+    recog_path = exp_dir / f'recogs-{test_set}.txt'
+    store_transcripts(path=recog_path, texts=results)
+    logging.info(f'The transcripts are stored in {recog_path}')
+
+    # The following prints out WERs, per-word error statistics and aligned
+    # ref/hyp pairs.
+    errs_filename = exp_dir / f'errs-{test_set}.txt'
+    with open(errs_filename, 'w') as f:
+        wer = write_error_stats(f, f'{test_set}', results)
+    logging.info(f'The error stats are stored in {errs_filename}')
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
