@@ -18,7 +18,7 @@ from pathlib import Path
 from torch import distributed as dist
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.nn.utils import clip_grad_value_
+from torch.nn.utils import clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple, List
 
@@ -125,7 +125,7 @@ def get_objf(batch: Dict,
                 print(name)
 
         maybe_log_gradients('train/grad_norms')
-        clip_grad_value_(model.parameters(), 5.0)
+        clip_grad_norm_(model.parameters(), max_norm=5.0, norm_type=2.0)
         maybe_log_gradients('train/clipped_grad_norms')
         if tb_writer is not None and global_batch_idx_train % 200 == 0:
             # Once in a time we will perform a more costly diagnostic
