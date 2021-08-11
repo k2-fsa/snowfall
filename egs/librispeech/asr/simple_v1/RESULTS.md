@@ -39,83 +39,47 @@ Decoding results (WER) of each epoch are listed below. They are obtained using t
 2021-02-17 09:57:13,215 INFO [ctc_decode.py:176] %WER 12.91% [6787 / 52576, 797 ins, 792 del, 5198 sub ]
 ```
 
-# LibriSpeech MMI training results (TDNN-LSTM)
+# LibriSpeech MMI+Bigram training results (TDNN-LSTM)
 
-## 2021-02-17
+## 2021-08-11 (with BucketingSampler)
 
-(Han Zhu): Results of <https://github.com/k2-fsa/snowfall/pull/103>
+(Mingshuang Luo): Results of <https://github.com/k2-fsa/snowfall/pull/244>
 
-TensorBoard log is available at <https://tensorboard.dev/experiment/hPLbUWUwT06fljbvKGnlUA/#scalars>
-and the training log can be downloaded
-using <https://github.com/k2-fsa/snowfall/files/5995759/log-train-2021-02-16-12-36-23.txt>.
+TensorBoard log is available at <https://tensorboard.dev/experiment/ziBwrvVWQtmZgMFggvNQUA/#scalars>.
 
 Decoding results (WER) of each epoch are listed below. They are obtained using the latest k2 and lhotse as of today (
-2021-02-17).
+2021-08-11).
 
 ```
 # epoch 0
-2021-02-17 09:42:01,523 INFO [mmi_bigram_decode.py:252] %WER 16.58% [8715 / 52576, 1074 ins, 976 del, 6665 sub ]
+2021-08-11 13:24:20,663 INFO [common.py:414] [test-clean] %WER 14.95% [7860 / 52576, 840 ins, 969 del, 6051 sub ]
 
 # epoch 1
-2021-02-17 09:42:52,408 INFO [mmi_bigram_decode.py:252] %WER 12.53% [6590 / 52576, 726 ins, 827 del, 5037 sub ]
+2021-08-11 13:26:05,054 INFO [common.py:414] [test-clean] %WER 14.00% [7359 / 52576, 853 ins, 836 del, 5670 sub ]
 
 # epoch 2
-2021-02-17 09:43:41,617 INFO [mmi_bigram_decode.py:252] %WER 12.33% [6480 / 52576, 724 ins, 851 del, 4905 sub ]
+2021-08-11 13:36:05,913 INFO [common.py:414] [test-clean] %WER 12.29% [6459 / 52576, 835 ins, 607 del, 5017 sub ]
 
 # epoch 3
-2021-02-17 09:44:30,664 INFO [mmi_bigram_decode.py:252] %WER 11.67% [6135 / 52576, 644 ins, 901 del, 4590 sub ]
+2021-08-11 13:38:27,088 INFO [common.py:414] [test-clean] %WER 12.06% [6340 / 52576, 765 ins, 598 del, 4977 sub ]
 
 # epoch 4
-2021-02-17 09:45:18,406 INFO [mmi_bigram_decode.py:252] %WER 11.59% [6096 / 52576, 597 ins, 1000 del, 4499 sub ]
+2021-08-11 13:41:20,207 INFO [common.py:414] [test-clean] %WER 11.42% [6003 / 52576, 679 ins, 622 del, 4702 sub ]
 
 # epoch 5
-2021-02-17 09:46:06,066 INFO [mmi_bigram_decode.py:252] %WER 10.95% [5759 / 52576, 660 ins, 641 del, 4458 sub ]
+2021-08-11 13:43:36,442 INFO [common.py:414] [test-clean] %WER 11.24% [5909 / 52576, 778 ins, 527 del, 4604 sub ]
 
 # epoch 6
-2021-02-17 09:46:52,257 INFO [mmi_bigram_decode.py:252] %WER 10.54% [5542 / 52576, 638 ins, 628 del, 4276 sub ]
+2021-08-11 13:45:12,678 INFO [common.py:414] [test-clean] %WER 11.34% [5961 / 52576, 706 ins, 635 del, 4620 sub ]
 
 # epoch 7
-2021-02-17 09:47:38,464 INFO [mmi_bigram_decode.py:252] %WER 10.53% [5535 / 52576, 696 ins, 585 del, 4254 sub ]
+2021-08-11 13:46:56,316 INFO [common.py:414] [test-clean] %WER 11.28% [5932 / 52576, 798 ins, 516 del, 4618 sub ]
 
 # epoch 8
-2021-02-17 09:48:23,188 INFO [mmi_bigram_decode.py:252] %WER 10.27% [5401 / 52576, 716 ins, 527 del, 4158 sub ]
+2021-08-11 13:49:38,579 INFO [common.py:414] [test-clean] %WER 10.72% [5638 / 52576, 747 ins, 524 del, 4367 sub ]
 
 # epoch 9
-2021-02-17 09:49:08,283 INFO [mmi_bigram_decode.py:252] %WER 10.38% [5460 / 52576, 745 ins, 496 del, 4219 sub ]
-```
-
-## 2021-02-18 (with BucketingSampler)
-
-On GTX2080Ti with max_frames=30000 (could go up to as much as 45000 I think)
-
-```
-Epoch 9:
-%WER 10.50% [5523 / 52576, 775 ins, 487 del, 4261 sub ]
-```
-
-On Tesla V100 with max_frames=130000 (max GPU memory usage), one epoch takes ~13min.
-
-```
-Epoch 0:
-2021-02-18 16:08:14,155 INFO [mmi_bigram_decode.py:259] %WER 18.75% [9858 / 52576, 1324 ins, 1207 del, 7327 sub ]
-Epoch 1:
-2021-02-18 16:09:24,417 INFO [mmi_bigram_decode.py:259] %WER 13.77% [7238 / 52576, 962 ins, 765 del, 5511 sub ]
-Epoch 2:
-2021-02-18 16:10:22,321 INFO [mmi_bigram_decode.py:259] %WER 12.78% [6717 / 52576, 816 ins, 786 del, 5115 sub ]
-Epoch 3:
-2021-02-18 16:11:20,510 INFO [mmi_bigram_decode.py:259] %WER 12.53% [6587 / 52576, 819 ins, 745 del, 5023 sub ]
-Epoch 4:
-2021-02-18 16:12:35,212 INFO [mmi_bigram_decode.py:259] %WER 11.77% [6190 / 52576, 770 ins, 748 del, 4672 sub ]
-Epoch 5:
-2021-02-18 16:13:35,180 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5857 / 52576, 830 ins, 564 del, 4463 sub ]
-Epoch 6:
-2021-02-18 16:14:34,464 INFO [mmi_bigram_decode.py:259] %WER 11.14% [5859 / 52576, 838 ins, 506 del, 4515 sub ]
-Epoch 7:
-2021-02-18 16:15:34,764 INFO [mmi_bigram_decode.py:259] %WER 10.80% [5678 / 52576, 790 ins, 569 del, 4319 sub ]
-Epoch 8:
-2021-02-18 16:16:32,359 INFO [mmi_bigram_decode.py:259] %WER 10.81% [5683 / 52576, 800 ins, 511 del, 4372 sub ]
-Epoch 9:
-2021-02-18 16:17:57,772 INFO [mmi_bigram_decode.py:259] %WER 10.62% [5584 / 52576, 819 ins, 488 del, 4277 sub ]
+2021-08-11 13:53:08,955 INFO [common.py:414] [test-clean] %WER 10.44% [5491 / 52576, 719 ins, 510 del, 4262 sub ]
 ```
 
 # LibriSpeech MMI+MBR training results (TDNN-LSTM)
