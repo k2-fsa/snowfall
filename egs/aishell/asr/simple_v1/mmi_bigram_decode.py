@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu, Mingshuang Luo)
+#                                           2021 Pingfeng Luo
 # Apache 2.0
 
 import k2
