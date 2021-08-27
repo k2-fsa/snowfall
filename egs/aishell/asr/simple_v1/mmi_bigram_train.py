@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
+# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu, Mingshuang Luo)
 #                2021  Pingfeng Luo
 # Apache 2.0
 
@@ -14,19 +14,23 @@ import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
 from torch import nn
-from torch.nn.utils import clip_grad_value_
+from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 from lhotse import CutSet
 from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
-from lhotse.utils import fix_random_seed
+from lhotse.utils import fix_random_seed, nullcontext
 from snowfall.common import describe
-from snowfall.common import load_checkpoint, save_checkpoint
+from snowfall.common import find_first_disambig_symbol
+from snowfall.common import load_checkpoint, save_checkpoint, str2bool
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
+from snowfall.dist import cleanup_dist, setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.objectives.mmi import LFMMILoss
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -34,43 +38,33 @@ from snowfall.training.mmi_graph import get_phone_symbols
 
 den_scale = 1.0
 
-
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
-
+def encode_supervisions(supervisions: Dict[str, torch.Tensor],
+                                subsampling_factor) -> Tuple[torch.Tensor, List[str]]:
+        """
+        Encodes Lhotse's ``batch["supervisions"]`` dict into a pair of torch Tensor,
+        and a list of transcription strings.
+        The supervision tensor has shape ``(batch_size, 3)``.
+        Its second dimension contains information about sequence index [0],
+        start frames [1] and num frames [2].
+        The batch items might become re-ordered during this operation -- the returned tensor
+        and list of strings are guaranteed to be consistent with each other.
+        This mimics subsampling by a factor of 4 with Conv1D layer with no padding.
+        """
+        supervision_segments = torch.stack(
+            (supervisions['sequence_idx'],
+            torch.floor_divide(supervisions['start_frame'], 
+                                subsampling_factor),
+            torch.floor_divide(supervisions['num_frames'],
+                                subsampling_factor)), 1).to(torch.int32)
+        supervision_segments = torch.clamp(supervision_segments, min=0)
+        indices = torch.argsort(supervision_segments[:, 2], descending=True)
+        supervision_segments = supervision_segments[indices]
+        texts = supervisions['text']
+        texts = [texts[idx] for idx in indices]
+        return supervision_segments, texts
 
 def get_objf(batch: Dict,
              model: AcousticModel,
-             P: k2.Fsa,
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
              is_training: bool,
@@ -96,51 +90,38 @@ def get_objf(batch: Dict,
     feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    try:
+        subsampling_factor = model.subsampling_factor
+    except:
+        subsampling_factor = model.module.subsampling_factor
+
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions,
+                                                      subsampling_factor)
+
+    loss_fn = LFMMILoss(
+        graph_compiler=graph_compiler,
+        den_scale=den_scale
+    )
+
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with grad_context():
         nnet_output = model(feature)
-    else:
-        with torch.no_grad():
-            nnet_output = model(feature)
-
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
-
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
-
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
-
-    num = k2.intersect_dense(num, dense_fsa_vec, 10.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 10.0)
-
-    num_tot_scores = num.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    den_tot_scores = den.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
-            if tb_writer is not None and global_batch_idx_train is not None and global_batch_idx_train % 200 == 0:
+            if (
+                    tb_writer is not None
+                    and global_batch_idx_train is not None
+                    and global_batch_idx_train % 200 == 0
+            ):
                 tb_writer.add_scalars(
                     tag,
                     measure_gradient_norms(model, norm='l1'),
@@ -148,11 +129,17 @@ def get_objf(batch: Dict,
                 )
 
         optimizer.zero_grad()
-        (-tot_score).backward()
+        (-mmi_loss).backward()
+
+        for name, param in model.named_parameters():
+            if param.grad is None:
+                print(name)
+
         maybe_log_gradients('train/grad_norms')
-        clip_grad_value_(model.parameters(), 5.0)
+        #clip_grad_value_(model.parameters(), 5.0)
+        clip_grad_norm_(model.parameters(), max_norm=5.0, norm_type=2.0)
         maybe_log_gradients('train/clipped_grad_norms')
-        if global_batch_idx_train % 200 == 0:
+        if tb_writer is not None and global_batch_idx_train % 200 == 0:
             # Once in a time we will perform a more costly diagnostic
             # to check the relative parameter change per minibatch.
             deltas = optim_step_and_measure_param_change(model, optimizer)
@@ -164,14 +151,12 @@ def get_objf(batch: Dict,
         else:
             optimizer.step()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
-    ), all_frames.cpu().item()
+    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(), all_frames.cpu().item()
     return ans
 
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
-                        P: k2.Fsa,
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler):
     total_objf = 0.
@@ -181,7 +166,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
     model.eval()
 
     for batch_idx, batch in enumerate(dataloader):
-        objf, frames, all_frames = get_objf(batch, model, P, device,
+        objf, frames, all_frames = get_objf(batch, model, device,
                                             graph_compiler, False)
         total_objf += objf
         total_frames += frames
@@ -192,7 +177,7 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -210,15 +195,10 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         global_batch_idx_train += 1
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
-
-        P.set_scores_stochastic_(model.P_scores)
-        assert P.is_cpu
-        assert P.requires_grad is True
-
+        
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             is_training=True,
@@ -245,8 +225,20 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
 
+            print(
+                'batch {}, epoch {}/{} '
+                'global average objf: {:.6f} over {} '
+                'frames ({:.1f}% kept), current batch average objf: {:.6f} over {} frames ({:.1f}% kept) '
+                'avg time waiting for batch {:.3f}s'.format(
+                batch_idx, current_epoch, num_epochs,               
+                total_objf / total_frames, total_frames,
+                100.0 * total_frames / total_all_frames,                                            
+                curr_batch_objf / (curr_batch_frames + 0.001),                                                                                                                                   
+                curr_batch_frames,                                                                         
+                100.0 * curr_batch_frames / curr_batch_all_frames,      
+                time_waiting_for_batch / max(1, batch_idx)))
             tb_writer.add_scalar('train/global_average_objf',
-                                 total_objf / total_frames, global_batch_idx_train)
+                                total_objf / total_frames, global_batch_idx_train)
 
             tb_writer.add_scalar('train/current_batch_average_objf',
                                  curr_batch_objf / (curr_batch_frames + 0.001),
@@ -259,7 +251,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
-                P=P,
                 device=device,
                 graph_compiler=graph_compiler)
             valid_average_objf = total_valid_objf / total_valid_frames
@@ -277,8 +268,20 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
+def get_parser():
+    import argparse
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--world_size', default=1, type=int)
+    parser.add_argument('--local_rank', default=0, type=int)
+    parser.add_argument('--master_port', default=str(12345), type=str)
+    parser.add_argument('--bucketing_sampler', type=str2bool, default=True)
+    
+    return parser
 
 def main():
+    args = get_parser().parse_args()
+    print('World size:', args.world_size, 'Rank:', args.local_rank)
+    setup_dist(rank=args.local_rank, world_size=args.world_size, master_port=args.master_port)
     fix_random_seed(42)
 
     start_epoch = 0
@@ -291,27 +294,45 @@ def main():
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
+    lexicon = Lexicon(lang_dir)
+    
+    device_id = args.local_rank
+    device = torch.device('cuda', device_id)
+    phone_ids = lexicon.phone_symbols()
 
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
+    if not Path(lang_dir / 'P.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
+        with open(lang_dir / 'P.fst.txt') as f:
+            # P is not an acceptor because there is
+            # a back-off state, whose incoming arcs
+            # have label #0 and aux_label eps.
+            P = k2.Fsa.from_openfst(f.read(), acceptor=False)
+
+        phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+
+        # P.aux_labels is not needed in later computations, so
+        # remove it here.
+        del P.aux_labels
+        # CAUTION(fangjun): The following line is crucial.
+        # Arcs entering the back-off state have label equal to #0.
+        # We have to change it to 0 here.
+        P.labels[P.labels >= first_phone_disambig_id] = 0
+
+        P = k2.remove_epsilon(P)
+        P = k2.arc_sort(P)
+        torch.save(P.as_dict(), lang_dir / 'P.pt')
     else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+        logging.debug('Loading pre-compiled P')
+        d = torch.load(lang_dir / 'P.pt')
+        P = k2.Fsa.from_dict(d)
 
     graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table
+        lexicon=lexicon,
+        P=P,
+        device=device,
     )
-    phone_ids = get_phone_symbols(phone_symbol_table)
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-
+    
     # load dataset
     feature_dir = Path('exp/data')
     logging.info("About to get train cuts")
@@ -336,7 +357,7 @@ def main():
     )
     train_sampler = SingleCutSampler(
         cuts_train,
-        max_frames=12000,
+        max_frames=40000,
         shuffle=True,
     )
     logging.info("About to create train dataloader")
@@ -429,7 +450,6 @@ def main():
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
-            P=P,
             device=device,
             graph_compiler=graph_compiler,
             optimizer=optimizer,

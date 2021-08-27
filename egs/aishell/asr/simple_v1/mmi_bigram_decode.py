@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu)
-#                2021  Pingfeng Luo
+
+# Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey, Haowen Qiu, Mingshuang Luo)
+#                                           2021 Pingfeng Luo
 # Apache 2.0
 
 import k2
@@ -16,11 +17,14 @@ from typing import Union
 
 from lhotse import CutSet
 from lhotse.dataset import K2SpeechRecognitionDataset, SingleCutSampler
+from snowfall.common import average_checkpoint, store_transcripts
 from snowfall.common import find_first_disambig_symbol
 from snowfall.common import get_texts
 from snowfall.common import load_checkpoint
 from snowfall.common import setup_logger
+from snowfall.common import write_error_stats
 from snowfall.decoding.graph import compile_HLG
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
 from snowfall.training.ctc_graph import build_ctc_topo
@@ -28,9 +32,9 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
+@torch.no_grad()
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
-    tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
     for batch_idx, batch in enumerate(dataloader):
@@ -42,6 +46,7 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
                                 model.subsampling_factor),
              torch.floor_divide(supervisions['num_frames'],
                                 model.subsampling_factor)), 1).to(torch.int32)
+        supervision_segments = torch.clamp(supervision_segments, min=0)
         indices = torch.argsort(supervision_segments[:, 2], descending=True)
         supervision_segments = supervision_segments[indices]
         texts = supervisions['text']
@@ -81,88 +86,30 @@ def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
 
         if batch_idx % 10 == 0:
             logging.info(
-                'batch {}, cuts processed until now is {}/{} ({:.6f}%)'.format(
-                    batch_idx, num_cuts, tot_num_cuts,
-                    float(num_cuts) / tot_num_cuts * 100))
+                'batch {}, cuts processed until now is {}'.format(
+                    batch_idx, num_cuts))
 
         num_cuts += len(texts)
 
     return results
 
-
-def print_transition_probabilities(P: k2.Fsa, phone_symbol_table: SymbolTable,
-                                   phone_ids: List[int], filename: str):
-    '''Print the transition probabilities of a phone LM.
-
-    Args:
-      P:
-        A bigram phone LM.
-      phone_symbol_table:
-        The phone symbol table.
-      phone_ids:
-        A list of phone ids
-      filename:
-        Filename to save the printed result.
-    '''
-    num_phones = len(phone_ids)
-    table = np.zeros((num_phones + 1, num_phones + 2))
-    table[:, 0] = 0
-    table[0, -1] = 0  # the start state has no arcs to the final state
-    assert P.arcs.dim0() == num_phones + 2
-    arcs = P.arcs.values()[:, :3]
-    probability = P.scores.exp().tolist()
-
-    assert arcs.shape[0] - num_phones == num_phones * (num_phones + 1)
-    for i, arc in enumerate(arcs.tolist()):
-        src_state, dest_state, label = arc[0], arc[1], arc[2]
-        prob = probability[i]
-        if label != -1:
-            assert label == dest_state
-        else:
-            assert dest_state == num_phones + 1
-        table[src_state][dest_state] = prob
-
-    try:
-        from prettytable import PrettyTable
-    except ImportError:
-        print('Please run `pip install prettytable`. Skip printing')
-        return
-
-    x = PrettyTable()
-
-    field_names = ['source']
-    field_names.append('sum')
-    for i in phone_ids:
-        field_names.append(phone_symbol_table[i])
-    field_names.append('final')
-
-    x.field_names = field_names
-
-    for row in range(num_phones + 1):
-        this_row = []
-        if row == 0:
-            this_row.append('start')
-        else:
-            this_row.append(phone_symbol_table[row])
-        this_row.append('{:.6f}'.format(table[row, 1:].sum()))
-        for col in range(1, num_phones + 2):
-            this_row.append('{:.6f}'.format(table[row, col]))
-        x.add_row(this_row)
-    with open(filename, 'w') as f:
-        f.write(str(x))
+def get_parser():
+    import argparse
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--epoch', default=9, type=int)
+    return parser
 
 
 def main():
+    args = get_parser().parse_args()
     exp_dir = Path('exp-lstm-adam-mmi-bigram-musan')
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
     lang_dir = Path('data/lang_nosp')
-    symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+    lexicon = Lexicon(lang_dir)
 
-    phone_ids = get_phone_symbols(phone_symbol_table)
-    P = create_bigram_phone_lm(phone_ids)
+    phone_ids = lexicon.phone_symbols()
 
     phone_ids_with_blank = [0] + phone_ids
     ctc_topo = k2.arc_sort(build_ctc_topo(phone_ids_with_blank))
@@ -174,19 +121,11 @@ def main():
     model = TdnnLstm1b(num_features=40,
                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
                        subsampling_factor=3)
-    model.P_scores = torch.nn.Parameter(P.scores.clone(), requires_grad=False)
 
-    checkpoint = os.path.join(exp_dir, 'epoch-9.pt')
+    checkpoint = os.path.join(exp_dir, f'epoch-{args.epoch}.pt')
     load_checkpoint(checkpoint, model)
     model.to(device)
     model.eval()
-
-    assert P.requires_grad is False
-    P.scores = model.P_scores.cpu()
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='model_P_scores.txt')
-
-    P.set_scores_stochastic_(model.P_scores)
-    print_transition_probabilities(P, phone_symbol_table, phone_ids, filename='P_scores.txt')
 
     if not os.path.exists(lang_dir / 'HLG.pt'):
         logging.debug("Loading L_disambig.fst.txt")
@@ -195,8 +134,8 @@ def main():
         logging.debug("Loading G.fst.txt")
         with open(lang_dir / 'G.fst.txt') as f:
             G = k2.Fsa.from_openfst(f.read(), acceptor=False)
-        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
-        first_word_disambig_id = find_first_disambig_symbol(symbol_table)
+        first_phone_disambig_id = find_first_disambig_symbol(lexicon.phones)
+        first_word_disambig_id = find_first_disambig_symbol(lexicon.words)
         HLG = compile_HLG(L=L,
                          G=G,
                          H=ctc_topo,
@@ -204,7 +143,7 @@ def main():
                          aux_labels_disambig_id_start=first_word_disambig_id)
         torch.save(HLG.as_dict(), lang_dir / 'HLG.pt')
     else:
-        logging.debug("Loading pre-compiled HLG")
+        logging.debug("Loading pre-compiled LG")
         d = torch.load(lang_dir / 'HLG.pt')
         HLG = k2.Fsa.from_dict(d)
 
@@ -215,7 +154,7 @@ def main():
 
     logging.info("About to create test dataset")
     test = K2SpeechRecognitionDataset(cuts_test)
-    sampler = SingleCutSampler(cuts_test, max_frames=100000)
+    sampler = SingleCutSampler(cuts_test, max_frames=40000)
     logging.info("About to create test dataloader")
     test_dl = torch.utils.data.DataLoader(test, batch_size=None, sampler=sampler, num_workers=1)
 
@@ -227,12 +166,14 @@ def main():
     HLG = HLG.to(device)
     HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
     HLG.requires_grad_(False)
+
     logging.debug("About to decode")
     results = decode(dataloader=test_dl,
                      model=model,
                      device=device,
                      HLG=HLG,
-                     symbols=symbol_table)
+                     symbols=lexicon.words)
+
     s = ''
     results2 = []
     for ref, hyp in results:
@@ -260,13 +201,13 @@ def main():
         f'[{errors["total"]} / {total_words}, {errors["ins"]} ins, {errors["del"]} del, {errors["sub"]} sub ]'
     )
     logging.info(
-        f'%WER {errors2["total"] / total_chars:.2%} '
+        f'%CER {errors2["total"] / total_chars:.2%} '
         f'[{errors2["total"]} / {total_chars}, {errors2["ins"]} ins, {errors2["del"]} del, {errors2["sub"]} sub ]'
     )
-
 
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
 if __name__ == '__main__':
     main()
+

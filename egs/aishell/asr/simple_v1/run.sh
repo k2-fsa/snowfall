@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang)
+# Copyright 2020 Xiaomi Corporation (Author: Junbo Zhang
+#                                            Mingshuang Luo)
 #           2021 Pingfeng Luo
 # Apache 2.0
 
@@ -9,10 +10,8 @@
 set -eou pipefail
 
 dataset_path=(
-  /mnt/cfs2/asr/database/AM/aishell
-  /root/fangjun/data/aishell
-  /home/storage04/zhuangweiji/data/open-source-data/SLR33-aishell/data
-)
+  /ceph-meixu/luomingshuang/audio-data/aishell
+  )
 
 data=${dataset_path[0]}
 for d in ${dataset_path[@]}; do
@@ -81,18 +80,55 @@ if [ $stage -le 4 ]; then
 fi
 
 if [ $stage -le 5 ]; then
+  mkdir -p data/lm
+  # this stage may takes some minutes
+  if [ ! -f data/lm/P.arpa ]; then
+    echo "Generating data/lm/P.arpa"
+    ./local/add_silence_to_transcript.py \
+      --transcript data/local/train/transcripts.txt \
+      --sil-word "!SIL" \
+      --sil-prob 0.5 \
+      --seed 20210823 \
+      > data/lm/transcript_with_sil.txt
+
+    ./local/convert_transcript_to_corpus.py \
+      --transcript data/lm/transcript_with_sil.txt \
+      --lexicon data/local/dict_nosp/lexicon.txt \
+      --oov "<UNK>" \
+      > data/lm/corpus.txt
+
+    ./local/make_kn_lm.py \
+      -ngram-order 2 \
+      -text data/lm/corpus.txt \
+      -lm data/lm/P.arpa
+  fi
+fi
+
+if [ $stage -le 6 ]; then
+  if [ ! -f data/lang_nosp/P.fst.txt ]; then
+    python3 -m kaldilm \
+      --read-symbol-table="data/lang_nosp/phones.txt" \
+      --disambig-symbol='#0' \
+      --max-order=2 \
+      data/lm/P.arpa > data/lang_nosp/P.fst.txt
+  fi
+fi
+
+if [ $stage -le 7 ]; then
   echo "Feature preparation"
   python3 ./prepare.py
 fi
 
-if [ $stage -le 6 ]; then
+if [ $stage -le 8 ]; then
   echo "Training"
   python3 ./ctc_train.py
   #python3 ./mmi_bigram_train.py
+  #python3 ./mmi_att_transformer_train.py
 fi
 
-if [ $stage -le 7 ]; then
+if [ $stage -le 9 ]; then
   echo "Decoding"
   python3 ./ctc_decode.py
   #python3 ./mmi_bigram_decode.py
+  #python3 ./mmi_att_transformer_decode.py
 fi

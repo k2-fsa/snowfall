@@ -23,8 +23,8 @@ from lhotse.recipes import prepare_aishell, prepare_musan
 # sox).
 torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
-num_jobs = min(15, os.cpu_count())
-print(num_jobs)
+num_jobs = min(32, os.cpu_count())
+#print(num_jobs)
 
 @contextmanager
 def get_executor():
@@ -67,7 +67,7 @@ def locate_corpus(corpus_dirs, msg):
 
 def main():
     corpus_dir = locate_corpus(
-        (Path('/mnt/cfs2/asr/database/AM/aishell'),
+        (Path('/ceph-meixu/luomingshuang/audio-data/aishell'),
          Path('/root/fangjun/data/aishell'),
          Path(
              '/home/storage04/zhuangweiji/data/open-source-data/SLR33-aishell/data'
@@ -75,7 +75,7 @@ def main():
         msg='Please specify the directory to the AIShell dataset')
 
     musan_dir = locate_corpus(
-        (Path('/export/corpora5/JHU/musan'),
+        (Path('/ceph-meixu/luomingshuang/audio-data/musan'),
          Path('/export/common/data/corpora/MUSAN/musan'),
          Path('/root/fangjun/data/musan')),
         msg='Please specify the directory to the MUSAN dataset')

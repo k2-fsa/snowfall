@@ -97,3 +97,24 @@ latest k2 and lhotse as of today (2021-02-12).
 2021-02-12 19:28:44,843 INFO [ctc_decode.py:182] %WER 24.16% [15563 / 64428, 1271 ins, 2016 del, 12276 sub ]
 2021-02-12 19:28:44,843 INFO [ctc_decode.py:186] %WER 14.95% [15662 / 104767, 403 ins, 508 del, 14751 sub ]
 ```
+# AiShell New Training Results
+
+## 2021-08-25
+(Mingshuang Luo):
+All the following results are based on a 10-epoch training process.
+### Aishell CTC_Train
+```
+2021-08-25 00:46:57,911 INFO [ctc_decode.py:182] %WER 24.24% [15616 / 64428, 1289 ins, 2041 del, 12286 sub ]
+2021-08-25 00:46:57,911 INFO [ctc_decode.py:186] %CER 15.02% [15737 / 104765, 415 ins, 484 del, 14838 sub ]
+```
+### Aishell MMI_Bigram_Train
+```
+2021-08-25 00:48:33,789 INFO [mmi_bigram_decode.py:198] %WER 17.11% [11026 / 64428, 1014 ins, 1536 del, 8476 sub ]
+2021-08-25 00:48:33,789 INFO [mmi_bigram_decode.py:202] %CER 8.79% [9206 / 104765, 354 ins, 346 del, 8506 sub ]
+```
+### AiShell MMI_Att_Transformer_Train
+```
+2021-08-25 00:51:22,460 INFO [mmi_att_transformer_decode.py:551] %WER 14.00% [9019 / 64428, 797 ins, 1228 del, 6994 sub ]
+2021-08-25 00:51:22,460 INFO [mmi_att_transformer_decode.py:555] %CER 6.28% [6580 / 104765, 237 ins, 156 del, 6187 sub ]
+
+```

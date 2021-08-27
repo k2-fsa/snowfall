@@ -2,79 +2,58 @@
 
 # Copyright (c)  2020  Xiaomi Corporation (authors: Daniel Povey
 #                                                   Haowen Qiu
-#                                                   Fangjun Kuang)
+#                                                   Fangjun Kuang
+#                                                   Mingshuang Luo)
 #                2021  University of Chinese Academy of Sciences (author: Han Zhu)
-#                2021  Pingfeng Luo
 # Apache 2.0
 
 import argparse
-import k2
 import logging
-import math
-import numpy as np
 import os
 import sys
-import torch
 from datetime import datetime
 from pathlib import Path
-from torch import nn
-from torch.nn.utils import clip_grad_value_
-from torch.utils.tensorboard import SummaryWriter
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-from lhotse.utils import fix_random_seed
-from snowfall.common import describe
+import k2
+import numpy as np
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch import nn
+from torch.cuda.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.utils import clip_grad_value_, clip_grad_norm_
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+
+from lhotse import CutSet
+from lhotse.utils import fix_random_seed, nullcontext
+from lhotse.dataset import CutConcatenate, CutMix, K2SpeechRecognitionDataset, SingleCutSampler
+from snowfall.common import describe, str2bool
+from snowfall.common import find_first_disambig_symbol
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
-from snowfall.data.aishell import AishellAsrDataModule
+from snowfall.dist import cleanup_dist
+from snowfall.dist import setup_dist
+from snowfall.lexicon import Lexicon
 from snowfall.models import AcousticModel
-from snowfall.models.transformer import Noam, Transformer
 from snowfall.models.conformer import Conformer
+from snowfall.models.contextnet import ContextNet
+from snowfall.models.tdnn_lstm import TdnnLstm1b  # alignment model
+from snowfall.models.transformer import Noam, Transformer
+from snowfall.objectives import LFMMILoss, encode_supervisions
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
-from snowfall.training.mmi_graph import create_bigram_phone_lm
-from snowfall.training.mmi_graph import get_phone_symbols
-
-
-def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
-                                frames_per_seq: torch.Tensor
-                                ) -> Tuple[float, int, int]:
-    ''' Figures out the total score(log-prob) over all successful supervision segments
-    (i.e. those for which the total score wasn't -infinity), and the corresponding
-    number of frames of neural net output
-         Args:
-            tot_scores: a Torch tensor of shape (num_segments,) containing total scores
-                       from forward-backward
-        frames_per_seq: a Torch tensor of shape (num_segments,) containing the number of
-                       frames for each segment
-        Returns:
-             Returns a tuple of 3 scalar tensors:  (tot_score, ok_frames, all_frames)
-        where ok_frames is the frames for successful (finite) segments, and
-       all_frames is the frames for all segments (finite or not).
-    '''
-    mask = torch.ne(tot_scores, -math.inf)
-    # finite_indexes is a tensor containing successful segment indexes, e.g.
-    # [ 0 1 3 4 5 ]
-    finite_indexes = torch.nonzero(mask).squeeze(1)
-    if False:
-        bad_indexes = torch.nonzero(~mask).squeeze(1)
-        if bad_indexes.shape[0] > 0:
-            print("Bad indexes: ", bad_indexes, ", bad lengths: ",
-                  frames_per_seq[bad_indexes], " vs. max length ",
-                  torch.max(frames_per_seq), ", avg ",
-                  (torch.sum(frames_per_seq) / frames_per_seq.numel()))
-    # print("finite_indexes = ", finite_indexes, ", tot_scores = ", tot_scores)
-    ok_frames = frames_per_seq[finite_indexes].sum()
-    all_frames = frames_per_seq.sum()
-    return (tot_scores[finite_indexes].sum(), ok_frames, all_frames)
 
 
 def get_objf(batch: Dict,
              model: AcousticModel,
-             P: k2.Fsa,
+             ali_model: Optional[AcousticModel],
              device: torch.device,
              graph_compiler: MmiTrainingGraphCompiler,
+             use_pruned_intersect: bool,
              is_training: bool,
              is_update: bool,
              accum_grad: int = 1,
@@ -82,72 +61,59 @@ def get_objf(batch: Dict,
              att_rate: float = 0.0,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
-             optimizer: Optional[torch.optim.Optimizer] = None):
-
+             optimizer: Optional[torch.optim.Optimizer] = None,
+             scaler: GradScaler = None
+             ):
     feature = batch['inputs']
-    supervisions = batch['supervisions']
-    supervision_segments = torch.stack(
-        (supervisions['sequence_idx'],
-         (((supervisions['start_frame'] - 1) // 2 - 1) // 2),
-         (((supervisions['num_frames'] - 1) // 2 - 1) // 2)), 1).to(torch.int32)
-    supervision_segments = torch.clamp(supervision_segments, min=0)
-    indices = torch.argsort(supervision_segments[:, 2], descending=True)
-    supervision_segments = supervision_segments[indices]
-
-    texts = supervisions['text']
-    texts = [texts[idx] for idx in indices]
-    assert feature.ndim == 3
-    # print(supervision_segments[:, 1] + supervision_segments[:, 2])
-
-    feature = feature.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
-    if is_training:
+    assert feature.ndim == 3
+    feature = feature.to(device)
+
+    supervisions = batch['supervisions']
+    supervision_segments, texts = encode_supervisions(supervisions)
+
+    loss_fn = LFMMILoss(
+        graph_compiler=graph_compiler,
+        den_scale=den_scale,
+        use_pruned_intersect=use_pruned_intersect
+    )
+
+    grad_context = nullcontext if is_training else torch.no_grad
+
+    with autocast(enabled=scaler.is_enabled()), grad_context():
+
+        if att_rate == 0:
+            # Note: Make TorchScript happy by making the supervision dict strictly
+            #       conform to type Dict[str, Tensor]
+            #       Using the attention decoder with TorchScript is currently unsupported,
+            #       we'll need to separate out the 'text' field from 'supervisions' first.
+            del supervisions['text']
+
         nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
         if att_rate != 0.0:
-            att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
-    else:
-        with torch.no_grad():
-            nnet_output, encoder_memory, memory_mask = model(feature, supervisions)
-            if att_rate != 0.0:
+            if hasattr(model, 'module'):
+                att_loss = model.module.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
+            else:
                 att_loss = model.decoder_forward(encoder_memory, memory_mask, supervisions, graph_compiler)
 
-    # nnet_output is [N, C, T]
-    nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
+        if (ali_model is not None and global_batch_idx_train is not None and
+                global_batch_idx_train // accum_grad < 4000):
+            with torch.no_grad():
+                ali_model_output = ali_model(feature)
+            # subsampling is done slightly differently, may be small length
+            # differences.
+            min_len = min(ali_model_output.shape[2], nnet_output.shape[2])
+            # scale less than one so it will be encouraged
+            # to mimic ali_model's output
+            ali_model_scale = 500.0 / (global_batch_idx_train // accum_grad + 500)
+            nnet_output = nnet_output.clone()  # or log-softmax backprop will fail.
+            nnet_output[:, :,:min_len] += ali_model_scale * ali_model_output[:, :,:min_len]
 
-    if is_training:
-        num, den = graph_compiler.compile(texts, P)
-    else:
-        with torch.no_grad():
-            num, den = graph_compiler.compile(texts, P)
+        # nnet_output is [N, C, T]
+        nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
-    assert num.requires_grad == is_training
-    assert den.requires_grad is False
-    num = num.to(device)
-    den = den.to(device)
-
-    # nnet_output2 = nnet_output.clone()
-    # blank_bias = -7.0
-    # nnet_output2[:,:,0] += blank_bias
-
-    dense_fsa_vec = k2.DenseFsaVec(nnet_output, supervision_segments)
-    assert nnet_output.device == device
-
-    num = k2.intersect_dense(num, dense_fsa_vec, 6.0)
-    den = k2.intersect_dense(den, dense_fsa_vec, 6.0)
-
-    num_tot_scores = num.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-
-    den_tot_scores = den.get_tot_scores(
-        log_semiring=True,
-        use_double_scores=True)
-    tot_scores = num_tot_scores - den_scale * den_tot_scores
-
-    (tot_score, tot_frames,
-     all_frames) = get_tot_objf_and_num_frames(tot_scores,
-                                               supervision_segments[:, 2])
+        mmi_loss, tot_frames, all_frames = loss_fn(nnet_output, texts, supervision_segments)
 
     if is_training:
         def maybe_log_gradients(tag: str):
@@ -159,39 +125,43 @@ def get_objf(batch: Dict,
                 )
 
         if att_rate != 0.0:
-            loss = (- (1.0 - att_rate) * tot_score + att_rate * att_loss) / (len(texts) * accum_grad)
+            loss = (- (1.0 - att_rate) * mmi_loss + att_rate * att_loss) / (len(texts) * accum_grad)
         else:
-            loss = (-tot_score) / (len(texts) * accum_grad)
-
-        loss.backward()
+            loss = (-mmi_loss) / (len(texts) * accum_grad)
+        scaler.scale(loss).backward()
         if is_update:
             maybe_log_gradients('train/grad_norms')
-            clip_grad_value_(model.parameters(), 5.0)
+            scaler.unscale_(optimizer)
+            #clip_grad_value_(model.parameters(), 5.0)
+            clip_grad_norm_(model.parameters(), max_norm=5.0, norm_type=2.0)
             maybe_log_gradients('train/clipped_grad_norms')
-            if (global_batch_idx_train // accum_grad) % 200 == 0:
+            if tb_writer is not None and (global_batch_idx_train // accum_grad) % 200 == 0:
                 # Once in a time we will perform a more costly diagnostic
                 # to check the relative parameter change per minibatch.
-                deltas = optim_step_and_measure_param_change(model, optimizer)
+                deltas = optim_step_and_measure_param_change(model, optimizer, scaler)
                 tb_writer.add_scalars(
                     'train/relative_param_change_per_minibatch',
                     deltas,
                     global_step=global_batch_idx_train
                 )
             else:
-                optimizer.step()
+                scaler.step(optimizer)
             optimizer.zero_grad()
+            scaler.update()
 
-    ans = -tot_score.detach().cpu().item(), tot_frames.cpu().item(
+    ans = -mmi_loss.detach().cpu().item(), tot_frames.cpu().item(
     ), all_frames.cpu().item()
     return ans
 
 
 def get_validation_objf(dataloader: torch.utils.data.DataLoader,
                         model: AcousticModel,
-                        P: k2.Fsa,
+                        ali_model: Optional[AcousticModel],
                         device: torch.device,
                         graph_compiler: MmiTrainingGraphCompiler,
-                        den_scale: float = 1
+                        use_pruned_intersect: bool,
+                        scaler: GradScaler,
+                        den_scale: float = 1,
                         ):
     total_objf = 0.
     total_frames = 0.  # for display only
@@ -199,16 +169,19 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
     model.eval()
 
-    for batch_idx, batch in enumerate(dataloader):
+    from torchaudio.datasets.utils import bg_iterator
+    for batch_idx, batch in enumerate(bg_iterator(dataloader, 2)):
         objf, frames, all_frames = get_objf(
             batch=batch,
             model=model,
-            P=P,
+            ali_model=ali_model,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             is_training=False,
             is_update=False,
-            den_scale=den_scale
+            den_scale=den_scale,
+            scaler=scaler
         )
         total_objf += objf
         total_frames += frames
@@ -219,9 +192,11 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
+                    ali_model: Optional[AcousticModel],
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
+                    use_pruned_intersect: bool,
                     optimizer: torch.optim.Optimizer,
                     accum_grad: int,
                     den_scale: float,
@@ -229,14 +204,16 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     current_epoch: int,
                     tb_writer: SummaryWriter,
                     num_epochs: int,
-                    global_batch_idx_train: int):
+                    global_batch_idx_train: int,
+                    world_size: int,
+                    scaler: GradScaler
+                    ):
     """One epoch training and validation.
 
     Args:
         dataloader: Training dataloader
         valid_dataloader: Validation dataloader
         model: Acoustic model to be trained
-        P: An FSA representing the bigram phone LM
         device: Training device, torch.device("cpu") or torch.device("cuda", device_id)
         graph_compiler: MMI training graph compiler
         optimizer: Training optimizer
@@ -262,6 +239,7 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
     model.train()
     for batch_idx, batch in enumerate(dataloader):
+      #if batch_idx >= 620:
         forward_count += 1
         if forward_count == accum_grad:
             is_update = True
@@ -273,16 +251,13 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
 
-        if forward_count == 1 or accum_grad == 1:
-            P.set_scores_stochastic_(model.P_scores)
-            assert P.requires_grad is True
-
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
-            P=P,
+            ali_model=ali_model,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             is_training=True,
             is_update=is_update,
             accum_grad=accum_grad,
@@ -290,7 +265,8 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
             att_rate=att_rate,
             tb_writer=tb_writer,
             global_batch_idx_train=global_batch_idx_train,
-            optimizer=optimizer
+            optimizer=optimizer,
+            scaler=scaler
         )
 
         total_objf += curr_batch_objf
@@ -311,26 +287,35 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     100.0 * curr_batch_frames / curr_batch_all_frames,
                     time_waiting_for_batch / max(1, batch_idx)))
 
-            tb_writer.add_scalar('train/global_average_objf',
-                                 total_objf / total_frames, global_batch_idx_train)
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_average_objf',
+                                     total_objf / total_frames, global_batch_idx_train)
 
-            tb_writer.add_scalar('train/current_batch_average_objf',
-                                 curr_batch_objf / (curr_batch_frames + 0.001),
-                                 global_batch_idx_train)
-
-            tb_writer.add_scalar('train/GPU_RAM_MB', torch.cuda.memory_allocated(0) / 1024. / 1024., global_batch_idx_train)
-
+                tb_writer.add_scalar('train/current_batch_average_objf',
+                                     curr_batch_objf / (curr_batch_frames + 0.001),
+                                     global_batch_idx_train)
             # if batch_idx >= 10:
             #    print("Exiting early to get profile info")
             #    sys.exit(0)
 
-        if batch_idx > 0 and batch_idx % 1000 == 0:
+        if batch_idx > 0 and batch_idx % 200 == 0:
             total_valid_objf, total_valid_frames, total_valid_all_frames = get_validation_objf(
                 dataloader=valid_dataloader,
                 model=model,
-                P=P,
+                ali_model=ali_model,
                 device=device,
-                graph_compiler=graph_compiler)
+                graph_compiler=graph_compiler,
+                use_pruned_intersect=use_pruned_intersect,
+                scaler=scaler)
+            if world_size > 1:
+                s = torch.tensor([
+                    total_valid_objf, total_valid_frames,
+                    total_valid_all_frames
+                ]).to(device)
+
+                dist.all_reduce(s, op=dist.ReduceOp.SUM)
+                total_valid_objf, total_valid_frames, total_valid_all_frames = s.cpu().tolist()
+
             valid_average_objf = total_valid_objf / total_valid_frames
             model.train()
             logging.info(
@@ -339,27 +324,41 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                             total_valid_frames,
                             100.0 * total_valid_frames / total_valid_all_frames))
 
-            tb_writer.add_scalar('train/global_valid_average_objf',
-                                 valid_average_objf,
-                                 global_batch_idx_train)
-            model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+            if tb_writer is not None:
+                tb_writer.add_scalar('train/global_valid_average_objf',
+                                     valid_average_objf,
+                                     global_batch_idx_train)
+                if hasattr(model, 'module'):
+                    model.module.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
+                else:
+                    model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument(
+        '--world-size',
+        type=int,
+        default=1,
+        help='Number of GPUs for DDP training.')
+    parser.add_argument(
+        '--master-port',
+        type=int,
+        default=12354,
+        help='Master port to use for DDP training.')
     parser.add_argument(
         '--model-type',
         type=str,
         default="conformer",
-        choices=["transformer", "conformer"],
+        choices=["transformer", "conformer", "contextnet"],
         help="Model type.")
     parser.add_argument(
         '--num-epochs',
         type=int,
-        default=20,
-        help="Number of traning epochs.")
+        default=10,
+        help="Number of training epochs.")
     parser.add_argument(
         '--start-epoch',
         type=int,
@@ -368,8 +367,20 @@ def get_parser():
     parser.add_argument(
         '--warm-step',
         type=int,
-        default=25000,
+        default=5000,
         help='The number of warm-up steps for Noam optimizer.'
+    )
+    parser.add_argument(
+        '--lr-factor',
+        type=float,
+        default=1.0,
+        help='Learning rate factor for Noam optimizer.'
+    )
+    parser.add_argument(
+        '--weight-decay',
+        type=float,
+        default=0.0,
+        help='weight decay (L2 penalty) for Noam optimizer.'
     )
     parser.add_argument(
         '--accum-grad',
@@ -396,62 +407,187 @@ def get_parser():
         type=int,
         default=256,
         help="Number of units in transformer attention layers.")
+    parser.add_argument(
+        '--tensorboard',
+        type=str2bool,
+        default=True,
+        help='Should various information be logged in tensorboard.'
+    )
+    parser.add_argument(
+        '--amp',
+        type=str2bool,
+        default=True,
+        help='Should we use automatic mixed precision (AMP) training.'
+    )
+    parser.add_argument(
+        '--use-ali-model',
+        type=str2bool,
+        default=True,
+        help='If true, we assume that you have run ./ctc_train.py '
+             'and you have some checkpoints inside the directory '
+             'exp-lstm-adam-ctc-musan/ .'
+             'It will use exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt '
+             'as the pre-trained alignment model'
+    )
+    parser.add_argument(
+        '--ali-model-epoch',
+        type=int,
+        default=7,
+        help='If --use-ali-model is True, load '
+             'exp-lstm-adam-ctc-musan/epoch-{ali-model-epoch}.pt as the alignment model.'
+             'Used only if --use-ali-model is True.'
+    )
+    parser.add_argument(
+        '--use-pruned-intersect',
+        type=str2bool,
+        default=False,
+        help='True to use pruned intersect to compute the denominator lattice. ' \
+             'You probably want to set it to True if you have a very large LM. ' \
+             'In that case, you will get an OOM if it is False. ')
+    #  See https://github.com/k2-fsa/k2/issues/739 for more details
+    parser.add_argument(
+        '--torchscript',
+        type=str2bool,
+        default=False,
+        help='Should we convert the model to TorchScript before starting training.'
+    )
+    parser.add_argument(
+        '--torchscript-epoch',
+        type=int,
+        default=-1,
+        help='After which epoch should we start storing models with TorchScript,'
+             'so that they can be simply loaded with torch.jit.load(). '
+             '-1 disables this option.'
+    )
     return parser
 
 
-def main():
-    parser = get_parser()
-    AishellAsrDataModule.add_arguments(parser)
-    args = parser.parse_args()
-
+def run(rank, world_size, args):
+    '''
+    Args:
+      rank:
+        It is a value between 0 and `world_size-1`, which is
+        passed automatically by `mp.spawn()` in :func:`main`.
+        The node with rank 0 is responsible for saving checkpoint.
+      world_size:
+        Number of GPUs for DDP training.
+      args:
+        The return value of get_parser().parse_args()
+    '''
     model_type = args.model_type
     start_epoch = args.start_epoch
     num_epochs = args.num_epochs
     accum_grad = args.accum_grad
     den_scale = args.den_scale
     att_rate = args.att_rate
+    use_pruned_intersect = args.use_pruned_intersect
 
     fix_random_seed(42)
+    if world_size > 1:
+        setup_dist(rank, world_size, args.master_port)
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan')
-    setup_logger('{}/log/log-train'.format(exp_dir))
-    tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
-
-    # load L, G, symbol_table
-    lang_dir = Path('data/lang_nosp')
-    phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
-    word_symbol_table = k2.SymbolTable.from_file(lang_dir / 'words.txt')
-
-    logging.info("Loading L.fst")
-    if (lang_dir / 'Linv.pt').exists():
-        L_inv = k2.Fsa.from_dict(torch.load(lang_dir / 'Linv.pt'))
+    exp_dir = Path('exp-' + model_type + '-mmi-att-sa-vgg-normlayer')
+    setup_logger(f'{exp_dir}/log/log-train-{rank}')
+    if args.tensorboard and rank == 0:
+        tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
     else:
-        with open(lang_dir / 'L.fst.txt') as f:
-            L = k2.Fsa.from_openfst(f.read(), acceptor=False)
-            L_inv = k2.arc_sort(L.invert_())
-            torch.save(L_inv.as_dict(), lang_dir / 'Linv.pt')
+        tb_writer = None
+    #  tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard and rank == 0 else None
 
-    device_id = 0
+    logging.info("Loading lexicon and symbol tables")
+    lang_dir = Path('data/lang_nosp')
+    lexicon = Lexicon(lang_dir)
+
+    device_id = rank
     device = torch.device('cuda', device_id)
 
-    graph_compiler = MmiTrainingGraphCompiler(
-        L_inv=L_inv,
-        phones=phone_symbol_table,
-        words=word_symbol_table,
-        device=device
-    )
-    phone_ids = get_phone_symbols(phone_symbol_table)
-    P = create_bigram_phone_lm(phone_ids)
-    P.scores = torch.zeros_like(P.scores)
-    P = P.to(device)
+    if not Path(lang_dir / 'P.pt').is_file():
+        logging.debug(f'Loading P from {lang_dir}/P.fst.txt')
+        with open(lang_dir / 'P.fst.txt') as f:
+            # P is not an acceptor because there is
+            # a back-off state, whose incoming arcs
+            # have label #0 and aux_label eps.
+            P = k2.Fsa.from_openfst(f.read(), acceptor=False)
 
-    aishell = AishellAsrDataModule(args)
-    train_dl = aishell.train_dataloaders()
-    valid_dl = aishell.valid_dataloaders()
+        phone_symbol_table = k2.SymbolTable.from_file(lang_dir / 'phones.txt')
+        first_phone_disambig_id = find_first_disambig_symbol(phone_symbol_table)
+
+        # P.aux_labels is not needed in later computations, so
+        # remove it here.
+        del P.aux_labels
+        # CAUTION(fangjun): The following line is crucial.
+        # Arcs entering the back-off state have label equal to #0.
+        # We have to change it to 0 here.
+        P.labels[P.labels >= first_phone_disambig_id] = 0
+
+        P = k2.remove_epsilon(P)
+        P = k2.arc_sort(P)
+        torch.save(P.as_dict(), lang_dir / 'P.pt')
+    else:
+        logging.debug('Loading pre-compiled P')
+        d = torch.load(lang_dir / 'P.pt')
+        P = k2.Fsa.from_dict(d)
+
+    graph_compiler = MmiTrainingGraphCompiler(
+        lexicon=lexicon,
+        P=P,
+        device=device,
+    )
+    phone_ids = lexicon.phone_symbols()
+    
+    # load dataset
+    feature_dir = Path('exp/data')
+    logging.info("About to get train cuts")
+    cuts_train = CutSet.from_json(feature_dir /
+                                  'cuts_train.json.gz')
+    logging.info("About to get dev cuts")
+    cuts_dev = CutSet.from_json(feature_dir / 'cuts_dev.json.gz')
+    logging.info("About to get Musan cuts")
+    cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
+
+    logging.info("About to create train dataset")
+    train = K2SpeechRecognitionDataset(
+        cuts_train,
+        cut_transforms=[
+            CutConcatenate(),
+            CutMix(
+                cuts=cuts_musan,
+                prob=0.5,
+                snr=(10, 20)
+            )
+        ]
+    )
+    train_sampler = SingleCutSampler(
+        cuts_train,
+        max_frames=90000,
+        shuffle=True,
+    )
+    logging.info("About to create train dataloader")
+    train_dl = torch.utils.data.DataLoader(
+        train,
+        sampler=train_sampler,
+        batch_size=None,
+        num_workers=4
+    )
+    logging.info("About to create dev dataset")
+    validate = K2SpeechRecognitionDataset(cuts_dev)
+    valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000)
+    logging.info("About to create dev dataloader")
+    valid_dl = torch.utils.data.DataLoader(
+        validate,
+        sampler=valid_sampler,
+        batch_size=None,
+        num_workers=1
+    )
 
     if not torch.cuda.is_available():
         logging.error('No GPU detected!')
         sys.exit(-1)
+
+    if use_pruned_intersect:
+        logging.info('Use pruned intersect for den_lats')
+    else:
+        logging.info("Don't use pruned intersect for den_lats")
 
     logging.info("About to create model")
 
@@ -467,25 +603,62 @@ def main():
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
-    else:
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True)
+    elif model_type == "conformer":
         model = Conformer(
             num_features=40,
             nhead=args.nhead,
             d_model=args.attention_dim,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
-            num_decoder_layers=num_decoder_layers)
-            
-    model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
+            num_decoder_layers=num_decoder_layers,
+            vgg_frontend=True,
+            is_espnet_structure=True)
+    elif model_type == "contextnet":
+        model = ContextNet(
+            num_features=40,
+            num_classes=len(phone_ids) + 1)  # +1 for the blank symbol
+    else:
+        raise NotImplementedError("Model of type " + str(model_type) + " is not implemented")
+
+    if args.torchscript:
+        logging.info('Applying TorchScript to model...')
+        model = torch.jit.script(model)
 
     model.to(device)
     describe(model)
 
+    if world_size > 1:
+        model = DDP(model, device_ids=[rank])
+
+    # Now for the alignment model, if any
+    if args.use_ali_model:
+        ali_model = TdnnLstm1b(
+            num_features=40,
+            num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+            subsampling_factor=4)
+
+        ali_model_fname = Path(f'exp-lstm-adam-ctc-musan/epoch-{args.ali_model_epoch}.pt')
+        assert ali_model_fname.is_file(), \
+                f'ali model filename {ali_model_fname} does not exist!'
+        ali_model.load_state_dict(torch.load(ali_model_fname, map_location='cpu')['state_dict'])
+        ali_model.to(device)
+
+        ali_model.eval()
+        ali_model.requires_grad_(False)
+        logging.info(f'Use ali_model: {ali_model_fname}')
+    else:
+        ali_model = None
+        logging.info('No ali_model')
+
     optimizer = Noam(model.parameters(),
                      model_size=args.attention_dim,
-                     factor=1.0,
-                     warm_step=args.warm_step)
+                     factor=args.lr_factor,
+                     warm_step=args.warm_step,
+                     weight_decay=args.weight_decay)
+
+    scaler = GradScaler(enabled=args.amp)
 
     best_objf = np.inf
     best_valid_objf = np.inf
@@ -496,26 +669,28 @@ def main():
 
     if start_epoch > 0:
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(start_epoch - 1))
-        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer)
+        ckpt = load_checkpoint(filename=model_path, model=model, optimizer=optimizer, scaler=scaler)
         best_objf = ckpt['objf']
         best_valid_objf = ckpt['valid_objf']
         global_batch_idx_train = ckpt['global_batch_idx_train']
         logging.info(f"epoch = {ckpt['epoch']}, objf = {best_objf}, valid_objf = {best_valid_objf}")
 
     for epoch in range(start_epoch, num_epochs):
-        train_sampler.set_epoch(epoch)
+        #train_dl.sampler.set_epoch(epoch)
         curr_learning_rate = optimizer._rate
-        tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
-        tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
+        if tb_writer is not None:
+            tb_writer.add_scalar('train/learning_rate', curr_learning_rate, global_batch_idx_train)
+            tb_writer.add_scalar('train/epoch', epoch, global_batch_idx_train)
 
         logging.info('epoch {}, learning rate {}'.format(epoch, curr_learning_rate))
         objf, valid_objf, global_batch_idx_train = train_one_epoch(
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
-            P=P,
+            ali_model=ali_model,
             device=device,
             graph_compiler=graph_compiler,
+            use_pruned_intersect=use_pruned_intersect,
             optimizer=optimizer,
             accum_grad=accum_grad,
             den_scale=den_scale,
@@ -524,6 +699,8 @@ def main():
             tb_writer=tb_writer,
             num_epochs=num_epochs,
             global_batch_idx_train=global_batch_idx_train,
+            world_size=world_size,
+            scaler=scaler
         )
         # the lower, the better
         if valid_objf < best_valid_objf:
@@ -533,12 +710,16 @@ def main():
             save_checkpoint(filename=best_model_path,
                             optimizer=None,
                             scheduler=None,
+                            scaler=None,
                             model=model,
                             epoch=epoch,
                             learning_rate=curr_learning_rate,
                             objf=objf,
                             valid_objf=valid_objf,
-                            global_batch_idx_train=global_batch_idx_train)
+                            global_batch_idx_train=global_batch_idx_train,
+                            local_rank=rank,
+                            torchscript=args.torchscript_epoch != -1 and epoch >= args.torchscript_epoch
+                            )
             save_training_info(filename=best_epoch_info_filename,
                                model_path=best_model_path,
                                current_epoch=epoch,
@@ -547,19 +728,24 @@ def main():
                                best_objf=best_objf,
                                valid_objf=valid_objf,
                                best_valid_objf=best_valid_objf,
-                               best_epoch=best_epoch)
+                               best_epoch=best_epoch,
+                               local_rank=rank)
 
         # we always save the model for every epoch
         model_path = os.path.join(exp_dir, 'epoch-{}.pt'.format(epoch))
         save_checkpoint(filename=model_path,
                         optimizer=optimizer,
                         scheduler=None,
+                        scaler=scaler,
                         model=model,
                         epoch=epoch,
                         learning_rate=curr_learning_rate,
                         objf=objf,
                         valid_objf=valid_objf,
-                        global_batch_idx_train=global_batch_idx_train)
+                        global_batch_idx_train=global_batch_idx_train,
+                        local_rank=rank,
+                        torchscript=args.torchscript_epoch != -1 and epoch >= args.torchscript_epoch
+                        )
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
                            model_path=model_path,
@@ -569,9 +755,24 @@ def main():
                            best_objf=best_objf,
                            valid_objf=valid_objf,
                            best_valid_objf=best_valid_objf,
-                           best_epoch=best_epoch)
+                           best_epoch=best_epoch,
+                           local_rank=rank)
 
     logging.warning('Done')
+    if world_size > 1:
+        torch.distributed.barrier()
+        cleanup_dist()
+
+
+def main():
+    parser = get_parser()
+    args = parser.parse_args()
+    world_size = args.world_size
+    assert world_size >= 1
+    if world_size > 1:
+        mp.spawn(run, args=(world_size, args), nprocs=world_size, join=True)
+    else:
+        run(rank=0, world_size=1, args=args)
 
 
 torch.set_num_threads(1)
