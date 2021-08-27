@@ -131,10 +131,6 @@ def get_objf(batch: Dict,
         optimizer.zero_grad()
         (-mmi_loss).backward()
 
-        for name, param in model.named_parameters():
-            if param.grad is None:
-                print(name)
-
         maybe_log_gradients('train/grad_norms')
         #clip_grad_value_(model.parameters(), 5.0)
         clip_grad_norm_(model.parameters(), max_norm=5.0, norm_type=2.0)
