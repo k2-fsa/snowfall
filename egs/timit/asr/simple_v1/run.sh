@@ -21,6 +21,8 @@ for d in ${dataset_path[@]}; do
   fi
 done
 
+num_phones=48 ##Choose a number from {60, 48, 39}
+
 if [ ! -d $data ]; then
   echo "$data does not exist"
   exit 1
@@ -32,7 +34,7 @@ stage=1
 
 if [ $stage -le 1 ]; then
   echo "Data preparation"
-  local2/timit_data_prep.sh $data
+  local2/timit_data_prep.sh $data $num_phones
 fi
 
 
@@ -90,7 +92,8 @@ fi
 
 if [ $stage -le 5 ]; then
   echo "Feature preparation"
-  python3 ./prepare.py
+  python3 ./prepare.py \
+    --num-phones=$num_phones
 fi
 
 if [ $stage -le 6 ]; then
