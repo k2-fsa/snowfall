@@ -11,7 +11,7 @@ for f in "$text" "$lexicon"; do
 done
 
 # This script takes no arguments.  It assumes you have already run
-# aishell_data_prep.sh.
+# timit_data_prep.sh.
 # It takes as input the files
 # data/local/train/text
 # data/local/dict/lexicon.txt
