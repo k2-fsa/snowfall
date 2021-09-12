@@ -28,8 +28,6 @@ if [ ! -d $data ]; then
   exit 1
 fi
 
-[ -f path.sh ] && . ./path.sh
-
 stage=1
 
 if [ $stage -le 1 ]; then
