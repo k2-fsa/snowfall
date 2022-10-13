@@ -1,5 +1,11 @@
 # snowfall
 
+## DEPRECATED: See [Icefall](https://github.com/k2-fsa/icefall) instead.
+
+**This repo is deprecated in favor of its successor project [Icefall](https://github.com/k2-fsa/icefall).**
+
+## About
+
 Snowfall is an early draft of what will eventually be "icefall", the official recipes associated with k2 and lhotse. At
 the moment it is some early drafts of recipes, that we'll use for debugging and collaboration while the overall shape of
 the project becomes clearer.
