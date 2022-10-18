@@ -37,8 +37,12 @@ class Transformer(AcousticModel):
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, normalize_before: bool = True,
-                 vgg_frontend: bool = False, mmi_loss: bool = True) -> None:
+                 vgg_frontend: bool = False, mmi_loss: bool = True, use_feat_batchnorm:bool = False) -> None:
         super().__init__()
+        self.use_feat_batchnorm = use_feat_batchnorm
+        if use_feat_batchnorm:
+            self.feat_batchnorm = nn.BatchNorm1d(num_features)
+
         self.num_features = num_features
         self.num_classes = num_classes
         self.subsampling_factor = subsampling_factor
@@ -87,6 +91,9 @@ class Transformer(AcousticModel):
         else:
             self.decoder_criterion = None
 
+        # Reference: https://github.com/espnet/espnet/blob/master/espnet2/asr/ctc.py#L37
+        self.ctc_loss_fn = torch.nn.CTCLoss(reduction='none')
+
     def forward(self, x: Tensor, supervision: Optional[Supervisions] = None) -> Tuple[Tensor, Tensor, Optional[Tensor]]:
         """
         Args:
@@ -99,6 +106,8 @@ class Transformer(AcousticModel):
             Optional[Tensor]: Mask tensor of dimension (batch_size, input_length) or None.
 
         """
+        if self.use_feat_batchnorm:
+            x = self.feat_batchnorm(x)
         encoder_memory, memory_mask = self.encode(x, supervision)
         x = self.encoder_output(encoder_memory)
         return x, encoder_memory, memory_mask
@@ -150,7 +159,7 @@ class Transformer(AcousticModel):
             Tensor: Decoder loss.
         """
         if supervision is not None and graph_compiler is not None:
-            batch_text = get_normal_transcripts(supervision, graph_compiler.lexicon.words, graph_compiler.oov)
+            batch_text = get_normal_transcripts(supervision, graph_compiler.words, graph_compiler.oov)
             ys_in_pad, ys_out_pad = add_sos_eos(batch_text, graph_compiler.L_inv, self.decoder_num_class - 1,
                                                 self.decoder_num_class - 1)
         elif token_ids is not None:
@@ -165,7 +174,7 @@ class Transformer(AcousticModel):
             ys_in = [torch.cat([_sos, torch.tensor(y)], dim=0) for y in token_ids]
             ys_out = [torch.cat([torch.tensor(y), _eos], dim=0) for y in token_ids]
             ys_in_pad = pad_list(ys_in, eos_id)
-            ys_out_pad = pad_list(ys_in, -1)
+            ys_out_pad = pad_list(ys_out, -1)
 
         else:
             raise ValueError("Invalid input for decoder self attetion")
