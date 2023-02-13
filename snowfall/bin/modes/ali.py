@@ -3,8 +3,6 @@
 from pathlib import Path
 from typing import Optional
 
-import sys
-
 import click
 import k2
 import torch
@@ -18,7 +16,7 @@ from snowfall.tools.ali import visualize as visualize_impl
 @cli.group()
 def ali():
     '''
-    Alignment tools in snowfall
+    Alignment tools in snowfall.
     '''
     pass
 
@@ -78,8 +76,6 @@ def edit_distance(ref: str,
                           hyp_ali=hyp_ali,
                           type=type,
                           output_file=output_file)
-
-    print(f'Saved to {output_file}', file=sys.stderr)
 
 
 @ali.command()
@@ -157,5 +153,3 @@ def visualize(input: str,
                    width=width,
                    height=height,
                    font_size=font_size)
-
-    print(f'Saved to {output_file}', file=sys.stderr)

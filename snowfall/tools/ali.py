@@ -1,10 +1,10 @@
 # Copyright (c)  2021  Xiaomi Corp.       (author: Fangjun Kuang)
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Union
-from pathlib import Path
 
 import os
 import shutil
@@ -12,6 +12,8 @@ import sys
 import tempfile
 
 import k2
+import lhotse
+import torch
 
 from snowfall.common import write_error_stats
 
@@ -26,6 +28,10 @@ class Alignment:
     # is available, they can be converted to CTM format, like the
     # one used in Lhotse
     value: Dict[str, Union[List[int], List[str]]]
+
+    @staticmethod
+    def from_list(type: str, v: Union[List[int], List[str]]) -> 'Alignment':
+        return Alignment(value={type: v})
 
 
 # The alignment in a dataset can be represented by
@@ -110,6 +116,8 @@ def compute_edit_distance(ref_ali: Dict[str, Alignment],
     with open(output_file, 'w') as f:
         write_error_stats(f, 'test', pairs)
 
+    print(f'Saved to {output_file}', file=sys.stderr)
+
 
 def visualize(input: str,
               text_grid: str,
@@ -128,7 +136,7 @@ def visualize(input: str,
         The filename of the text grid.
       output_file:
         Filename of the output file. Currently, it requires that the name ends
-        with `.pdf`.
+        with one of the following: `.pdf`, `.png`, or `eps`.
       start:
         The start time in seconds.
       end:
@@ -195,4 +203,45 @@ def visualize(input: str,
     Path(tmp_name).unlink()
     if ret != 0:
         raise Exception(f'Failed to run\n{cmd}\n'
-                        f'The praat script content is:\n{command}')
+                        f'The Praat script content is:\n{command}')
+
+    print(f'Saved to {output_file}', file=sys.stderr)
+
+
+def get_phone_alignment(best_paths: k2.Fsa) -> List[Alignment]:
+    '''Get phone alignment from 1-best path.
+
+    Args:
+      best_paths:
+        An FsaVec. Each single FSA in it is expected to contain only
+        one path.
+
+    Returns:
+      Return a list of :class:`Alignment`. `len(ans) == num_fsas`.
+      Each element in the returned list corresponds to the result of
+      a single FSA in the given FsaVec.
+    '''
+    assert len(best_paths.shape) == 3
+
+    # labels is a k2.RaggedInt with shape [batch][state][phone]
+    labels = k2.RaggedInt(best_paths.arcs.shape(), best_paths.labels.clone())
+
+    # remove the axis `state`
+    labels = k2.ragged.remove_axis(labels, 1)
+
+    # Now labels has axis [batch][phone]
+
+    labels = k2.ragged.to_list(labels)
+
+    # Now labels is
+    # [
+    #  [phone1, phone2, phone3, ...],
+    #  [phone1, phone2, phone3, ...],
+    #  ...
+    # ]
+    # len(labels) == num_fsas
+
+    ans = []
+    for v in labels:
+        ans.append(Alignment.from_list('phone', v))
+    return ans
